@@ -1,9 +1,13 @@
 TOKEN-SAVINGS STANDARD (non-negotiable — canonical: Infra-SIN-OpenCode-Stack/docs/TOKEN-SAVINGS-BEST-PRACTICES.md):
 - **L1 shell:** every shell command routes through `rtk` — never bypass it for git/test/build/package output. It rewrites transparently; do not fight it.
 - **L2 tools:** use only the tools your scope needs. Prefer a CLI + `--help` + JSON over pulling in an always-on MCP server. Query the knowledge graph, don't dump the repo.
-- **L3 memory:** reuse SIN-Brain / claude-mem context. Do NOT re-read files already summarized in the shared state below. Targeted retrieval only.
+- **L3 memory:** reuse claude-mem context. Do NOT re-read files already summarized in the shared state below. Targeted retrieval only.
 - **L4 output:** terse by default. Report the diff/failure, not a narrative. A passing check = 1 line. Your `worker_done` payload is data, not prose.
 - **Filter before context:** feed yourself (and your report) the failure/diff, never the full 4,000-line log.
+
+CODE-INTEL & VERIFY TOOLS (CLI — 0 schema tokens, use proactively):
+- **graphify — Code-Graph statt blind grep (LLM-frei, ~25x weniger Tokens):** Bei „wo ist X / was ruft Y / Blast-Radius" **erst den Graphen fragen**, nicht 20 Dateien grep'en. `graphify query "<frage>"` (scoped Subgraph), `graphify path "A" "B"` (Zusammenhang), `graphify explain "X"` (Symbol + Nachbarn). Kein Graph? `graphify update .`, dann fragen.
+- **sin-CLI vor „done":** `sin verify` vor jedem Merge/„done" — grüner Compile ist kein Beweis, nur ausführungsbasierte Verifikation zählt. `sin review` statt Roh-Diff bei eigenen Änderungen. Tool nicht verfügbar? Sag es explizit und mach graceful weiter.
 
 TASK SPEC:
 Task ID: [taskId]

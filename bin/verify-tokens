@@ -128,6 +128,7 @@ done
 say "\n[Orca / sub-agent preamble]"
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 orca_found=0
+ORCA_PREAMBLE=""
 for cand in \
   "$SELF_DIR/../templates/subagent-preamble.md" \
   "$SELF_DIR/../skills/orca-sin-team/templates/prompt.md" \
@@ -136,10 +137,26 @@ for cand in \
   if [ -f "$cand" ] && grep -qi "TOKEN-SAVINGS STANDARD" "$cand"; then
     pass "4-layer standard baked into sub-agent preamble ($cand)"
     orca_found=1
+    ORCA_PREAMBLE="$cand"
     break
   fi
 done
 [ "$orca_found" -eq 1 ] || fail "sub-agent preamble missing TOKEN-SAVINGS STANDARD block (checked bundle + Orca template paths)"
+
+# The Orca preamble must ALSO carry the code-intel/verify pointers so subs
+# discover graphify + sin verify (same discoverability guarantee as the 4 files).
+if [ -n "$ORCA_PREAMBLE" ]; then
+  if grep -qi "graphify query" "$ORCA_PREAMBLE"; then
+    pass "graphify pointer baked into Orca preamble"
+  else
+    fail "graphify pointer missing in Orca preamble ($ORCA_PREAMBLE) — subs won't query the graph before grepping"
+  fi
+  if grep -qi "sin verify" "$ORCA_PREAMBLE"; then
+    pass "sin verify pointer baked into Orca preamble"
+  else
+    fail "sin verify pointer missing in Orca preamble ($ORCA_PREAMBLE) — subs won't run execution-based verification"
+  fi
+fi
 
 # ── SIN-Code CLI pointer present in every instruction file ───────────
 # Makes the sin tools DISCOVERABLE to every runtime without MCP schema bloat.
