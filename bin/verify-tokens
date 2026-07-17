@@ -120,14 +120,26 @@ for home in "$CODEX_ORCA_HOME" "$HOME/.codex"; do
   fi
 done
 
-# ── Orca template ────────────────────────────────────────────────────
-say "\n[Orca team template]"
-ORCA_TMPL="$(dirname "$0")/../skills/orca-sin-team/templates/prompt.md"
-if [ -f "$ORCA_TMPL" ] && grep -qi "TOKEN-SAVINGS STANDARD" "$ORCA_TMPL"; then
-  pass "4-layer standard baked into sub-agent preamble"
-else
-  fail "Orca sub-agent preamble missing TOKEN-SAVINGS STANDARD block"
-fi
+# ── Orca / sub-agent preamble ────────────────────────────────────────
+# The 4-layer block can live in any of several real locations depending on
+# the host. Check them all; pass if ANY carries the standard. (Previously
+# this hard-coded a repo-relative Orca path that does not exist in the
+# SIN-Save-Token bundle, producing a false 🚨 on an otherwise-compliant host.)
+say "\n[Orca / sub-agent preamble]"
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+orca_found=0
+for cand in \
+  "$SELF_DIR/../templates/subagent-preamble.md" \
+  "$SELF_DIR/../skills/orca-sin-team/templates/prompt.md" \
+  "$HOME/dev/Infra-SIN-OpenCode-Stack/skills/orca-sin-team/templates/prompt.md" \
+  "$HOME/.config/opencode/skills/orca-sin-team/templates/prompt.md"; do
+  if [ -f "$cand" ] && grep -qi "TOKEN-SAVINGS STANDARD" "$cand"; then
+    pass "4-layer standard baked into sub-agent preamble ($cand)"
+    orca_found=1
+    break
+  fi
+done
+[ "$orca_found" -eq 1 ] || fail "sub-agent preamble missing TOKEN-SAVINGS STANDARD block (checked bundle + Orca template paths)"
 
 # ── Verdict ──────────────────────────────────────────────────────────
 say "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
