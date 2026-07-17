@@ -2,3 +2,4 @@
 CLAUDE.md
 *.bak-*
 graphify-out/
+.planning/graphs/
