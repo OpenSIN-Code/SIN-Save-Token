@@ -1,0 +1,4 @@
+{
+  "git": { "base_branch": "main" },
+  "graphify": { "enabled": true, "auto_update": true }
+}

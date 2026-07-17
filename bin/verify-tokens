@@ -159,6 +159,26 @@ for pf in \
   fi
 done
 
+# ── graphify: installed + pointer present (LLM-free code-graph, ~25x fewer tokens) ──
+say "\n[graphify code-graph]"
+if command -v graphify >/dev/null 2>&1; then
+  pass "graphify on PATH"
+else
+  warn "graphify NOT on PATH — install: uv tool install graphifyy (then 'graphify update .')"
+fi
+for pf in \
+  "$HOME/.config/opencode/AGENTS.md" \
+  "$HOME/.claude/CLAUDE.md" \
+  "$HOME/.codex/AGENTS.md" \
+  "$HOME/Library/Application Support/orca/codex-runtime-home/home/AGENTS.md"; do
+  [ -f "$pf" ] || continue
+  if grep -qi "graphify query" "$pf"; then
+    pass "graphify pointer present ($(basename "$(dirname "$pf")")/$(basename "$pf"))"
+  else
+    fail "graphify pointer missing in $pf (agents won't query the graph before grepping)"
+  fi
+done
+
 # ── Verdict ──────────────────────────────────────────────────────────
 say "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ "$FAIL" -eq 0 ]; then
