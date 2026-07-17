@@ -1,0 +1,140 @@
+#!/bin/bash
+# verify-tokens — checks the 4-layer token-savings standard per runtime.
+# Canonical policy: docs/TOKEN-SAVINGS-BEST-PRACTICES.md (issue #71).
+#
+# Usage: verify-tokens [--quiet]
+# Exit: 0 = all compliant, 1 = one or more regressions (fail loud).
+#
+# Intended callers:
+#   - standalone (developer runs it)
+#   - sin-sync post-sync hook (fail loud on drift after a fleet sync)
+#   - session-start protocol (surface non-compliance as a warning)
+
+set -uo pipefail
+QUIET="${1:-}"
+FAIL=0
+say()  { [ "$QUIET" = "--quiet" ] || echo -e "$1"; }
+pass() { say "  ✅ $1"; }
+fail() { say "  🚨 $1"; FAIL=1; }
+warn() { say "  ⚠️  $1"; }
+
+CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+OPENCODE_PLUGINS="$HOME/.config/opencode/plugins"
+CODEX_ORCA_HOME="$HOME/Library/Application Support/orca/codex-runtime-home/home"
+
+say "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+say "🔍 Token-Savings Standard — 4-layer compliance check"
+say "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# ── Global L1: rtk present + hook installed ──────────────────────────
+say "\n[L1] rtk shell layer"
+if command -v rtk >/dev/null 2>&1; then
+  pass "rtk on PATH ($(rtk --version 2>/dev/null | head -1))"
+  # transparent hook: rtk gain must NOT warn "No hook installed"
+  if rtk gain 2>&1 | grep -qi "No hook installed"; then
+    fail "rtk gain reports NO hook installed — run: rtk init -g --hook-only --auto-patch"
+  else
+    pass "rtk hook active (no 'No hook installed' warning)"
+  fi
+  # self-test the rewrite (rtk rewrite exits non-zero as its "was-rewritten" signal;
+  # check the OUTPUT, not the exit code — pipefail would otherwise mask a real match)
+  RW="$(rtk rewrite "git status" 2>/dev/null || true)"
+  if [ "$RW" = "rtk git status" ]; then
+    pass "rtk rewrite works (git status → rtk git status)"
+  else
+    warn "rtk rewrite returned '$RW' (expected 'rtk git status') — check registry"
+  fi
+else
+  fail "rtk NOT found on PATH"
+fi
+
+# ── Claude Code ──────────────────────────────────────────────────────
+say "\n[Claude Code]"
+if [ -f "$CLAUDE_SETTINGS" ]; then
+  python3 - "$CLAUDE_SETTINGS" <<'PY'
+import json,sys
+p=sys.argv[1]
+try: d=json.load(open(p))
+except Exception as e:
+    print(f"  🚨 settings.json invalid JSON: {e}"); sys.exit(3)
+env=d.get('env',{})
+# L1: rtk hook in PreToolUse
+pre=d.get('hooks',{}).get('PreToolUse',[])
+rtk_hook=any('rtk' in x.get('command','').lower() for h in pre for x in h.get('hooks',[]))
+print("  ✅ L1 rtk PreToolUse hook present" if rtk_hook else "  🚨 L1 rtk hook missing from PreToolUse")
+# L2: ENABLE_TOOL_SEARCH must be ABSENT (conflicts with /compact)
+if 'ENABLE_TOOL_SEARCH' in env:
+    print("  🚨 L2 ENABLE_TOOL_SEARCH is set — breaks /compact (defer_loading vs cache_control). Delete the key.")
+else:
+    print("  ✅ L2 tool-search deferral off (/compact intact)")
+# L2: MCP thinned — warn if the known-heavy servers are back
+mcp=set(d.get('mcpServers',{}).keys())
+heavy={'skyvern','chrome-devtools','canva'} & mcp
+if heavy:
+    print(f"  ⚠️  L2 heavy MCP servers re-added: {sorted(heavy)} (thinned on 2026-07-17)")
+else:
+    print(f"  ✅ L2 MCP thinned ({len(mcp)} servers: {sorted(mcp)})")
+sys.exit(0)
+PY
+  [ $? -eq 3 ] && FAIL=1
+else
+  fail "Claude Code settings.json not found"
+fi
+
+# ── L3: claude-mem single shared worker/DB ───────────────────────────
+say "\n[L3] shared memory (claude-mem)"
+WORKERS=$(pgrep -fl "claude-mem" 2>/dev/null | grep -c "start" || true)
+if [ "${WORKERS:-0}" -ge 1 ]; then
+  pass "claude-mem worker running (shared by Claude Code + opencode)"
+else
+  warn "no claude-mem 'start' worker detected (may be idle)"
+fi
+if [ -f "$HOME/.claude-mem/claude-mem.db" ]; then
+  pass "single DB at ~/.claude-mem/claude-mem.db"
+else
+  warn "claude-mem DB not found at default path"
+fi
+
+# ── opencode L1 ──────────────────────────────────────────────────────
+say "\n[opencode]"
+if [ -f "$OPENCODE_PLUGINS/rtk.ts" ]; then
+  pass "L1 rtk plugin installed (rtk.ts)"
+else
+  fail "L1 rtk plugin missing — run: rtk init -g --opencode"
+fi
+
+# ── Codex L1+L4 ──────────────────────────────────────────────────────
+say "\n[Codex]"
+codex_ok=1
+for home in "$CODEX_ORCA_HOME" "$HOME/.codex"; do
+  if [ -f "$home/RTK.md" ]; then
+    pass "L1 RTK.md present ($home)"
+  else
+    warn "L1 RTK.md missing in $home"
+  fi
+  if [ -f "$home/AGENTS.md" ] && grep -qi "terse" "$home/AGENTS.md" 2>/dev/null; then
+    pass "L4 terse contract in AGENTS.md ($home)"
+  else
+    fail "L4 terse contract missing in $home/AGENTS.md"
+    codex_ok=0
+  fi
+done
+
+# ── Orca template ────────────────────────────────────────────────────
+say "\n[Orca team template]"
+ORCA_TMPL="$(dirname "$0")/../skills/orca-sin-team/templates/prompt.md"
+if [ -f "$ORCA_TMPL" ] && grep -qi "TOKEN-SAVINGS STANDARD" "$ORCA_TMPL"; then
+  pass "4-layer standard baked into sub-agent preamble"
+else
+  fail "Orca sub-agent preamble missing TOKEN-SAVINGS STANDARD block"
+fi
+
+# ── Verdict ──────────────────────────────────────────────────────────
+say "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+if [ "$FAIL" -eq 0 ]; then
+  say "✅ COMPLIANT — all runtimes meet the 4-layer standard"
+else
+  say "🚨 REGRESSION — one or more layers non-compliant (see 🚨 above)"
+fi
+say "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+exit $FAIL
