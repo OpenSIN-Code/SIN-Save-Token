@@ -141,6 +141,24 @@ for cand in \
 done
 [ "$orca_found" -eq 1 ] || fail "sub-agent preamble missing TOKEN-SAVINGS STANDARD block (checked bundle + Orca template paths)"
 
+# ── SIN-Code CLI pointer present in every instruction file ───────────
+# Makes the sin tools DISCOVERABLE to every runtime without MCP schema bloat.
+# If an edit ever strips the pointer (it happened before with other blocks),
+# this fails loud on the next sync so no runtime silently loses the tools.
+say "\n[SIN-Code CLI pointer]"
+for pf in \
+  "$HOME/.config/opencode/AGENTS.md" \
+  "$HOME/.claude/CLAUDE.md" \
+  "$HOME/.codex/AGENTS.md" \
+  "$HOME/Library/Application Support/orca/codex-runtime-home/home/AGENTS.md"; do
+  [ -f "$pf" ] || { warn "missing instruction file: $pf"; continue; }
+  if grep -qi "sin verify" "$pf" && grep -qi "SIN-Code CLI" "$pf"; then
+    pass "sin pointer present ($pf)"
+  else
+    fail "sin CLI pointer missing in $pf (agents can't discover sin verify/review/debt)"
+  fi
+done
+
 # ── Verdict ──────────────────────────────────────────────────────────
 say "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ "$FAIL" -eq 0 ]; then
