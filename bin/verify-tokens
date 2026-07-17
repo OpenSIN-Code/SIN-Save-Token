@@ -51,6 +51,54 @@ else
   warn "cannot check CLAUDE_CODE_SUBAGENT_MODEL — settings.json not found"
 fi
 
+# ── L4-input: always-loaded surface (skills + instruction files + ignore) ──
+# Everything here is paid at session START, every session, before you type.
+# See BEST-PRACTICES §7 (paths:-scoping, skill-sprawl budget, .claudeignore).
+say "\n[L4-input] always-loaded context surface"
+
+# Skill sprawl: each skill's name+description costs ~100 tokens at session start.
+# Budget = 1% of context / 8000 chars for ALL descriptions combined.
+SKILL_DIR="$HOME/.claude/skills"
+if [ -d "$SKILL_DIR" ]; then
+  SKILL_COUNT=$(find "$SKILL_DIR" -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')
+  # sum the description: bytes across all SKILL.md (proxy for always-loaded cost)
+  DESC_BYTES=$(for s in "$SKILL_DIR"/*/SKILL.md; do
+    [ -f "$s" ] && awk '/^description:/{sub(/^description:[ ]*/,"");print}' "$s"
+  done 2>/dev/null | wc -c | tr -d ' ')
+  if [ "$SKILL_COUNT" -gt 30 ]; then
+    warn "skill sprawl: $SKILL_COUNT skills (~$((SKILL_COUNT*100)) tokens at session start) — prune or use disable-model-invocation on slash-only skills"
+  else
+    pass "skill count ok ($SKILL_COUNT skills, ~$((SKILL_COUNT*100)) tokens always-loaded)"
+  fi
+  if [ "$DESC_BYTES" -gt 8000 ]; then
+    warn "skill descriptions total ${DESC_BYTES}B > 8000B budget (1% of context) — tighten descriptions"
+  else
+    pass "skill description budget ok (${DESC_BYTES}B / 8000B)"
+  fi
+else
+  warn "no ~/.claude/skills dir"
+fi
+
+# Instruction-file size: CLAUDE.md/AGENTS.md load every call. Warn past ~8KB
+# (~2k tokens); the fix is paths:-scoped rules, not one fat always-on file.
+for f in "$HOME/.claude/CLAUDE.md" "$HOME/.config/opencode/AGENTS.md" "$HOME/.codex/AGENTS.md"; do
+  [ -f "$f" ] || continue
+  B=$(wc -c < "$f" | tr -d ' ')
+  short="$(basename "$(dirname "$f")")/$(basename "$f")"
+  if [ "$B" -gt 30000 ]; then
+    warn "instruction file heavy: $short = ${B}B (~$((B/4)) tokens every call) — extract reference into paths:-scoped rules"
+  else
+    pass "instruction file lean: $short (${B}B)"
+  fi
+done
+
+# .claudeignore: blocks generated/vendored/binary noise from context.
+if [ -f "$HOME/.claude/.claudeignore" ]; then
+  pass ".claudeignore present (blocks node_modules/logs/graphs from context)"
+else
+  warn ".claudeignore missing — add one to block node_modules/*.log/graphs (BEST-PRACTICES §7)"
+fi
+
 # ── Global L1: rtk present + hook installed ──────────────────────────
 say "\n[L1] rtk shell layer"
 if command -v rtk >/dev/null 2>&1; then

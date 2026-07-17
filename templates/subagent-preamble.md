@@ -3,6 +3,7 @@ TOKEN-SAVINGS STANDARD (non-negotiable — canonical: Infra-SIN-OpenCode-Stack/d
 - **L2 tools:** use only the tools your scope needs. Prefer a CLI + `--help` + JSON over pulling in an always-on MCP server. Query the knowledge graph, don't dump the repo.
 - **L3 memory:** reuse claude-mem context. Do NOT re-read files already summarized in the shared state below. Targeted retrieval only.
 - **L4 output:** terse by default. Report the diff/failure, not a narrative. A passing check = 1 line. Your `worker_done` payload is data, not prose.
+- **L4-input (always-loaded surface):** skills fire passively only ~30–50% of the time — when you know which skill you need, call `/skill-name` directly, don't hope it auto-triggers. Never inline path-specific rules into an always-loaded instruction file; that tax is paid on every turn.
 - **Filter before context:** feed yourself (and your report) the failure/diff, never the full 4,000-line log.
 
 CODE-INTEL & VERIFY TOOLS (CLI — 0 schema tokens, use proactively):

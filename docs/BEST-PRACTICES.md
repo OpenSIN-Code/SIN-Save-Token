@@ -242,3 +242,63 @@ prune. Do not enable. (Same reasoning that rejected aggressive tool-search defer
 but requires a sandboxed V8/exec environment per §"important caveat". Revisit only if we run a
 large internal API surface behind MCP; today our L2 thinning + CLI-over-MCP already avoids the
 bloat it targets.
+
+---
+
+## 7. Input-side surface (2026-07-17, session 4) — web+YouTube+Reddit sweep
+
+The always-loaded surface — everything paid at session **start, every session, before you type**:
+skill descriptions + CLAUDE.md/AGENTS.md + system prompt. This is the highest-leverage lever after
+the plumbing, because it is a *constant* tax on every turn. Five additions, all free, none make the
+agent dumber. `verify-tokens` now surfaces the surface under an `[L4-input]` section.
+
+### 7.1 `paths:`-scoped rules — the 41% always-loaded cut (Hebel #1) — **governance-gated**
+
+The single biggest input-side finding. A rule/skill with a `paths:` glob in its frontmatter loads
+**only when the agent touches a matching file** (conditional load) — zero tokens until triggered.
+Documented real result: 1,358 → 807 always-loaded lines (**−41%**). Two hard rules:
+
+- **Splitting a file alone saves nothing.** If you move content out of CLAUDE.md into `rules/` but
+  omit `paths:`, all of it still loads at start — you just have more files. The *only* thing that
+  saves tokens is the `paths:` filter.
+- **CLAUDE.md = what every session needs (build/test/arch). Rules = everything path-specific.**
+  Workflow in CLAUDE.md = burned every session even when irrelevant. Rule buried in a skill = missed
+  on the 80% of tasks the skill never fires. Get the split wrong and you pay twice.
+
+State of our fleet: Claude `CLAUDE.md` is already tiny (1.7 KB) and Codex `AGENTS.md` lean (3 KB).
+opencode `AGENTS.md` was trimmed 76 KB → 20 KB on 2026-07-17 (backup `.bak-pre-trim-*`) — but by
+*deletion*, and opencode uses a single file, not a `rules/` dir (the `paths:` mechanism is Claude
+Code–specific). The remaining work is **governance, not a one-off edit**: `verify-tokens` now warns
+when any instruction file exceeds ~30 KB so it cannot silently re-bloat. New Claude-Code rules with
+path-specific scope belong in `~/.claude/rules/*.md` with a `paths:` glob, never inlined into CLAUDE.md.
+
+### 7.2 Skill-sprawl budget (Hebel #2) — **gated**
+
+Every installed skill's name+description is preloaded into the system prompt at session start —
+~**100 tokens per skill**, always, whether or not it fires. One reported workspace hit 6,000 tokens
+of skill descriptions across ~80 skills before a single keystroke. The description budget is **1% of
+context / 8,000 chars** for all skills combined. `verify-tokens [L4-input]` now counts skills and
+sums description bytes, warning past 30 skills or 8 KB. (Currently 9 skills / 1.5 KB — healthy.)
+
+### 7.3 `disable-model-invocation: true` (Hebel #3) — **selective, not blanket**
+
+A skill marked `disable-model-invocation: true` costs **0 description tokens** at start (it is only
+reachable via explicit `/skill-name`). Use it for **pure slash-command skills**. **Do NOT apply it
+blanket** — skills built to trigger *passively* on intent (e.g. `skill-multimodal-web-tools`, which
+should fire on "research"/"look up") would go silent. Rule: opt in per-skill, only when the skill is
+never meant to auto-trigger. Blindly flipping it on shared skills breaks discovery.
+
+### 7.4 Slash-command-first (Hebel #4) — **documented habit**
+
+Passive skill triggering from descriptions alone fires only **30–50%** of the time — a coin flip. So
+when you know which skill you need, **call `/skill-name` directly**; treat passive triggering as a
+bonus, not the primary path. This is *why* 7.3 is safe for genuine slash-only skills and why good
+descriptions still matter for the rest.
+
+### 7.5 `.claudeignore` (Hebel #5) — **adopted**
+
+A `~/.claude/.claudeignore` blocks generated/vendored/binary noise (`node_modules/`, `*.log`,
+`__pycache__/`, `.planning/graphs/`, `.rtk/`, lockfiles, media) from ever entering context — one
+stray `node_modules` read is thousands of wasted tokens. `verify-tokens` warns if it's missing.
+Query large code-graphs via the `graphify` CLI instead of reading the raw JSON.
+
