@@ -12,15 +12,16 @@ niemand muss je einen Agenten daran erinnern.
 ## TL;DR — Installation auf einem neuen Mac / in einem neuen System
 
 ```bash
-git clone https://github.com/OpenSIN-Code/SIN-Save-Token.git
-cd SIN-Save-Token
+# an einen STABILEN Ort klonen (nicht /tmp — der Self-Heal-Hook zeigt hierauf):
+git clone https://github.com/OpenSIN-Code/SIN-Save-Token.git ~/dev/SIN-Save-Token
+cd ~/dev/SIN-Save-Token
 # rtk muss vorhanden sein (RTK - Rust Token Killer):
 #   cargo install rtk        # oder brew install rtk
 ./bin/install.sh             # richtet alle Runtimes ein, idempotent
 ```
 
-Danach einmalig den Self-Heal-Hook in `~/.claude/settings.json` registrieren (siehe [Automatik](#automatik-kein-agent-muss-erinnert-werden)).
-Ab dann ist es **selbsterhaltend**: jede neue Session repariert fehlende Hooks still.
+Danach den Self-Heal-Hook **einmalig** in `~/.claude/settings.json` registrieren (siehe [Automatik](#automatik-kein-agent-muss-erinnert-werden)) —
+das Ein-Zeilen-Snippet unten macht es idempotent. Ab dann ist es **selbsterhaltend**: jede neue Session repariert fehlende Hooks still.
 
 Prüfen:
 ```bash
@@ -54,12 +55,22 @@ Der Kern deiner Anforderung. Drei Ebenen greifen ineinander:
 2. **Self-Heal bei jedem Session-Start** — `bin/install.sh --heal` läuft als `SessionStart`-Hook und stellt fehlende Hooks/Plugins still wieder her.
 3. **Regression-Gate im Deploy** — `verify-tokens` läuft im Sync-Skript (`sin-sync`); ein Regress bricht das Deployment mit `🚨`.
 
-**Self-Heal-Hook einmalig registrieren** (`~/.claude/settings.json`):
+**Self-Heal-Hook einmalig registrieren** — idempotent per Python (kein Duplikat bei Mehrfachlauf):
+```bash
+python3 - "$HOME/.claude/settings.json" <<'PY'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p))
+ss=d.setdefault("hooks",{}).setdefault("SessionStart",[])
+cmd='bash "%s/.claude/hooks/sin-save-token-heal.sh"'%__import__("os").environ["HOME"]
+if not any('sin-save-token-heal' in x.get('command','') for g in ss for x in g.get('hooks',[])):
+    ss.append({"hooks":[{"type":"command","command":cmd}]}); json.dump(d,open(p,'w'),indent=2); print("registered")
+else: print("already registered")
+PY
+```
+Resultierender Eintrag unter `hooks.SessionStart`:
 ```json
-{ "hooks": { "SessionStart": [
-  { "hooks": [ { "type": "command",
-    "command": "bash \"$HOME/.claude/hooks/sin-save-token-heal.sh\"" } ] }
-] } }
+{ "hooks": [ { "type": "command",
+  "command": "bash \"$HOME/.claude/hooks/sin-save-token-heal.sh\"" } ] }
 ```
 
 ---
