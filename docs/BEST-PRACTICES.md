@@ -38,7 +38,7 @@ No runtime is special. If a layer can't run in a runtime, that's a gap to close,
 |-------|--------|------------------|---------------|
 | **1. Shell output** | CLI noise (git/test/build) | **rtk** (Rust Token Killer) | Claude Code, opencode, Codex, Orca |
 | **2. MCP/tool schema** | Tool-def overhead per call | **tool-search deferral** + `sin-code serve --compress-tools` (ponytail) | All MCP hosts |
-| **3. Context/memory** | Re-sent history, file re-reads | **claude-mem** + **SIN-Brain** + `sin-code compress` | All |
+| **3. Context/memory** | Re-sent history, file re-reads | **claude-mem** + `sin-code compress` | All |
 | **4. Output style** | Model's own verbosity | **verbosity mode** (`terse`/`ultra`, caveman-derived) | All |
 
 ---
@@ -70,7 +70,7 @@ A runtime is **compliant** when all four checks pass:
 ```
 [L1] rtk hook installed & transparent      → `rtk gain` shows NO "No hook installed" warning
 [L2] MCP servers thinned (NOT deferral)    → only actively-used servers always-on; `/compact` intact
-[L3] memory layer shares one backend       → claude-mem/SIN-Brain single source of truth
+[L3] memory layer shares one backend       → claude-mem single source of truth
 [L4] verbosity mode default = terse        → model output compressed by default
 ```
 
@@ -89,7 +89,7 @@ A runtime is **compliant** when all four checks pass:
 ### 2.3 Codex
 - **L1:** rtk wrapper at the shell layer (Codex runs `danger-full-access` sandbox — rtk sits in front of exec).
 - **L2:** Codex tool manifest through the same ponytail compressor where MCP is bridged (`codex-responses-bridge`).
-- **L3:** bridge memory into SIN-Brain so Codex sessions aren't a memory island.
+- **L3:** bridge memory into claude-mem so Codex sessions aren't a memory island.
 - **L4:** `model_reasoning_effort` already `medium`; add terse output contract in `~/.codex/AGENTS.md` (currently empty — fill it).
 
 ### 2.4 Orca (orca-sin-team)
@@ -172,3 +172,73 @@ Measured always-loaded instruction files:
   5. `verify-tokens` + a `/context` before/after to prove the ~10k-token/call drop.
 
 Estimated win: **~10k tokens per opencode call** — the single biggest remaining lever. Do this first in the next session.
+
+---
+
+## 6. New levers (2026-07-17, session 3) — web-researched, adopted
+
+Four additions after a fresh 2026 landscape sweep (prompt-caching mechanics, `ccusage`,
+subagent routing, TOON). All are free or near-free and cannot make agents dumber — they
+either protect a cache that already exists or measure what we already spend.
+
+### 6.1 Cache-protection rules (L2 governance) — **adopted, gated**
+
+Prompt caching is already active (§5, #3 confirmed) and is ~85–90% of the input bill.
+Caching is a **prefix cache** over `tools → system → instruction files → history`: **any**
+change to an earlier block invalidates the cache for the rest of that request. Two rules
+follow, and `verify-tokens` now surfaces the risk:
+
+- **Never add/remove an MCP server mid-session.** Adding a tool changes the tool-definition
+  prefix → cache miss on *every* subsequent turn, not just the next one. Plan MCP changes at
+  session boundaries. (This is *why* L2 thins the always-on set once, up front — not lazily.)
+- **Treat CLAUDE.md / AGENTS.md as a cache anchor.** Every edit = one guaranteed cache write
+  (25% surcharge) + cold prefix until it re-warms. Edit them **rarely and in batches**, never
+  mid-task. A 5 KB instruction file re-sent uncached costs the full input price on the turn it
+  changes. This is the mechanical reason the §5 "keep instruction files tight" rule matters.
+
+Source: Anthropic prompt-caching docs + the April-2026 postmortem (a clearing bug that
+re-fired every turn caused a cache miss every turn — the exact failure mode these rules prevent).
+
+### 6.2 `ccusage` — real dollar baseline (L0 measurement) — **adopted**
+
+`rtk gain` measures **only** the L1 shell layer (73.4%). It cannot see the *total* effect of
+the standard (caching, model routing, output style). `ccusage` parses `~/.claude/projects/*.jsonl`
+and reports actual **$ per day / session / model** — the ground-truth number that answers
+"how much does the whole standard save?" (the honest gap #6 above).
+
+```bash
+npx ccusage@latest daily      # $ per day, model breakdown
+npx ccusage@latest session    # per-session spend
+npx ccusage@latest blocks     # 5-hour billing blocks (subscription users)
+```
+
+`verify-tokens` now prints a one-line `ccusage` hint under an `[L0] baseline` section (advisory,
+never fails the gate — it is a measurement, not a compliance rule).
+
+### 6.3 Subagent-model gate (L0 dollar lever) — **adopted, gated**
+
+`CLAUDE_CODE_SUBAGENT_MODEL=claude-sonnet-5` is set (Sonnet ≈ 40% cheaper than Opus on
+research/exploration with negligible quality loss). But nothing verified it wasn't silently
+reverted to Opus. `verify-tokens` now **fails** if the key is unset or contains `opus`, and
+**passes** on any sonnet/haiku value. Rationale for not forcing Haiku: the same var drives the
+planning agent — a weak planner compounds errors downstream (violates "not dumber"). Sonnet is
+the safe floor.
+
+### 6.4 TOON + anti-patterns — **documented, not auto-enabled**
+
+**TOON (Token-Oriented Object Notation)** — ~40% average / up to 60% on *large uniform tabular*
+data (e.g. `graphify query` JSON, test matrices). **Conditional**: 2026 research shows the win
+shrinks or reverses on small/nested data and on *generation* tasks (JSON's training ubiquity
+wins there). Verdict: worth a future **optional rtk filter for tabular tool output only**, never
+a global default. Backlog, measure per-shape before enabling.
+
+**Context-editing / `clear_thinking` tool-result pruning — REJECTED (belongs in "do NOT" table).**
+Server-side pruning of stale tool_results/thinking blocks *sounds* like a win but any prune of an
+earlier block invalidates the prefix cache → cache miss. Anthropic's own postmortem shows a
+mis-fire turned it into a cache miss **every turn**. For our workloads caching outweighs the
+prune. Do not enable. (Same reasoning that rejected aggressive tool-search deferral.)
+
+**Code-execution / Code-Mode (MCP-as-code, 98–99.9% claims) — WATCH, not now.** Real reduction,
+but requires a sandboxed V8/exec environment per §"important caveat". Revisit only if we run a
+large internal API surface behind MCP; today our L2 thinning + CLI-over-MCP already avoids the
+bloat it targets.

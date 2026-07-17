@@ -26,6 +26,31 @@ say "━━━━━━━━━━━━━━━━━━━━━━━━━
 say "🔍 Token-Savings Standard — 4-layer compliance check"
 say "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+# ── L0: dollar-level measurement + model routing (see BEST-PRACTICES §6.2/§6.3) ──
+# L0 sits below the 4 layers: it measures total spend and gates the subagent model.
+say "\n[L0] baseline + model routing"
+# ccusage: real $ ground truth (advisory only — a measurement, never fails the gate)
+say "  ℹ️  baseline: npx ccusage@latest daily   (real \$/day; session|blocks for more)"
+# subagent-model gate: Sonnet is the safe floor; Opus = silent \$ drain, unset = default Opus.
+if [ -f "$CLAUDE_SETTINGS" ]; then
+  SUBAGENT_MODEL="$(python3 - "$CLAUDE_SETTINGS" <<'PY' 2>/dev/null || true
+import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: sys.exit(0)
+print(d.get('env',{}).get('CLAUDE_CODE_SUBAGENT_MODEL',''))
+PY
+)"
+  if [ -z "$SUBAGENT_MODEL" ]; then
+    fail "CLAUDE_CODE_SUBAGENT_MODEL unset — subagents default to Opus (\$ drain). Set env.CLAUDE_CODE_SUBAGENT_MODEL=claude-sonnet-5"
+  elif echo "$SUBAGENT_MODEL" | grep -qi "opus"; then
+    fail "CLAUDE_CODE_SUBAGENT_MODEL='$SUBAGENT_MODEL' pins Opus for subagents (~40% costlier). Use claude-sonnet-5 (safe floor)"
+  else
+    pass "subagent model routed to '$SUBAGENT_MODEL' (Sonnet/Haiku floor — not Opus)"
+  fi
+else
+  warn "cannot check CLAUDE_CODE_SUBAGENT_MODEL — settings.json not found"
+fi
+
 # ── Global L1: rtk present + hook installed ──────────────────────────
 say "\n[L1] rtk shell layer"
 if command -v rtk >/dev/null 2>&1; then
