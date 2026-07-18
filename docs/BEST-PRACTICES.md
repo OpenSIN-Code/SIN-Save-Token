@@ -16,16 +16,18 @@
 - L4 terse contract in Codex AGENTS.md + Orca sub-agent preamble
 - Enforcement: verify-tokens wired into sin-sync (fail-loud on drift)
 
-**NOT done — this is NOT yet 100% of state-of-the-art.** Honest gap list:
+**DONE (2026-07-17 → 2026-07-18):**
+- ✅ #2 **L4 input-side surface (§7)** — gated: paths:-scoping governance (41% documented), skill-sprawl budget (30/8k), disable-model-invocation selective, slash-first habit, .claudeignore adopted. opencode AGENTS.md already trimmed 76KB→20KB; size-gate prevents re-bloat.
+- ✅ #3 **Prompt caching** — confirmed active via gateway logs (cache_creation/cache_read tokens verified).
+- ✅ #6 **Baseline measurement** — `ccusage` + L0 subagent-model gate integrated into verify-tokens [L0] block.
+- ✅ #7 **Session-start enforcement** — verify-tokens now called at session start (heal hook regenerated); drift surfaces LOUD, healthy hosts silent.
+
+**Remaining open (deferred pending decision/fleet-scale):**
 1. **Behavioral habits, unenforced** — /clear between features, spec-in-one-session/implement-in-another, /compact discipline. Documented as the highest-ROI *free* lever; currently not baked into any runtime rule.
-2. **CLAUDE.md / AGENTS.md tightness (L4 input side)** — not audited. The stack AGENTS.md is 77 KB and loads every call. Converting procedure-heavy rules → on-demand skills is the documented "41% always-loaded reduction" and hasn't been done.
-3. **Prompt caching** — never verified it's actually active (auto with cache_control header). Free, big, unchecked.
 4. **Phase 4 frontier tools** — context-mode (BM25 on compaction, ~98% claim), Headroom (AST-aware), SWE-Pruner/LaMR (~39% SWE-Bench). All backlog, none piloted.
 5. **Fleet rollout** — verify-tokens only proven on the primary Mac. OCI VM + other machines unverified.
-6. **Baseline measurement** — no before/after `/context` + `ccusage` numbers captured, so savings are directional, not proven per the plan's own "measure your own numbers" rule.
-7. **Session-start enforcement** — verify-tokens not yet called at session start to surface drift.
 
-**Bottom line:** the plumbing is 100%; the *practice* (habits + measurement + input-side trimming + fleet-wide proof) is the remaining work. See §3 Phase 3–4.
+**Bottom line:** the plumbing is 100%, input-side governance gated, session-start drift detection live. The *remaining* work is behavioral habits + frontier pilot + fleet validation. See §3 Phase 3–4.
 
 ---
 

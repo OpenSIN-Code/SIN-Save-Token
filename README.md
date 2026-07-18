@@ -39,21 +39,35 @@ Prüfen:
 | **L3 Memory** | Geteiltes Gedächtnis | 1 claude-mem Worker + 1 DB für alle Runtimes | kein Doppel-Spend |
 | **L4 Output** | Knappe Antworten | terse-Kontrakt in jeder Instruktionsdatei | Output-Tokens sind die teuersten |
 
-**Zusätzliche Hebel (in `docs/BEST-PRACTICES.md`):**
-- **Modell-Routing** — Subagenten auf Sonnet statt Opus (`CLAUDE_CODE_SUBAGENT_MODEL`). Größter Dollar-Hebel, Hauptthread bleibt stark.
+**Layer-übergreifende Hebel (Session 3 & 4, alles gated/mandatory):**
+
+**[L0] Baseline-Messung + Modell-Routing** (`verify-tokens` [L0]-Gate):
+- `ccusage` — Real-Dollar-Baseline pro Tag/Session/Block. Befehl: `npx ccusage@latest daily`
+- `CLAUDE_CODE_SUBAGENT_MODEL=claude-sonnet-5` — Subagenten auf Sonnet, nicht Opus (40% cheaper). Gate: Failif unset oder Opus.
+
+**[L4-input] Immer-geladene Oberfläche** (`verify-tokens` [L4-input]-Gate):
+- `paths:`-Scoping — Rules/Skills mit Glob laden **nur bei passenden Dateien** (−41% always-loaded, dokumentiert). Claude-Code–spezifisch.
+- Skill-Sprawl-Budget — max 30 Skills / 8 KB Beschreibungen. ~100 Tokens pro Skill @ Start.
+- `disable-model-invocation: true` — nur für reine Slash-Commands (passive Trigger ~30–50% = Coinflip).
+- **Slash-First-Habit** — wenn Skill bekannt, `/skill-name` direkt aufrufen statt auf Trigger hoffen.
+- `.claudeignore` — `node_modules/ .cache/ *.log __pycache__/ dist/ target/ .rtk/ .planning/graphs/` und Lockfiles blockieren.
+
+**Klassische Hebel** (dokumentiert, größtenteils bereits live):
+- **Modell-Routing** (L0) — Subagenten auf Sonnet statt Opus. Größter Dollar-Hebel, Hauptthread bleibt stark.
+- **Prompt-Caching schützen** — `/compact` + Caching schlagen aggressive Deferral. ~85–90% der Input-Bill.
+- **AGENTS.md / CLAUDE.md schlank** — Referenz auslagern → 41% always-loaded-Reduktion möglich. Größe-Gate verhindert Re-Bloat.
 - **Thinking-Deckel** — `MAX_THINKING_TOKENS` für Triviales (Denk-Tokens = teure Output-Tokens).
-- **AGENTS.md / CLAUDE.md schlank** — Referenz auslagern, nur Pointer behalten. Große Kontextdateien senken Erfolg **und** erhöhen Kosten.
-- **Prompt-Caching schützen** — `/compact` und Caching schlagen aggressive Deferral. Caching ist ~87% der Rechnung.
 
 ---
 
 ## Automatik (kein Agent muss erinnert werden)
 
-Der Kern deiner Anforderung. Drei Ebenen greifen ineinander:
+Der Kern deiner Anforderung. Vier Ebenen greifen ineinander:
 
 1. **Auto-Laden pro Runtime** — rtk läuft als Hook/Plugin, das jede Runtime beim Start selbst lädt. Der terse-Kontrakt steht in der Instruktionsdatei, die jede Runtime ohnehin liest.
 2. **Self-Heal bei jedem Session-Start** — `bin/install.sh --heal` läuft als `SessionStart`-Hook und stellt fehlende Hooks/Plugins still wieder her.
-3. **Regression-Gate im Deploy** — `verify-tokens` läuft im Sync-Skript (`sin-sync`); ein Regress bricht das Deployment mit `🚨`.
+3. **Drift-Detection bei Session-Start** — `verify-tokens` läuft **silent** nach dem Heal (grüne Hosts = kein Output). Drift wird LAUT (🚨 REGRESSION auf stderr). So bleibt jede Session selbstbewusst ohne Spam.
+4. **Regression-Gate im Deploy** — `verify-tokens` läuft im Sync-Skript (`sin-sync`); ein Regress bricht das Deployment mit `🚨`.
 
 **Self-Heal-Hook einmalig registrieren** — idempotent per Python (kein Duplikat bei Mehrfachlauf):
 ```bash
