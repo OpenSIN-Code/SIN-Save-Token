@@ -159,21 +159,21 @@ A runtime is **compliant** when all four checks pass:
 **#3 Prompt caching — ✅ CONFIRMED ACTIVE (no work needed).**
 Direct test against the gateway (`localhost:8788`) returned `cache_creation_input_tokens` / `cache_read_input_tokens` in usage → gateway preserves `cache_control`; Claude Code sets the headers automatically. Free win already in place.
 
-**#2 Input-side trimming — SCOPED, NOT YET DONE (deferred: needs a fresh session, real risk).**
+**#2 Input-side trimming — ✅ DONE (verified 2026-07-18, session 3).**
 Measured always-loaded instruction files:
 - Claude Code `CLAUDE.md` 657 B, Codex `AGENTS.md` 1.4 KB → already tight ✅
-- **opencode `AGENTS.md` = 76 KB (~19k tokens loaded EVERY call)** 🚨 — the one real lever.
-  - ~40 KB is pure reference: §6 Repo layout (12 KB), §7 Config contract (13 KB), §8 Roadmap (9 KB), §12 Eval/OTel (6 KB).
-  - ~30 KB is behavioral rules that must stay inline (§0 session-start, §3 hard mandates, §10 naming).
+- opencode `AGENTS.md` = **19.9 KB** (was 76 KB). Reference sections already extracted into a
+  `## Referenz-Sektionen (ausgelagert)` block with 1-line pointers; behavioral rules (§0 session-start,
+  §3 hard mandates, ceo-audit) stay inline. The ~10k-token/call win is realised.
 
-**Why deferred, not done:** AGENTS.md is NOT a plain file. `hooks/sync_agents_md.sh` 3-way-syncs it (source repo ↔ Live config ↔ Infra-Stack) with an `is_canonical_source()` guard, and `sin-sync` rsyncs it 1:1 to the fleet (Mac = source of truth) while asserting the ceo-audit mandate survives. Live (76,449 B) and Infra-Stack (77,926 B) copies already differ. Extracting 40 KB safely requires:
-  1. Identify the true canonical source repo driving the sync.
-  2. Extract reference → `docs/{repo-layout,config-contract,roadmap,eval-observability}.md`, leave 1-line pointers.
-  3. Preserve the ceo-audit mandate section (sin-sync asserts it).
-  4. Run `sync_agents_md.sh` once so Live + Infra + source converge on the trimmed version.
-  5. `verify-tokens` + a `/context` before/after to prove the ~10k-token/call drop.
+**Sync integrity:** `hooks/sync_agents_md.sh` 3-way-syncs AGENTS.md (source repo ↔ Live config ↔ Infra-Stack)
+behind an `is_canonical_source()` guard. Live and Infra-Stack copies are now **byte-identical (19,929 B)**.
 
-Estimated win: **~10k tokens per opencode call** — the single biggest remaining lever. Do this first in the next session.
+**🚨 Secret-leak fixed in the same pass:** the Live copy had 4 appended `SIN-BRAIN GLOBAL RULE` lines with
+plaintext EvoLink API keys + `OMNIROUTE_MASTER_KEY` + `STORAGE_ENCRYPTION_KEY` — loaded into the model on
+EVERY opencode call. Blast radius was local only: the Live file is **not git-tracked / never pushed**, and
+Infra had **0 occurrences** in tree or history. Removed; Live == Infra clean. Those keys should still be
+rotated as a precaution (they sat in the model context) and kept in Infisical, never in an instruction file.
 
 ---
 
