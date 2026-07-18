@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""
+agent-grep — structure-augmented, self-truncating code search.
+
+A thin wrapper around ripgrep/grep that makes a search result *self-explanatory*
+so the agent doesn't have to open the file to understand a hit. Ported from the
+one idea in jcode's harness with the highest token leverage per line of code.
+
+Two things it adds over raw grep:
+
+  1. Enclosing-symbol context. For every match it scans backward to the nearest
+     definition (function / class / def / fn / method / const X = ...) and prints
+     it inline as `[symbol]`. A grep hit that names its containing function is
+     usually enough on its own — no follow-up file read, no wasted tokens.
+
+  2. Adaptive truncation. A broad pattern can return thousands of lines and blow
+     the context window. We cap hits per file and overall, and print an explicit
+     `… +N more` marker so truncation is *visible*, never silent. (Silent caps
+     read as "this is everything" when it isn't — that is a correctness bug, not
+     just a token issue.)
+
+Design constraints (this is a token-saving tool, so it must never cost more than
+it saves):
+  * Zero third-party deps. stdlib only. Runs anywhere python3 does.
+  * Prefer ripgrep (`rg`) when present — it is faster and respects .gitignore,
+    which keeps node_modules/target/etc. out of results for free. Falls back to
+    POSIX `grep -rn` otherwise.
+  * The symbol scan is a heuristic, not a parser. It covers the common languages
+    (py, js/ts, rust, go, ruby, java, c/c++) via indentation + declaration
+    regexes. When it can't find a symbol it simply omits the tag — it never
+    guesses wrong loudly.
+
+Usage:
+    agent-grep <pattern> [path ...] [-- <extra rg/grep flags>]
+
+Env knobs (all optional):
+    AGENT_GREP_PER_FILE   max hits shown per file      (default 8)
+    AGENT_GREP_TOTAL      max hits shown overall        (default 60)
+    AGENT_GREP_CTX        chars of the matched line kept (default 160)
+
+Exit codes mirror grep: 0 = matches found, 1 = none, 2 = usage/tool error.
+"""
+
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+PER_FILE = int(os.environ.get("AGENT_GREP_PER_FILE", "8"))
+TOTAL = int(os.environ.get("AGENT_GREP_TOTAL", "60"))
+CTX = int(os.environ.get("AGENT_GREP_CTX", "160"))
+
+# Nearest-definition patterns, scanned backward from a hit. Order doesn't matter;
+# the first line above the hit that matches ANY of these wins. Kept deliberately
+# broad — a slightly-too-generous symbol tag still helps; a missing one just
+# degrades to plain grep for that hit.
+DEF_PATTERNS = [
+    re.compile(r"^\s*(?:async\s+)?def\s+(\w+)"),                       # python
+    re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)"),    # js/ts
+    re.compile(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)"),             # rust
+    re.compile(r"^\s*func\s+(?:\([^)]*\)\s*)?(\w+)"),                  # go
+    re.compile(r"^\s*(?:export\s+)?class\s+(\w+)"),                    # class (many langs)
+    re.compile(r"^\s*(?:pub\s+)?(?:struct|enum|trait|impl)\s+(\w+)"),  # rust types
+    re.compile(r"^\s*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*="),    # js assigned fn/obj
+    re.compile(r"^\s*def\s+(self\.)?(\w+)"),                           # ruby method
+    re.compile(r"^\s*(\w+)\s*:\s*(?:async\s+)?(?:function|\()"),       # obj-literal method
+]
+
+
+def _indent(line):
+    return len(line) - len(line.lstrip())
+
+
+def _match_def(line):
+    for pat in DEF_PATTERNS:
+        m = pat.match(line)
+        if m:
+            name = [g for g in m.groups() if g and g != "self."]
+            if name:
+                return name[-1]
+    return None
+
+
+def find_symbol(lines, hit_idx):
+    """Scan upward from a 0-based hit line for the nearest *enclosing* definition.
+
+    The key is enclosing, not merely nearest: a sibling local like `const x = …`
+    sits at the same indent as the hit and must NOT win — otherwise the tag names
+    a neighbour instead of the containing function. So we only accept a definition
+    whose indentation is strictly less than the hit's (it opened the scope the hit
+    lives in). We fall back to a same-or-less-indent match only if nothing deeper
+    qualifies, which covers top-level statements. Bounded to 400 lines up."""
+    if hit_idx < 0 or hit_idx >= len(lines):
+        return None
+    hit_indent = _indent(lines[hit_idx])
+    fallback = None
+    for i in range(hit_idx, max(-1, hit_idx - 400), -1):
+        line = lines[i]
+        if not line.strip():
+            continue
+        name = _match_def(line)
+        if not name:
+            continue
+        ind = _indent(line)
+        if ind < hit_indent:
+            return name          # genuine enclosing scope
+        if fallback is None and ind <= hit_indent:
+            fallback = name      # same-level def (e.g. the hit is on the def line)
+    return fallback
+
+
+def run_search(pattern, paths, extra):
+    """Return raw `file:line:text` records using rg if available, else grep."""
+    if shutil.which("rg"):
+        cmd = ["rg", "--no-heading", "--line-number", "--with-filename",
+               "--color", "never"]
+        cmd += extra + [pattern] + paths
+    else:
+        # POSIX fallback. -r recursive, -n line numbers, -H force filename
+        # (both rg and grep drop the filename for a single explicit file, which
+        # would break our file:line:text parse), -I skip binary.
+        cmd = ["grep", "-rnHI"] + extra + [pattern] + (paths or ["."])
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    # rg/grep: exit 1 == "no matches", which is not an error for us.
+    if proc.returncode not in (0, 1):
+        sys.stderr.write(proc.stderr)
+        sys.exit(2)
+    return proc.stdout.splitlines()
+
+
+def main():
+    argv = sys.argv[1:]
+    if not argv or argv[0] in ("-h", "--help"):
+        sys.stderr.write(__doc__)
+        sys.exit(2)
+
+    # Split off passthrough flags after a literal `--`.
+    extra = []
+    if "--" in argv:
+        i = argv.index("--")
+        extra = argv[i + 1 :]
+        argv = argv[:i]
+
+    pattern, paths = argv[0], argv[1:]
+    records = run_search(pattern, paths, extra)
+
+    # Group hits by file, preserving discovery order.
+    by_file = {}
+    for rec in records:
+        # file:line:text — split only twice so ':' in code is preserved.
+        parts = rec.split(":", 2)
+        if len(parts) < 3:
+            continue
+        fpath, lineno, text = parts[0], parts[1], parts[2]
+        if not lineno.isdigit():
+            continue
+        by_file.setdefault(fpath, []).append((int(lineno), text))
+
+    if not by_file:
+        print(f"agent-grep: no matches for /{pattern}/")
+        sys.exit(1)
+
+    # Cache file contents once per file for the backward symbol scan.
+    file_lines = {}
+
+    def lines_of(fpath):
+        if fpath not in file_lines:
+            try:
+                with open(fpath, "r", errors="replace") as fh:
+                    file_lines[fpath] = fh.read().splitlines()
+            except OSError:
+                file_lines[fpath] = []
+        return file_lines[fpath]
+
+    shown = 0
+    truncated_files = 0
+    out = []
+    for fpath, hits in by_file.items():
+        out.append(fpath)
+        src = lines_of(fpath)
+        per = 0
+        for lineno, text in hits:
+            if shown >= TOTAL:
+                break
+            if per >= PER_FILE:
+                truncated_files += 1
+                out.append(f"    … +{len(hits) - per} more in this file")
+                break
+            sym = find_symbol(src, lineno - 1) if src else None
+            tag = f"[{sym}] " if sym else ""
+            snippet = text.strip()
+            if len(snippet) > CTX:
+                snippet = snippet[:CTX] + " …"
+            out.append(f"    L{lineno} {tag}{snippet}")
+            per += 1
+            shown += 1
+        if shown >= TOTAL:
+            break
+
+    total_hits = sum(len(h) for h in by_file.values())
+    print("\n".join(out))
+    if shown < total_hits:
+        print(
+            f"\n— showing {shown}/{total_hits} hits across {len(by_file)} files "
+            f"(caps: {PER_FILE}/file, {TOTAL} total). Narrow the pattern for the rest."
+        )
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

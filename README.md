@@ -118,12 +118,41 @@ SIN-Save-Token/
 ├── README.md                 ← diese Datei
 ├── bin/
 │   ├── install.sh            ← idempotenter Installer + Self-Heal-Hook-Writer
-│   └── verify-tokens         ← 4-Layer Compliance-Checker (exit 1 bei Regress)
+│   ├── verify-tokens         ← 4-Layer Compliance-Checker (exit 1 bei Regress)
+│   └── agent-grep            ← struktur-augmentierte, selbst-kürzende Code-Suche
 ├── docs/
 │   └── BEST-PRACTICES.md     ← kanonischer Standard, Konfig pro Runtime, Quellen
 └── templates/
     └── subagent-preamble.md  ← terse/L1-L4-Block für Orca-Sub-Agenten
 ```
+
+---
+
+## `agent-grep` — Suche, die man nicht nachlesen muss
+
+Ein Wrapper um `rg`/`grep`, der jeden Treffer **selbsterklärend** macht — die
+token-stärkste Einzelidee aus dem jcode-Harness, portiert nach stdlib-Python
+(keine Deps).
+
+```bash
+bin/agent-grep "process.exit" hooks/
+# hooks/rtk-auto-rewrite.js
+#     L40 [main] if (data.tool_name !== 'Bash') process.exit(0)
+#     L59 [main] if (/^rtk(\s|$)/.test(trimmed)) process.exit(0)
+#     … +2 more in this file
+# — showing 14/16 hits across 2 files (caps: 8/file, 60 total).
+```
+
+Zwei Dinge über rohem grep:
+1. **Umschließendes Symbol** (`[funktion]`) pro Treffer — ein Hit, der seine
+   Funktion nennt, spart das Öffnen der Datei (= der eigentliche Token-Fresser).
+2. **Adaptive Kürzung** mit **sichtbarem** `… +N more` — nie stilles Abschneiden
+   (ein stiller Cap liest sich als „das ist alles", obwohl es das nicht ist).
+
+Knöpfe: `AGENT_GREP_PER_FILE` (8), `AGENT_GREP_TOTAL` (60), `AGENT_GREP_CTX` (160).
+Nutzt `rg` wenn vorhanden (respektiert `.gitignore`), sonst POSIX-`grep`.
+
+---
 
 ---
 
