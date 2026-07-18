@@ -304,3 +304,43 @@ A `~/.claude/.claudeignore` blocks generated/vendored/binary noise (`node_module
 stray `node_modules` read is thousands of wasted tokens. `verify-tokens` warns if it's missing.
 Query large code-graphs via the `graphify` CLI instead of reading the raw JSON.
 
+
+---
+
+## Session 5 (2026-07-18) — Delegation-Doktrin, Memory-Fix, kuratierte Skills
+
+**Orca-Delegations-Doktrin (Kernhebel).** Hauptagenten sind Orchestratoren, nicht
+Ausführer. Alles Verbose — Code-Recherche, Web-Suche, Tests, Log-/Info-Sammeln,
+Multi-File-Exploration, Audits — wird via `orca` CLI an mimo-code-Subagenten
+delegiert (Skill `orca-sin-team`). Nur destillierte Reports kommen zurück; der teure
+Rohausgabe-Müll (40k+ Tokens grep/log/web) bleibt im Sub isoliert. Verankert in
+`~/.config/opencode/AGENTS.md` UND `~/.codex/AGENTS.md`. Modell nicht dümmer — es
+bekommt Reports statt Rohdaten.
+
+**claude-mem-Memory repariert.** `observations=0` trotz 187 erfasster Prompts: Root
+Cause war ein korrupter uv-Cache (`~/.cache/uv`), der `chroma-mcp`s Prewarm mit
+"WHEEL: No such file" killte → jede Observation verworfen. Fix: `uv cache clean` +
+`UV_HTTP_TIMEOUT=300`. chroma-mcp läuft wieder CLEAN.
+
+**Brain → claude-mem Writer (one-way, pull-basiert).**
+`global-brain/scripts/brain-to-claude-mem.py` spiegelt durable rule/decision-Einträge
+aus `knowledge.json` in claude-mems `observations` (Dedup über UNIQUE INDEX
+`content_hash`). In `pcpm-after-run.sh` eingeklinkt. Durchsuchbar via `mcp-search`,
+kein SessionStart-Bloat. Zwei Brains (Node/JSON global-brain vs Python/SQLite
+SIN-Brain) NICHT mergen — claude-mem ist die Query-Surface, die Brains speisen ein.
+
+**session-warmup/preflight/merge-safety als Gates.** `sin session-warmup` als
+Schritt 1 vor understand-anything (deterministischer Kontext-Load statt Selbst-Grep).
+`sin preflight` vor jedem Code-Task (kein Blind-Coding). `sin merge-safety` vor Merge.
+
+**graphify vs understand-anything — komplementär, kein Entweder-oder.**
+understand-anything = Session-Start (Breite). graphify = punktuelle Code-Fragen
+während der Arbeit STATT grep. Nicht "graphify statt understand-anything".
+
+**Kuratierte OpenSIN-Skills.** 4 token-/coding-relevante Skills (llm-cost-optimizer,
+prompt-governance, mcp-server-builder, self-improving-agent) aus OpenSIN-Skills als
+Symlinks in `~/.config/opencode/skills/` (paths, nicht baseline → nur Frontmatter
+geladen, Body bei Aktivierung).
+
+**Hinweis/Risiko:** `/Users/jeremy/.git` ist ein Repo, das das gesamte $HOME trackt
+(Remote SINator-EvoLink) — potenzielles Secret-Leak-Risiko, separat prüfen.
