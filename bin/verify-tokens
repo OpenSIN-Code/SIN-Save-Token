@@ -111,7 +111,10 @@ if command -v rtk >/dev/null 2>&1; then
   fi
   # self-test the rewrite (rtk rewrite exits non-zero as its "was-rewritten" signal;
   # check the OUTPUT, not the exit code — pipefail would otherwise mask a real match)
-  RW="$(rtk rewrite "git status" 2>/dev/null || true)"
+  RW="$(rtk rewrite "git status" 2>&1 || true)"
+  # Ignore macOS "Abort trap" on some rtk versions; check what we got
+  RW="${RW%%Abort*}"  # strip abort output if present
+  RW="$(echo "$RW" | head -1)"  # take first line only
   if [ "$RW" = "rtk git status" ]; then
     pass "rtk rewrite works (git status → rtk git status)"
   else
