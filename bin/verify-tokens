@@ -125,37 +125,161 @@ else
 fi
 
 # ── Claude Code ──────────────────────────────────────────────────────
+# L1 hooks live in settings.json; MCP servers are merged by wow-my-zsh into
+# ~/.claude.json (mcpServers) — NOT into settings.json. Counting the wrong file
+# produced a false "4 servers thinned" green while 10 lived in the real config
+# (issue #2). Soft budget warn until joint L2 allowlist lands (issue #3).
 say "\n[Claude Code]"
+CLAUDE_MCP_JSON="$HOME/.claude.json"
 if [ -f "$CLAUDE_SETTINGS" ]; then
-  python3 - "$CLAUDE_SETTINGS" <<'PY'
-import json,sys
-p=sys.argv[1]
-try: d=json.load(open(p))
+  python3 - "$CLAUDE_SETTINGS" "$CLAUDE_MCP_JSON" <<'CLAUDE_PY'
+import json, os, sys
+from pathlib import Path
+
+settings_path, mcp_path = sys.argv[1], sys.argv[2]
+fail = 0
+
+try:
+    d = json.load(open(settings_path))
 except Exception as e:
-    print(f"  🚨 settings.json invalid JSON: {e}"); sys.exit(3)
-env=d.get('env',{})
-# L1: rtk hook in PreToolUse
-pre=d.get('hooks',{}).get('PreToolUse',[])
-rtk_hook=any('rtk' in x.get('command','').lower() for h in pre for x in h.get('hooks',[]))
-print("  ✅ L1 rtk PreToolUse hook present" if rtk_hook else "  🚨 L1 rtk hook missing from PreToolUse")
-# L2: ENABLE_TOOL_SEARCH must be ABSENT (conflicts with /compact)
-if 'ENABLE_TOOL_SEARCH' in env:
-    print("  🚨 L2 ENABLE_TOOL_SEARCH is set — breaks /compact (defer_loading vs cache_control). Delete the key.")
+    print(f"  🚨 settings.json invalid JSON: {e}")
+    sys.exit(3)
+
+env = d.get("env", {})
+pre = d.get("hooks", {}).get("PreToolUse", [])
+rtk_hook = any(
+    "rtk" in x.get("command", "").lower()
+    for h in pre
+    for x in h.get("hooks", [])
+)
+if rtk_hook:
+    print("  ✅ L1 rtk PreToolUse hook present")
+else:
+    print("  🚨 L1 rtk hook missing from PreToolUse")
+    fail = 1
+
+if "ENABLE_TOOL_SEARCH" in env:
+    print(
+        "  🚨 L2 ENABLE_TOOL_SEARCH is set — breaks /compact "
+        "(defer_loading vs cache_control). Delete the key."
+    )
+    fail = 1
 else:
     print("  ✅ L2 tool-search deferral off (/compact intact)")
-# L2: MCP thinned — warn if the known-heavy servers are back
-mcp=set(d.get('mcpServers',{}).keys())
-heavy={'skyvern','chrome-devtools','canva'} & mcp
-if heavy:
-    print(f"  ⚠️  L2 heavy MCP servers re-added: {sorted(heavy)} (thinned on 2026-07-17)")
+
+# Real MCP SoT = ~/.claude.json (wow-my-zsh merge target)
+mcp = {}
+source = None
+if Path(mcp_path).is_file():
+    try:
+        mcp = json.load(open(mcp_path)).get("mcpServers") or {}
+        source = mcp_path
+    except Exception as e:
+        print(f"  🚨 L2 cannot parse {mcp_path}: {e}")
+        fail = 1
+if not mcp and isinstance(d.get("mcpServers"), dict) and d["mcpServers"]:
+    mcp = d["mcpServers"]
+    source = settings_path + " (legacy mcpServers)"
+
+names = sorted(mcp.keys()) if isinstance(mcp, dict) else []
+heavy = {"skyvern", "chrome-devtools", "canva"} & set(names)
+SOFT_MAX = int(os.environ.get("SST_MCP_SOFT_MAX", "6"))
+
+if not source:
+    print("  ⚠️  L2 no MCP config found at ~/.claude.json or settings.json")
+elif heavy:
+    print(f"  ⚠️  L2 heavy MCP servers present: {sorted(heavy)} (from {source})")
 else:
-    print(f"  ✅ L2 MCP thinned ({len(mcp)} servers: {sorted(mcp)})")
-sys.exit(0)
-PY
-  [ $? -eq 3 ] && FAIL=1
+    print(f"  ℹ️  L2 Claude MCP source: {source}")
+
+print(f"  ℹ️  L2 Claude always-on MCP ({len(names)}): {names if names else '[]'}")
+if len(names) > SOFT_MAX:
+    print(
+        f"  ⚠️  L2 Claude MCP count {len(names)} > soft max {SOFT_MAX} "
+        f"(set SST_MCP_SOFT_MAX or thin via wow registry — joint budget issue #3)"
+    )
+elif names and not heavy:
+    print(f"  ✅ L2 Claude MCP within soft max ({len(names)} ≤ {SOFT_MAX})")
+elif not names:
+    print("  ✅ L2 Claude MCP empty (no always-on schema tax)")
+
+sys.exit(fail)
+CLAUDE_PY
+  rc=$?
+  [ "$rc" -ne 0 ] && FAIL=1
 else
   fail "Claude Code settings.json not found"
 fi
+
+# ── L2 cross-agent MCP inventory (wow-my-zsh merge targets) ──────────
+say "\n[L2] fleet MCP inventory (real configs)"
+python3 - <<'FLEET_PY' || true
+import json, os, re
+from pathlib import Path
+
+home = Path.home()
+soft = int(os.environ.get("SST_MCP_SOFT_MAX", "6"))
+heavy_set = {"skyvern", "chrome-devtools", "canva"}
+
+def load_json(path, key):
+    p = Path(path)
+    if not p.is_file():
+        return None, "absent"
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        return None, f"parse-error: {e}"
+    bucket = d.get(key) or {}
+    if not isinstance(bucket, dict):
+        return [], "ok"
+    return sorted(bucket.keys()), "ok"
+
+def load_codex_toml(path):
+    p = Path(path)
+    if not p.is_file():
+        return None, "absent"
+    text = p.read_text(encoding="utf-8", errors="replace")
+    names = re.findall(
+        r'(?m)^\[mcp_servers\.(?:"([^"]+)"|([A-Za-z0-9_-]+))\]',
+        text,
+    )
+    return sorted({a or b for a, b in names}), "ok"
+
+checks = [
+    ("claude",   str(home / ".claude.json"), "mcpServers", "json"),
+    ("opencode", str(home / ".config/opencode/opencode.json"), "mcp", "json"),
+    ("mimo",     str(home / ".config/mimocode/mimocode.json"), "mcp", "json"),
+    ("jcode",    str(home / ".jcode/mcp.json"), "mcpServers", "json"),
+    ("codex",    str(home / ".codex/config.toml"), None, "toml"),
+]
+
+any_heavy = []
+for agent, path, key, kind in checks:
+    if kind == "toml":
+        names, st = load_codex_toml(path)
+    else:
+        names, st = load_json(path, key)
+    if st == "absent":
+        print(f"  ℹ️  {agent}: config absent ({path})")
+        continue
+    if st != "ok":
+        print(f"  ⚠️  {agent}: {st} ({path})")
+        continue
+    n = len(names)
+    flag = ""
+    hit = heavy_set & set(names)
+    if hit:
+        flag = f" HEAVY={sorted(hit)}"
+        any_heavy.extend(sorted(hit))
+    elif n > soft:
+        flag = f" >soft-max={soft}"
+    print(f"  ℹ️  {agent}: {n} servers{flag} → {names}")
+
+if any_heavy:
+    print(f"  ⚠️  L2 heavy servers somewhere in fleet: {sorted(set(any_heavy))}")
+else:
+    print("  ✅ L2 no skyvern/chrome-devtools/canva in fleet MCP configs")
+FLEET_PY
 
 # ── L3: claude-mem single shared worker/DB ───────────────────────────
 say "\n[L3] shared memory (claude-mem)"

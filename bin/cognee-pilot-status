@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# cognee-pilot-status — non-secret health check for the Claude plugin pilot
+set -euo pipefail
+echo "== cognee pilot status =="
+if claude plugin list 2>/dev/null | grep -q 'cognee-memory@cognee'; then
+  echo "  [ok ] plugin cognee-memory@cognee installed"
+else
+  echo "  [!! ] plugin missing — claude plugin install cognee-memory@cognee"
+fi
+if [ -n "${LLM_API_KEY:-${OPENAI_API_KEY:-}}" ]; then
+  echo "  [ok ] LLM_API_KEY or OPENAI_API_KEY set (local mode)"
+else
+  echo "  [!! ] set LLM_API_KEY or OPENAI_API_KEY before launching claude"
+fi
+if [ -n "${COGNEE_BASE_URL:-}" ]; then
+  echo "  [ok ] COGNEE_BASE_URL=$COGNEE_BASE_URL (managed mode)"
+else
+  echo "  [ok ] local mode (no COGNEE_BASE_URL)"
+fi
+echo "  dataset: ${COGNEE_PLUGIN_DATASET:-sin-fleet (set COGNEE_PLUGIN_DATASET to override)}"
+cfg="$HOME/.cognee-plugin/claude-code/config.json"
+[ -f "$cfg" ] && echo "  config: $cfg" || echo "  [!! ] missing $cfg"
+echo
+echo "Launch:"
+echo "  export LLM_API_KEY=\"\${LLM_API_KEY:-\$OPENAI_API_KEY}\""
+echo "  export COGNEE_PLUGIN_DATASET=sin-fleet"
+echo "  claude   # expect: Cognee Memory Connected"
