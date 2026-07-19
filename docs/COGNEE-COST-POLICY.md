@@ -7,77 +7,67 @@ Any agent / Orca
   → cognee-recall / cognee-remember  (CLI, all harnesses)
   → Cognee API :8011
        ├─ LLM:   OmniRoute → boundless/gpt-5.6-terra   (Boundless, paid)
-       └─ Embed: local fastembed mixedbread-ai/mxbai-embed-large-v1 (default, 1024)
-                 optional: COGNEE_EMBED_BACKEND=nim → nvidia/nv-embedqa-e5-v5
+       └─ Embed: local proxy :8012
+              ├─ primary: Gemini gemini-embedding-001 @ 1024-dim (free tier)
+              └─ fallback: local mxbai-embed-large-v1 @ 1024-dim (on 429/errors)
 ```
 
-## Local embed quality on Mac M1 16GB (measured)
+**Same dim (1024) on both paths** so Lance stays valid when Gemini rate-limits.
 
-All models run natively via `fastembed` + ONNX (`arm64`, providers include CoreML/CPU).
-First load downloads weights once; later starts use cache (seconds, not minutes).
+## Secrets
 
-| Model | Dim | short×16 (this M1) | Role |
-|-------|-----|--------------------|------|
-| **mixedbread-ai/mxbai-embed-large-v1** | 1024 | ~2.5s | **default — best local quality** |
-| BAAI/bge-large-en-v1.5 | 1024 | ~0.9s | near-top quality, faster |
-| nomic-ai/nomic-embed-text-v1.5 | 768 | ~0.3s | long context / docs |
-| thenlper/gte-large | 1024 | ~6s | strong, slower batch |
-| intfloat/multilingual-e5-large | 1024 | ~0.9s | multi-lang |
-| jinaai/jina-embeddings-v3 | 1024 | ~8–14s | strong, **too slow** on loaded M1 16GB |
-| BAAI/bge-small-en-v1.5 | 384 | ~0.07s | rejected — too weak for “best” |
+```bash
+# NEVER commit. NEVER paste keys into chat/commits.
+umask 077
+mkdir -p ~/.cognee-plugin/secrets
+# paste key once, Ctrl-D:
+cat > ~/.cognee-plugin/secrets/gemini_api_key
+chmod 600 ~/.cognee-plugin/secrets/gemini_api_key
+```
 
-**Not** the absolute world #1 (Voyage/Cohere API can still edge MTEB).  
-**Yes** the best *reliable free local* option that this M1 runs cleanly under multi-agent load.
+If a key was pasted in chat: **rotate it in Google AI Studio** and replace the file.
 
-RAM note: M1 16GB under heavy swap makes large models feel slower. Free RAM → large embeds stay easy.
+## Embed backends
 
-## Is NVIDIA the right embed?
+| Backend | How | Free? | Notes |
+|---------|-----|-------|-------|
+| **gemini (default)** | proxy :8012 → Gemini API | free tier + limits | best cloud quality |
+| local fallback | auto inside proxy | yes unlimited | mxbai-large, same 1024 dims |
+| `COGNEE_EMBED_BACKEND=fastembed` | pure local | yes | skip Gemini |
+| `COGNEE_EMBED_BACKEND=nim` | OmniRoute NVIDIA E5 | free tier | hard ~512 token cap |
 
-| Backend | Pros | Cons | Verdict |
-|---------|------|------|---------|
-| **fastembed mxbai-large (default)** | free, local, top ONNX quality, long chunks | first download ~0.6GB; slower than small | **default** |
-| **NIM nv-embedqa-e5-v5** | strong cloud retrieval | **hard ~512-token limit**; free-tier timeouts | optional short texts only |
-| Boundless embed | — | **none available** | n/a |
-| Voyage/Cohere/Gemini API | often paper-SOTA | paid + network | later A/B if needed |
+Bring-up:
 
-### Real failures we hit (not “maybe”)
+```bash
+bin/cognee-fleet-up.sh
+# or:
+bin/cognee-start-embed-proxy.sh
+bin/cognee-start-omniroute.sh
+```
 
-1. **`Input length N exceeds maximum allowed token size 512`** — NIM E5 via OmniRoute rejects long chunks.
-2. **Timeouts / 409 under bulk load** — free NIM path flakes under parallel cognify.
-3. **Dim mismatch** — Lance is `fixed_size_list[N]`. Switching models → `bin/cognee-reindex-vectors.sh`.
+Force local only for a session:
+
+```bash
+export COGNEE_EMBED_FORCE_LOCAL=1   # proxy
+# or
+export COGNEE_EMBED_BACKEND=fastembed
+bin/cognee-start-omniroute.sh
+```
 
 ## Cost (Boundless only on LLM)
 
 | Action | Boundless? | Gate |
 |--------|------------|------|
-| `cognee-fleet-up.sh` | no | — |
-| local embed smoke | no | — |
-| `cognee-recall` | **maybe** (graph_completion may call Terra) | use when needed |
-| `cognee-remember "short note"` | **yes** (cognify) | soft warning; size cap 50k |
-| Large file / bulk re-ingest | **yes, expensive** | `COGNEE_ALLOW_COSTLY=1` + max docs/chars |
+| fleet-up / embed proxy | no | — |
+| Gemini embed | no $ (free tier) | rate limits → local |
+| `cognee-remember` | **yes** (Terra cognify) | soft warn; 50k cap |
+| bulk re-ingest | **yes expensive** | `COGNEE_ALLOW_COSTLY=1` |
 
-## Everyday (all agents)
+## Everyday
 
 ```bash
-~/dev/SIN-Save-Token/bin/cognee-fleet-up.sh   # free stack bring-up
-
 cognee-status
-cognee-recall "L2 core MCP servers?"
-cognee-remember "Decision: default embed is mxbai-embed-large local."
-```
-
-Faster local alternative (still strong):
-
-```bash
-export EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
-export EMBEDDING_DIMENSIONS=1024
-bin/cognee-reindex-vectors.sh
-```
-
-Optional NIM (short texts only; **must reindex**):
-
-```bash
-export COGNEE_EMBED_BACKEND=nim
-bin/cognee-reindex-vectors.sh
-cognee-remember "short durable fact"
+curl -s http://127.0.0.1:8012/health   # shows gemini_ok / fallback_ok stats
+cognee-recall "…"
+cognee-remember "short durable note"
 ```

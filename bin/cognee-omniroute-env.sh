@@ -4,17 +4,21 @@
 # Architecture (correct split):
 #   LLM (cognify/recall answers): OmniRoute → Boundless → gpt-5.6-terra
 #                                 model id for litellm: openai/boundless/gpt-5.6-terra
-#   Embeddings (vectors):         DEFAULT local fastembed (reliable, free, no flake)
-#                                 optional NIM: COGNEE_EMBED_BACKEND=nim
+#   Embeddings (vectors):         DEFAULT Gemini via local proxy :8012
+#                                 (gemini-embedding-001 @ 1024-dim free tier)
+#                                 auto-fallback → local mxbai-embed-large on rate limit
+#                                 optional: COGNEE_EMBED_BACKEND=fastembed|nim
 #
 # Cost:
-#   - Embed default: free (local)
+#   - Gemini embed free tier (rate-limited); local fallback free unlimited
 #   - LLM Terra: Boundless credit only on remember/cognify/graph_completion
 #   - Bulk: requires COGNEE_ALLOW_COSTLY=1 (see docs/COGNEE-COST-POLICY.md)
 #
 # Prerequisites:
 #   - OmniRoute on :20128 (for LLM)
 #   - Boundless key active on OmniRoute for terra
+#   - Gemini key in ~/.cognee-plugin/secrets/gemini_api_key (chmod 600)
+#   - embed-proxy on :8012 (bin/cognee-start-embed-proxy.sh)
 #   - cognee venv with fastembed installed (plugin venv)
 
 set -euo pipefail
@@ -48,18 +52,20 @@ export OPENAI_API_BASE="$OMNIROUTE_BASE_URL"
 export OPENAI_BASE_URL="$OMNIROUTE_BASE_URL"
 
 # ── Embeddings ───────────────────────────────────────────────────────
-# Default: BEST local quality that runs well on Apple Silicon (fastembed/ONNX).
-# Benchmarked on MacBook Pro M1 16GB (2026-07-19):
-#   mxbai-embed-large-v1  1024  short16≈2.5s  ← quality king among local ONNX
-#   bge-large-en-v1.5     1024  short16≈0.9s  ← close quality, faster
-#   nomic-embed-text-v1.5  768  short16≈0.3s  ← long-context sweet spot
-#   bge-small-en-v1.5      384  short16≈0.07s ← too weak for "best" fleet memory
-#   jina-v3               1024  short16≈8s    ← strong but too slow on M1 16GB
-# NIM free path: flaky + hard ~512 token cap — optional only.
-# Switch: COGNEE_EMBED_BACKEND=nim|fastembed  (default fastembed)
-# Override model without code change: EMBEDDING_MODEL=... EMBEDDING_DIMENSIONS=...
-COGNEE_EMBED_BACKEND="${COGNEE_EMBED_BACKEND:-fastembed}"
+# Default: Gemini (quality) via embed-proxy with local mxbai fallback.
+# Dim MUST stay 1024 for both backends so Lance + fallback stay compatible.
+# Switch: COGNEE_EMBED_BACKEND=gemini|fastembed|nim
+COGNEE_EMBED_BACKEND="${COGNEE_EMBED_BACKEND:-gemini}"
+COGNEE_EMBED_PROXY_URL="${COGNEE_EMBED_PROXY_URL:-http://127.0.0.1:8012/v1}"
 case "$COGNEE_EMBED_BACKEND" in
+  gemini|proxy)
+    export EMBEDDING_PROVIDER=openai_compatible
+    export EMBEDDING_MODEL="${EMBEDDING_MODEL:-gemini-embedding-001}"
+    export EMBEDDING_ENDPOINT="$COGNEE_EMBED_PROXY_URL"
+    # Proxy ignores the key; any non-empty value satisfies OpenAI client
+    export EMBEDDING_API_KEY="${EMBEDDING_API_KEY:-local-embed-proxy}"
+    export EMBEDDING_DIMENSIONS="${EMBEDDING_DIMENSIONS:-1024}"
+    ;;
   nim|nvidia)
     export EMBEDDING_PROVIDER=openai_compatible
     export EMBEDDING_MODEL="${EMBEDDING_MODEL:-nvidia/nv-embedqa-e5-v5}"
@@ -67,13 +73,15 @@ case "$COGNEE_EMBED_BACKEND" in
     export EMBEDDING_API_KEY="$OMNIROUTE_MASTER_KEY"
     export EMBEDDING_DIMENSIONS="${EMBEDDING_DIMENSIONS:-1024}"
     ;;
-  fastembed|local|*)
+  fastembed|local|mxbai)
     export EMBEDDING_PROVIDER=fastembed
-    # Quality-first default (not bge-small). Override with EMBEDDING_MODEL if needed.
     export EMBEDDING_MODEL="${EMBEDDING_MODEL:-mixedbread-ai/mxbai-embed-large-v1}"
     export EMBEDDING_DIMENSIONS="${EMBEDDING_DIMENSIONS:-1024}"
-    # no endpoint/key needed for local
     unset EMBEDDING_ENDPOINT EMBEDDING_API_KEY 2>/dev/null || true
+    ;;
+  *)
+    echo "error: unknown COGNEE_EMBED_BACKEND=$COGNEE_EMBED_BACKEND (gemini|fastembed|nim)" >&2
+    return 1 2>/dev/null || exit 1
     ;;
 esac
 
@@ -84,4 +92,4 @@ export COGNEE_PLUGIN_DATASET="${COGNEE_PLUGIN_DATASET:-sin-fleet}"
 export COGNEE_BASE_URL="${COGNEE_BASE_URL:-http://127.0.0.1:8011}"
 export COGNEE_LOCAL_API_URL="${COGNEE_LOCAL_API_URL:-http://127.0.0.1:8011}"
 
-echo "cognee-env: LLM=$LLM_MODEL via OmniRoute | EMBED=$COGNEE_EMBED_BACKEND model=$EMBEDDING_MODEL dims=$EMBEDDING_DIMENSIONS"
+echo "cognee-env: LLM=$LLM_MODEL via OmniRoute | EMBED=$COGNEE_EMBED_BACKEND model=$EMBEDDING_MODEL dims=$EMBEDDING_DIMENSIONS${EMBEDDING_ENDPOINT:+ endpoint=$EMBEDDING_ENDPOINT}"

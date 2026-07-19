@@ -3,3 +3,7 @@ CLAUDE.md
 *.bak-*
 graphify-out/
 .planning/graphs/
+
+# local secrets never commit
+**/.secrets/
+**/gemini_api_key

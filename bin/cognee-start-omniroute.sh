@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Start local Cognee API on :8011.
 # LLM: OmniRoute → Boundless gpt-5.6-terra
-# Embed: local fastembed (default) — set COGNEE_EMBED_BACKEND=nim for NVIDIA E5
+# Embed: Gemini via :8012 proxy (default) with local mxbai fallback
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
@@ -14,6 +14,14 @@ if ! curl -sS -m 2 -o /dev/null -w '' "$OMNIROUTE_BASE_URL/models" \
   if ! curl -sS -m 2 -o /dev/null "http://127.0.0.1:20128/" 2>/dev/null; then
     echo "error: OmniRoute not reachable on :20128 — start: omniroute serve" >&2
     exit 1
+  fi
+fi
+
+# Embed proxy required when backend=gemini
+if [ "${COGNEE_EMBED_BACKEND:-gemini}" = "gemini" ] || [ "${COGNEE_EMBED_BACKEND:-}" = "proxy" ]; then
+  if ! curl -sS -m 2 http://127.0.0.1:8012/health 2>/dev/null | grep -q ok; then
+    echo "starting embed-proxy (Gemini → local fallback)..."
+    "$ROOT/bin/cognee-start-embed-proxy.sh"
   fi
 fi
 
