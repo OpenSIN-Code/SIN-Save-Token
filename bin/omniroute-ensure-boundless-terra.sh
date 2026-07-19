@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Ensure OmniRoute Boundless node has gpt-5.6-terra (+ siblings) registered.
-# Idempotent. Requires OmniRoute on :20128 and OMNIROUTE_MASTER_KEY (or ~/.omniroute/.env).
+# Idempotent. Does NOT call Boundless chat by default (costs money).
+#
+# Cost policy:
+#   - Default: register models only + free NIM embed smoke (no Boundless tokens)
+#   - Costly Terra chat smoke: COGNEE_COSTLY_SMOKE=1
+#
+# Requires OmniRoute on :20128 and OMNIROUTE_MASTER_KEY (or ~/.omniroute/.env).
 set -euo pipefail
 
 if [ -z "${OMNIROUTE_MASTER_KEY:-}" ] && [ -f "$HOME/.omniroute/.env" ]; then
@@ -43,17 +49,23 @@ echo "boundless node: $NODE_ID"
 for m in gpt-5.6-terra gpt-5.6-sol gpt-5.6-luna gpt-5.5 gpt-5.4; do
   curl -sS -m 15 -X POST "$OR/api/provider-models" -H "$AUTH" -H 'Content-Type: application/json' \
     -d "{\"provider\":\"$NODE_ID\",\"modelId\":\"$m\"}" >/dev/null || true
-  echo "  model ok: boundless/$m"
+  echo "  model registered: boundless/$m"
 done
 
-echo "smoke chat boundless/gpt-5.6-terra..."
-curl -sS -m 60 "$OR/v1/chat/completions" -H "$AUTH" -H 'Content-Type: application/json' \
-  -d '{"model":"boundless/gpt-5.6-terra","messages":[{"role":"user","content":"Say TERRA_OK"}],"max_tokens":16,"stream":false}' \
-  | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("choices",[{}])[0].get("message",{}).get("content") or d)'
-
-echo "smoke embed nvidia/nv-embedqa-e5-v5..."
+# Free / local: NIM embeddings only (does not hit Boundless)
+echo "smoke embed (NVIDIA NIM free path) nvidia/nv-embedqa-e5-v5..."
 curl -sS -m 45 "$OR/v1/embeddings" -H "$AUTH" -H 'Content-Type: application/json' \
   -d '{"model":"nvidia/nv-embedqa-e5-v5","input":"test"}' \
   | python3 -c 'import json,sys; d=json.load(sys.stdin); print("dims", len(d["data"][0]["embedding"]) if d.get("data") else d)'
 
-echo "done."
+# Boundless chat burns quota — opt-in only
+if [ "${COGNEE_COSTLY_SMOKE:-0}" = "1" ]; then
+  echo "COGNEE_COSTLY_SMOKE=1 → one tiny Terra chat (costs Boundless credit)..."
+  curl -sS -m 60 "$OR/v1/chat/completions" -H "$AUTH" -H 'Content-Type: application/json' \
+    -d '{"model":"boundless/gpt-5.6-terra","messages":[{"role":"user","content":"ok"}],"max_tokens":1,"stream":false}' \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("choices",[{}])[0].get("message",{}).get("content") or d)'
+else
+  echo "skip Boundless chat smoke (set COGNEE_COSTLY_SMOKE=1 to enable — spends credit)"
+fi
+
+echo "done (no Boundless cognify/bulk)."

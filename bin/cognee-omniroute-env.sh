@@ -41,7 +41,7 @@ export OMNIROUTE_BASE_URL="${OMNIROUTE_BASE_URL:-http://127.0.0.1:20128/v1}"
 
 # ── LLM (chat / cognify) ─────────────────────────────────────────────
 export LLM_PROVIDER=openai
-export LLM_MODEL="${LLM_MODEL:-boundless/gpt-5.6-terra}"
+export LLM_MODEL="${LLM_MODEL:-openai/boundless/gpt-5.6-terra}"
 export LLM_ENDPOINT="$OMNIROUTE_BASE_URL"
 export LLM_API_KEY="$OMNIROUTE_MASTER_KEY"
 # litellm / openai-sdk aliases used by some cognee paths
@@ -58,7 +58,7 @@ export EMBEDDING_API_KEY="$OMNIROUTE_MASTER_KEY"
 export EMBEDDING_DIMENSIONS="${EMBEDDING_DIMENSIONS:-1024}"
 
 # Connection test to embed endpoint can be slow on cold NIM — optional skip
-export COGNEE_SKIP_CONNECTION_TEST="${COGNEE_SKIP_CONNECTION_TEST:-false}"
+export COGNEE_SKIP_CONNECTION_TEST="${COGNEE_SKIP_CONNECTION_TEST:-true}"
 
 # Pilot dataset default
 export COGNEE_PLUGIN_DATASET="${COGNEE_PLUGIN_DATASET:-sin-fleet}"
