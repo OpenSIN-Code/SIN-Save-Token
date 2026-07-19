@@ -110,7 +110,10 @@ if [ "$MODE" != "--check" ]; then
   # ROI until the memory corpus is large; session-digest is an on-demand handoff.
   ln -sfn "$REPO_DIR/bin/memory-scope" "$BIN_DEST/memory-scope"
   ln -sfn "$REPO_DIR/bin/session-digest" "$BIN_DEST/session-digest"
-  say "✅ memory-scope + session-digest linked -> $BIN_DEST/"
+  # dream (mimo /dream, ported): mines durable lessons from a session into shared
+  # memory. Reuses session-digest's adapters, so it reads Claude + opencode.
+  ln -sfn "$REPO_DIR/bin/dream" "$BIN_DEST/dream"
+  say "✅ memory-scope + session-digest + dream linked -> $BIN_DEST/"
 
   if [ -f "$CC_SETTINGS" ] && command -v python3 >/dev/null 2>&1; then
     AGN="$REPO_DIR/hooks/agent-grep-nudge.js"

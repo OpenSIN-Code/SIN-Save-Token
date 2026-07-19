@@ -121,7 +121,8 @@ SIN-Save-Token/
 │   ├── verify-tokens         ← 4-Layer Compliance-Checker (exit 1 bei Regress)
 │   ├── agent-grep            ← struktur-augmentierte, selbst-kürzende Code-Suche
 │   ├── memory-scope          ← jcode ② — Memory-Ranking (BM25-lite) + ehrliches ROI-Gate
-│   └── session-digest        ← jcode ③ — Transcript → kompakter Resume-Digest (~99%)
+│   ├── session-digest        ← jcode ③ — Transcript → kompakter Resume-Digest (~99%)
+│   └── dream                 ← mimo /dream — dauerhafte Lehren → geteiltes Memory
 ├── docs/
 │   └── BEST-PRACTICES.md     ← kanonischer Standard, Konfig pro Runtime, Quellen
 └── templates/
@@ -211,6 +212,31 @@ Damit ist echtes Cross-Harness-Resume live: einen `orca`-Sub (opencode/mimo)
 laufen lassen → dessen opencode-Session digesten → Claude damit seeden, ohne
 Report-Round-Trip. Ein mimo-Adapter dockt gleich an, sobald dessen Format
 bestätigt ist. Bewusst kein Hook: Resume ist ein On-Demand-Handoff.
+
+---
+
+## `dream` — mimo `/dream`, portiert (dauerhafte Lehren → Memory)
+
+Wo `session-digest` „wo haben wir aufgehört" beantwortet (flüchtiger Resume-State),
+beantwortet `dream` „was haben wir GELERNT, das eine künftige Session behalten
+soll": Korrekturen, Entscheidungen, Gotchas, bestätigte Ansätze. Nutzt dieselben
+Adapter wie `session-digest` → liest Claude **und** opencode.
+
+Kein LLM, kein API-Call: deterministische, **zweisprachige** (DE+EN) Signal-
+Heuristik minet den Transcript nach dauerhaftem Signal (`don't`/`nicht auf`,
+`we decided`/`wir nehmen`, `root cause`/`ursache`, `that worked`/`hat geklappt`).
+Ausgabe sind Memory-**Kandidaten** — nie auto-committet, du bleibst in der Schleife.
+
+```bash
+dream --latest                      # Claude: neueste Session
+dream ses_XXXX                       # opencode: Session per id
+dream --latest --format opencode     # opencode: neueste Session für cwd
+dream --write                        # Kandidaten an <memdir>/dreamed.md anhängen
+```
+
+Der einzige mimo-Import mit klar positivem ROI: `sin verify` schlägt mimos
+Judge-Stop (ausführungsbasiert > Modell-Judge), Tools wie `task`/`cron`/`notebook`
+hat jeder Harness schon nativ — aber cross-harness Wissens-Extraktion fehlte.
 
 ---
 

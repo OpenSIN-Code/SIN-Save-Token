@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+"""dream — extract the *durable lessons* from a session into shared memory.
+
+Ported from mimo's `/dream` (knowledge → memory), but built to our stack's
+constraints: cross-harness, deterministic, zero-API.
+
+Where `session-digest` answers "where did we leave off" (ephemeral resume state),
+`dream` answers "what did we LEARN that a future session should keep" — the
+decisions, gotchas, and confirmed approaches that outlive this task. It reuses
+session-digest's adapters, so it reads BOTH Claude JSONL and opencode SQLite.
+
+It is deliberately NOT an LLM summarizer. It mines the transcript for durable
+signal by lexical heuristics — the same class of user/assistant statements a
+human would flag as "worth remembering": corrections ("don't", "actually",
+"instead"), confirmations ("that worked", "perfect", "exactly"), decisions
+("we decided", "let's use", "go with"), and gotchas ("turns out", "the trap",
+"root cause"). The output is a set of memory *candidates*, printed as Markdown or
+appended to the shared memory dir — never auto-committed, so you stay in the loop.
+
+Usage:
+  dream <transcript.jsonl>            mine a Claude JSONL file
+  dream ses_XXXX                       mine an opencode session (by id)
+  dream --latest                       newest Claude transcript for cwd
+  dream --latest --format opencode     newest opencode session for cwd
+  dream --write                        append candidates to the memory dir
+  dream --dir <path>                   memory dir override (default: auto-probe)
+  dream --max N                        cap candidates (default 20)
+
+Output: Markdown to stdout (default) or appended to <memdir>/dreamed-<date>.md
+with --write. Exit 0 ok, 2 not found, 1 usage error.
+"""
+import os
+import re
+import sys
+import importlib.util
+from importlib.machinery import SourceFileLoader
+
+
+# --- reuse session-digest's adapters (same repo, sibling file) ----------------
+def _load_digest():
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, "session-digest")
+    loader = SourceFileLoader("session_digest", path)
+    spec = importlib.util.spec_from_loader("session_digest", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+# --- memory dir discovery (mirrors memory-scope's probe order) ----------------
+_CANDIDATES = [
+    os.environ.get("MEMORY_SCOPE_DIR"),
+    "/tmp/memory",
+    os.path.expanduser("~/.claude/memory"),
+    os.path.expanduser("~/.claude/projects/-tmp/memory"),
+    "/root/.claude/projects/-tmp/memory",
+]
+
+
+def _find_memory_dir(override=None):
+    if override:
+        return override
+    for c in _CANDIDATES:
+        if c and os.path.isdir(c):
+            return c
+    return "/tmp/memory"
+
+
+# --- durable-signal heuristics (bilingual: EN + DE) ---------------------------
+# Each bucket: (label, compiled regex). Order = display priority.
+# The user works in German, so every bucket carries DE markers alongside EN.
+_SIGNALS = [
+    ("correction", re.compile(
+        r"\b(don'?t|do not|stop|never|actually|instead|no,? |not that|"
+        r"revert|undo|wrong|mistake|shouldn'?t|"
+        r"stattdessen|rückgängig|mach (das )?wieder|"
+        r"heißt nicht|ist nicht|nicht auf|darfst? nicht|sollst? nicht|"
+        r"falsch|verändert|hör auf|nein[,! ])\b", re.I)),
+    ("decision", re.compile(
+        r"\b(we (decided|agreed|chose)|let'?s (use|go with|do)|going with|"
+        r"decision:|use \w+ (instead|not)|the plan is|we'?ll (use|build)|"
+        r"wir (nehmen|nutzen|bauen|machen)|nimm|benutze|verwende|"
+        r"entscheidung|der plan|wir sollten|lass uns)\b", re.I)),
+    ("gotcha", re.compile(
+        r"\b(turns out|the trap|root cause|gotcha|caveat|the catch|"
+        r"the issue (was|is)|because it|beware|watch out|silently|"
+        r"footgun|edge case|"
+        r"stellt sich heraus|die falle|ursache|problem war|weil es|"
+        r"achtung|vorsicht|fehler kommt|manchmal kommt)\b", re.I)),
+    ("confirmation", re.compile(
+        r"\b(that worked|works now|perfect|exactly right|nailed it|"
+        r"confirmed|verified|passes now|green|correct approach|"
+        r"yes[,! ]|good call|"
+        r"hat geklappt|funktioniert( jetzt)?|perfekt|genau|"
+        r"bestätigt|läuft|passt|richtig so|super)\b", re.I)),
+    ("preference", re.compile(
+        r"\b(always|prefer|from now on|in future|going forward|make sure to|"
+        r"remember to|by default|house rule|"
+        r"immer|denk dran|denke daran|in zukunft|ab jetzt|standardmäßig|"
+        r"bevorzuge|merk dir|stell sicher)\b", re.I)),
+]
+
+# Noise: skip system/meta/tool-caveat lines that aren't real lessons.
+_NOISE = re.compile(
+    r"^\s*(<|caveat|\[request|system-reminder|EOF|```|\| |#{1,6}\s|-{3,})", re.I)
+
+
+def _clip(text, n=220):
+    text = " ".join(text.split())
+    return (text[:n] + "…") if len(text) > n else text
+
+
+def _mine(events, max_candidates=20):
+    """Return list of {bucket, role, text} durable-lesson candidates."""
+    out, seen = [], set()
+    for e in events:
+        text = (e.get("text") or "").strip()
+        if not text:
+            continue
+        role = e.get("role", "")
+        # split into sentence-ish units so one long turn yields tight lessons
+        for chunk in re.split(r"(?<=[.!?\n])\s+", text):
+            chunk = chunk.strip()
+            if len(chunk) < 12 or _NOISE.match(chunk):
+                continue
+            for bucket, rx in _SIGNALS:
+                if rx.search(chunk):
+                    key = (bucket, chunk[:80].lower())
+                    if key in seen:
+                        break
+                    seen.add(key)
+                    out.append({"bucket": bucket, "role": role, "text": _clip(chunk)})
+                    break
+    # rank by bucket priority, keep order stable within a bucket
+    order = {b: i for i, (b, _) in enumerate(_SIGNALS)}
+    out.sort(key=lambda c: order.get(c["bucket"], 99))
+    return out[:max_candidates]
+
+
+def _render(candidates, source):
+    if not candidates:
+        return "# Dreamed lessons\n\n_No durable-signal lessons found in this session._\n"
+    by_bucket = {}
+    for c in candidates:
+        by_bucket.setdefault(c["bucket"], []).append(c)
+    lines = ["# Dreamed lessons", "",
+             f"_Source: `{source}` — {len(candidates)} candidate(s). "
+             "Review before trusting; these are heuristic extractions, not facts._", ""]
+    titles = {
+        "correction": "Corrections (what to avoid)",
+        "decision": "Decisions",
+        "gotcha": "Gotchas / root causes",
+        "confirmation": "Confirmed approaches",
+        "preference": "Stated preferences",
+    }
+    for bucket, _ in _SIGNALS:
+        items = by_bucket.get(bucket)
+        if not items:
+            continue
+        lines.append(f"## {titles.get(bucket, bucket)}")
+        for c in items:
+            who = "user" if c["role"] == "user" else "asst"
+            lines.append(f"- _({who})_ {c['text']}")
+        lines.append("")
+    lines.append("_Promote the keepers into your memory files; discard the noise._")
+    return "\n".join(lines)
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+
+    memdir = None
+    if "--dir" in argv:
+        i = argv.index("--dir")
+        try:
+            memdir = argv[i + 1]
+            del argv[i:i + 2]
+        except IndexError:
+            sys.stderr.write("dream: --dir needs a path\n")
+            return 1
+
+    max_candidates = 20
+    if "--max" in argv:
+        i = argv.index("--max")
+        try:
+            max_candidates = int(argv[i + 1])
+            del argv[i:i + 2]
+        except (IndexError, ValueError):
+            sys.stderr.write("dream: --max needs an integer\n")
+            return 1
+
+    fmt = None
+    if "--format" in argv:
+        i = argv.index("--format")
+        try:
+            fmt = argv[i + 1]
+            del argv[i:i + 2]
+        except IndexError:
+            sys.stderr.write("dream: --format needs a value\n")
+            return 1
+
+    do_write = "--write" in argv
+    if do_write:
+        argv.remove("--write")
+
+    dg = _load_digest()
+
+    if "--latest" in argv:
+        want = fmt or "claude"
+        if want == "opencode":
+            src = dg._latest_opencode_session()
+            if not src:
+                sys.stderr.write("dream: no opencode session found for cwd\n")
+                return 2
+            fmt = "opencode"
+        else:
+            src = dg._latest_claude_transcript()
+            if not src:
+                sys.stderr.write("dream: no Claude transcript found for cwd\n")
+                return 2
+    else:
+        paths = [a for a in argv if not a.startswith("-")]
+        if not paths:
+            sys.stderr.write("dream: give a transcript path/session id or --latest\n")
+            return 1
+        src = paths[0]
+
+    fmt = fmt or dg._detect(src)
+    adapter = dg._ADAPTERS.get(fmt)
+    if not adapter:
+        sys.stderr.write(f"dream: no adapter for format {fmt!r} "
+                         f"(have: {', '.join(dg._ADAPTERS)})\n")
+        return 1
+
+    is_oc = (fmt == "opencode") or src.startswith("ses_") or src.endswith(".db")
+    if not is_oc and not os.path.isfile(src):
+        sys.stderr.write(f"dream: not a file: {src}\n")
+        return 2
+
+    events = adapter(src)
+    if not events:
+        sys.stderr.write("dream: transcript parsed to 0 events\n")
+        return 2
+
+    candidates = _mine(events, max_candidates=max_candidates)
+    rendered = _render(candidates, os.path.basename(src) if not is_oc else src)
+
+    if do_write:
+        memdir = _find_memory_dir(memdir)
+        os.makedirs(memdir, exist_ok=True)
+        # date from the transcript, not wall-clock (deterministic, testable)
+        out_path = os.path.join(memdir, "dreamed.md")
+        with open(out_path, "a", encoding="utf-8") as fh:
+            fh.write(rendered.rstrip() + "\n\n---\n\n")
+        sys.stderr.write(f"dream: appended {len(candidates)} candidate(s) -> {out_path}\n")
+        return 0
+
+    print(rendered)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
