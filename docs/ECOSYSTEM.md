@@ -50,6 +50,26 @@ SIN-Save-Token/bin/verify-tokens   # L0–L4 compliance; fail-loud on regression
 
 Both should be green after install. If they disagree, **gates are wrong** — open a P0.
 
+
+## L2 MCP budget (shared)
+
+Source of truth: **wow-my-zsh** `shared/mcp/servers.json` fields:
+
+- `tier`: `core` | `optional` | `experimental`
+- `always_on`: bool — only `true` servers ship under default install profile
+
+| Profile | Command | Effect |
+|---------|---------|--------|
+| **core** (default) | `./install.sh` or `--profile core` | Merge always_on only; prune managed optionals |
+| **full** | `./install.sh --profile full` | All registry servers for each agent |
+
+Enforcement:
+
+- wow `doctor.sh` — missing core or leftover optionals under profile=core → drift
+- SST `verify-tokens` — optional in live config → 🚨 unless `SST_ALLOW_OPTIONAL_MCP=1`
+
+Core allowlist (current): `context7`, `serena`, `tavily`.
+
 ## Change rules
 
 1. Adding an MCP server → **wow** registry only; re-run `install.sh`; never hand-edit only one agent.

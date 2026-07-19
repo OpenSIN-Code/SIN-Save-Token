@@ -126,9 +126,8 @@ fi
 
 # ── Claude Code ──────────────────────────────────────────────────────
 # L1 hooks live in settings.json; MCP servers are merged by wow-my-zsh into
-# ~/.claude.json (mcpServers) — NOT into settings.json. Counting the wrong file
-# produced a false "4 servers thinned" green while 10 lived in the real config
-# (issue #2). Soft budget warn until joint L2 allowlist lands (issue #3).
+# ~/.claude.json (mcpServers). L2 budget (issue #3): allowlist = registry
+# always_on servers; optional/experimental fail unless SST_ALLOW_OPTIONAL_MCP=1.
 say "\n[Claude Code]"
 CLAUDE_MCP_JSON="$HOME/.claude.json"
 if [ -f "$CLAUDE_SETTINGS" ]; then
@@ -138,6 +137,9 @@ from pathlib import Path
 
 settings_path, mcp_path = sys.argv[1], sys.argv[2]
 fail = 0
+allow_optional = os.environ.get("SST_ALLOW_OPTIONAL_MCP", "").strip() in (
+    "1", "true", "yes", "YES", "TRUE",
+)
 
 try:
     d = json.load(open(settings_path))
@@ -181,27 +183,18 @@ if not mcp and isinstance(d.get("mcpServers"), dict) and d["mcpServers"]:
     mcp = d["mcpServers"]
     source = settings_path + " (legacy mcpServers)"
 
-names = sorted(mcp.keys()) if isinstance(mcp, dict) else []
-heavy = {"skyvern", "chrome-devtools", "canva"} & set(names)
-SOFT_MAX = int(os.environ.get("SST_MCP_SOFT_MAX", "6"))
+names = set(mcp.keys()) if isinstance(mcp, dict) else set()
+heavy = {"skyvern", "chrome-devtools", "canva"} & names
 
 if not source:
     print("  ⚠️  L2 no MCP config found at ~/.claude.json or settings.json")
-elif heavy:
-    print(f"  ⚠️  L2 heavy MCP servers present: {sorted(heavy)} (from {source})")
 else:
     print(f"  ℹ️  L2 Claude MCP source: {source}")
+print(f"  ℹ️  L2 Claude live MCP ({len(names)}): {sorted(names) if names else '[]'}")
 
-print(f"  ℹ️  L2 Claude always-on MCP ({len(names)}): {names if names else '[]'}")
-if len(names) > SOFT_MAX:
-    print(
-        f"  ⚠️  L2 Claude MCP count {len(names)} > soft max {SOFT_MAX} "
-        f"(set SST_MCP_SOFT_MAX or thin via wow registry — joint budget issue #3)"
-    )
-elif names and not heavy:
-    print(f"  ✅ L2 Claude MCP within soft max ({len(names)} ≤ {SOFT_MAX})")
-elif not names:
-    print("  ✅ L2 Claude MCP empty (no always-on schema tax)")
+if heavy:
+    print(f"  🚨 L2 heavy MCP servers present: {sorted(heavy)}")
+    fail = 1
 
 sys.exit(fail)
 CLAUDE_PY
@@ -211,15 +204,67 @@ else
   fail "Claude Code settings.json not found"
 fi
 
-# ── L2 cross-agent MCP inventory (wow-my-zsh merge targets) ──────────
-say "\n[L2] fleet MCP inventory (real configs)"
-python3 - <<'FLEET_PY' || true
-import json, os, re
+# ── L2 budget: wow registry allowlist + fleet inventory ──────────────
+# Shared definition lives in wow-my-zsh shared/mcp/servers.json
+# (always_on / tier). Profile default = core.
+say "\n[L2] MCP budget (wow registry always_on allowlist)"
+python3 - <<'BUDGET_PY'
+import json, os, re, sys
 from pathlib import Path
+import importlib.util
 
 home = Path.home()
-soft = int(os.environ.get("SST_MCP_SOFT_MAX", "6"))
+allow_optional = os.environ.get("SST_ALLOW_OPTIONAL_MCP", "").strip() in (
+    "1", "true", "yes", "YES", "TRUE",
+)
+fail = 0
 heavy_set = {"skyvern", "chrome-devtools", "canva"}
+
+# Locate wow registry (shared SoT for L2 budget)
+candidates = []
+if os.environ.get("WOW_HOME"):
+    candidates.append(Path(os.environ["WOW_HOME"]) / "shared/mcp/servers.json")
+candidates += [
+    home / ".wow-my-zsh/shared/mcp/servers.json",
+    home / "dev/wow-my-zsh/shared/mcp/servers.json",
+    Path("/Users/jeremy/dev/wow-my-zsh/shared/mcp/servers.json"),
+]
+reg = next((p for p in candidates if p.is_file()), None)
+if not reg:
+    print("  ⚠️  wow registry not found — skip allowlist (install wow-my-zsh)")
+    sys.exit(0)
+
+# Load gen-mcp helpers if available
+gen = None
+gen_path = reg.resolve().parents[2] / "scripts" / "gen-mcp.py"
+if gen_path.is_file():
+    spec = importlib.util.spec_from_file_location("gen_mcp", gen_path)
+    gen = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(gen)
+    except Exception as e:
+        print(f"  ⚠️  cannot load gen-mcp.py: {e}")
+        gen = None
+
+if gen:
+    servers = gen.load_registry(reg)
+    always = set(gen.always_on_names(servers))
+    optional = set(gen.optional_names(servers))
+else:
+    doc = json.loads(reg.read_text(encoding="utf-8"))
+    servers = doc.get("servers", {})
+    always, optional = set(), set()
+    for n, s in servers.items():
+        if s.get("always_on") is True or s.get("tier") == "core":
+            always.add(n)
+        else:
+            optional.add(n)
+
+print(f"  ℹ️  budget registry: {reg}")
+print(f"  ℹ️  always_on allowlist ({len(always)}): {sorted(always)}")
+print(f"  ℹ️  optional/experimental ({len(optional)}): {sorted(optional)}")
+if allow_optional:
+    print("  ℹ️  SST_ALLOW_OPTIONAL_MCP=1 — optional servers permitted")
 
 def load_json(path, key):
     p = Path(path)
@@ -231,8 +276,8 @@ def load_json(path, key):
         return None, f"parse-error: {e}"
     bucket = d.get(key) or {}
     if not isinstance(bucket, dict):
-        return [], "ok"
-    return sorted(bucket.keys()), "ok"
+        return set(), "ok"
+    return set(bucket.keys()), "ok"
 
 def load_codex_toml(path):
     p = Path(path)
@@ -243,7 +288,7 @@ def load_codex_toml(path):
         r'(?m)^\[mcp_servers\.(?:"([^"]+)"|([A-Za-z0-9_-]+))\]',
         text,
     )
-    return sorted({a or b for a, b in names}), "ok"
+    return {a or b for a, b in names}, "ok"
 
 checks = [
     ("claude",   str(home / ".claude.json"), "mcpServers", "json"),
@@ -253,33 +298,79 @@ checks = [
     ("codex",    str(home / ".codex/config.toml"), None, "toml"),
 ]
 
-any_heavy = []
+any_heavy = set()
 for agent, path, key, kind in checks:
     if kind == "toml":
         names, st = load_codex_toml(path)
     else:
         names, st = load_json(path, key)
     if st == "absent":
-        print(f"  ℹ️  {agent}: config absent ({path})")
+        print(f"  ℹ️  {agent}: config absent")
         continue
     if st != "ok":
-        print(f"  ⚠️  {agent}: {st} ({path})")
+        print(f"  ⚠️  {agent}: {st}")
         continue
-    n = len(names)
-    flag = ""
-    hit = heavy_set & set(names)
-    if hit:
-        flag = f" HEAVY={sorted(hit)}"
-        any_heavy.extend(sorted(hit))
-    elif n > soft:
-        flag = f" >soft-max={soft}"
-    print(f"  ℹ️  {agent}: {n} servers{flag} → {names}")
+
+    hit_heavy = heavy_set & names
+    # Only enforce budget on servers that appear in the wow registry
+    known = always | optional
+    live_known = names & known
+    live_optional = live_known & optional
+    live_core = live_known & always
+    # Agent-specific core expected
+    if gen:
+        expected_core = set(gen.servers_for(servers, agent, profile="core"))
+    else:
+        expected_core = {
+            n for n, s in servers.items()
+            if agent in s.get("agents", []) and (
+                s.get("always_on") is True or s.get("tier") == "core"
+            )
+        }
+    missing_core = expected_core - names
+    user_extra = names - known  # not in registry — leave alone
+
+    flags = []
+    if hit_heavy:
+        flags.append(f"HEAVY={sorted(hit_heavy)}")
+        any_heavy |= hit_heavy
+        fail = 1
+    if live_optional and not allow_optional:
+        flags.append(f"OPTIONAL_NOT_ALLOWED={sorted(live_optional)}")
+        fail = 1
+    elif live_optional and allow_optional:
+        flags.append(f"optional(ok)={sorted(live_optional)}")
+    if missing_core:
+        flags.append(f"missing_core={sorted(missing_core)}")
+        # missing core is warn not fail — user may have thinned further
+    flag_s = (" " + " ".join(flags)) if flags else ""
+    print(
+        f"  ℹ️  {agent}: {len(names)} live "
+        f"(core={sorted(live_core)}, known={len(live_known)}, user_extra={sorted(user_extra) if user_extra else '[]'})"
+        f"{flag_s}"
+    )
+    if live_optional and not allow_optional:
+        print(
+            f"  🚨 {agent}: optional/experimental MCP under core budget: "
+            f"{sorted(live_optional)} — re-run wow install.sh --profile core, "
+            f"or SST_ALLOW_OPTIONAL_MCP=1 / --profile full"
+        )
+    elif not live_optional and not hit_heavy:
+        if live_core == expected_core or live_core <= expected_core:
+            print(f"  ✅ {agent}: within L2 core budget")
 
 if any_heavy:
-    print(f"  ⚠️  L2 heavy servers somewhere in fleet: {sorted(set(any_heavy))}")
+    print(f"  🚨 L2 heavy servers in fleet: {sorted(any_heavy)}")
+    fail = 1
 else:
-    print("  ✅ L2 no skyvern/chrome-devtools/canva in fleet MCP configs")
-FLEET_PY
+    print("  ✅ L2 no skyvern/chrome-devtools/canva in fleet")
+
+if fail:
+    sys.exit(1)
+sys.exit(0)
+BUDGET_PY
+rc=$?
+[ "$rc" -ne 0 ] && FAIL=1
 
 # ── L3: claude-mem single shared worker/DB ───────────────────────────
 say "\n[L3] shared memory (claude-mem)"
