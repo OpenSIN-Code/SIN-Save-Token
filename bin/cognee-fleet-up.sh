@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Everyday multi-agent Cognee stack for Claude / Codex / OpenCode / MiMo / Cline / Orca.
-# OmniRoute → Boundless Terra (LLM) + NVIDIA NIM E5 (embed) → Cognee :8011 → CLI on PATH.
+# OmniRoute → Boundless Terra (LLM) + local fastembed (embed default) → Cognee :8011 → CLI.
+# Optional: COGNEE_EMBED_BACKEND=nim for NVIDIA nv-embedqa-e5-v5 (1024-dim; reindex required).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-echo "== 1) OmniRoute register models + free NIM embed smoke (no Boundless chat) =="
+echo "== 1) OmniRoute register Boundless Terra models (no paid chat by default) =="
 # Does NOT call Boundless/Terra unless COGNEE_COSTLY_SMOKE=1
 "$ROOT/bin/omniroute-ensure-boundless-terra.sh"
 

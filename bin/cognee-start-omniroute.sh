@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Start local Cognee API on :8011 with OmniRoute LLM + NIM embeddings.
+# Start local Cognee API on :8011.
+# LLM: OmniRoute → Boundless gpt-5.6-terra
+# Embed: local fastembed (default) — set COGNEE_EMBED_BACKEND=nim for NVIDIA E5
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
