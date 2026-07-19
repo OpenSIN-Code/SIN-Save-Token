@@ -48,9 +48,16 @@ export OPENAI_API_BASE="$OMNIROUTE_BASE_URL"
 export OPENAI_BASE_URL="$OMNIROUTE_BASE_URL"
 
 # ── Embeddings ───────────────────────────────────────────────────────
-# Default: local fastembed — stable for multi-agent everyday use.
-# NIM free path is fine but flaky under load (timeouts during bulk cognify).
+# Default: BEST local quality that runs well on Apple Silicon (fastembed/ONNX).
+# Benchmarked on MacBook Pro M1 16GB (2026-07-19):
+#   mxbai-embed-large-v1  1024  short16≈2.5s  ← quality king among local ONNX
+#   bge-large-en-v1.5     1024  short16≈0.9s  ← close quality, faster
+#   nomic-embed-text-v1.5  768  short16≈0.3s  ← long-context sweet spot
+#   bge-small-en-v1.5      384  short16≈0.07s ← too weak for "best" fleet memory
+#   jina-v3               1024  short16≈8s    ← strong but too slow on M1 16GB
+# NIM free path: flaky + hard ~512 token cap — optional only.
 # Switch: COGNEE_EMBED_BACKEND=nim|fastembed  (default fastembed)
+# Override model without code change: EMBEDDING_MODEL=... EMBEDDING_DIMENSIONS=...
 COGNEE_EMBED_BACKEND="${COGNEE_EMBED_BACKEND:-fastembed}"
 case "$COGNEE_EMBED_BACKEND" in
   nim|nvidia)
@@ -62,8 +69,9 @@ case "$COGNEE_EMBED_BACKEND" in
     ;;
   fastembed|local|*)
     export EMBEDDING_PROVIDER=fastembed
-    export EMBEDDING_MODEL="${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}"
-    export EMBEDDING_DIMENSIONS="${EMBEDDING_DIMENSIONS:-384}"
+    # Quality-first default (not bge-small). Override with EMBEDDING_MODEL if needed.
+    export EMBEDDING_MODEL="${EMBEDDING_MODEL:-mixedbread-ai/mxbai-embed-large-v1}"
+    export EMBEDDING_DIMENSIONS="${EMBEDDING_DIMENSIONS:-1024}"
     # no endpoint/key needed for local
     unset EMBEDDING_ENDPOINT EMBEDDING_API_KEY 2>/dev/null || true
     ;;

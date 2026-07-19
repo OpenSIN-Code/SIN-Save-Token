@@ -56,12 +56,12 @@ done
 # Optional NIM: COGNEE_SMOKE_NIM=1 (short input only — nv-embedqa-e5-v5 hard-caps ~512 tokens).
 VENV_PY="${COGNEE_VENV_PYTHON:-$HOME/.cognee-plugin/venv/bin/python}"
 if [ -x "$VENV_PY" ]; then
-  echo "smoke embed (local fastembed BAAI/bge-small-en-v1.5)..."
+  echo "smoke embed (local fastembed mxbai-embed-large-v1 — quality default)..."
   "$VENV_PY" -c '
 from fastembed import TextEmbedding
-m = TextEmbedding("BAAI/bge-small-en-v1.5")
+m = TextEmbedding("mixedbread-ai/mxbai-embed-large-v1")
 v = next(m.embed(["sin-fleet smoke"]))
-print("fastembed OK dims", len(v))
+print("fastembed OK dims", len(v), "model=mxbai-embed-large-v1")
 ' || echo "warn: fastembed smoke failed (install: pip install fastembed in cognee venv)"
 else
   echo "warn: no cognee venv at $VENV_PY — skip local embed smoke"

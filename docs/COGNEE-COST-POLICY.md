@@ -7,39 +7,54 @@ Any agent / Orca
   → cognee-recall / cognee-remember  (CLI, all harnesses)
   → Cognee API :8011
        ├─ LLM:   OmniRoute → boundless/gpt-5.6-terra   (Boundless, paid)
-       └─ Embed: local fastembed BAAI/bge-small-en-v1.5 (default, free, stable)
+       └─ Embed: local fastembed mixedbread-ai/mxbai-embed-large-v1 (default, 1024)
                  optional: COGNEE_EMBED_BACKEND=nim → nvidia/nv-embedqa-e5-v5
 ```
+
+## Local embed quality on Mac M1 16GB (measured)
+
+All models run natively via `fastembed` + ONNX (`arm64`, providers include CoreML/CPU).
+First load downloads weights once; later starts use cache (seconds, not minutes).
+
+| Model | Dim | short×16 (this M1) | Role |
+|-------|-----|--------------------|------|
+| **mixedbread-ai/mxbai-embed-large-v1** | 1024 | ~2.5s | **default — best local quality** |
+| BAAI/bge-large-en-v1.5 | 1024 | ~0.9s | near-top quality, faster |
+| nomic-ai/nomic-embed-text-v1.5 | 768 | ~0.3s | long context / docs |
+| thenlper/gte-large | 1024 | ~6s | strong, slower batch |
+| intfloat/multilingual-e5-large | 1024 | ~0.9s | multi-lang |
+| jinaai/jina-embeddings-v3 | 1024 | ~8–14s | strong, **too slow** on loaded M1 16GB |
+| BAAI/bge-small-en-v1.5 | 384 | ~0.07s | rejected — too weak for “best” |
+
+**Not** the absolute world #1 (Voyage/Cohere API can still edge MTEB).  
+**Yes** the best *reliable free local* option that this M1 runs cleanly under multi-agent load.
+
+RAM note: M1 16GB under heavy swap makes large models feel slower. Free RAM → large embeds stay easy.
 
 ## Is NVIDIA the right embed?
 
 | Backend | Pros | Cons | Verdict |
 |---------|------|------|---------|
-| **fastembed (default)** | free, local, no flake, multi-agent safe, handles long chunks | slightly weaker than E5-v5; 384-dim | **default for everyday** |
-| **NIM nv-embedqa-e5-v5** | stronger retrieval (1024-dim) | **hard ~512-token input limit**; free-tier timeouts under bulk | **optional**, short texts only |
+| **fastembed mxbai-large (default)** | free, local, top ONNX quality, long chunks | first download ~0.6GB; slower than small | **default** |
+| **NIM nv-embedqa-e5-v5** | strong cloud retrieval | **hard ~512-token limit**; free-tier timeouts | optional short texts only |
 | Boundless embed | — | **none available** | n/a |
-| EmbedCode | better for pure code index | not free/live on our path | later |
+| Voyage/Cohere/Gemini API | often paper-SOTA | paid + network | later A/B if needed |
 
 ### Real failures we hit (not “maybe”)
 
-1. **`Input length N exceeds maximum allowed token size 512`** — NIM E5 via OmniRoute rejects long chunks. Cognee chunkers often emit >512 tokens → `Embedding failed`.
-2. **Timeouts / 409 under bulk load** — free NIM path flakes when many parallel cognify jobs hit embeds.
-3. **Dim mismatch 1024↔384** — Lance stores `fixed_size_list[N]`. Switching backend without wipe breaks search. Fix: `bin/cognee-reindex-vectors.sh` then re-`remember` notes.
-
-**Verdict:** NVIDIA is a fine *model*, but **not the right everyday backend** for our fleet (long docs + multi-agent load). Default stays **local fastembed**. Use NIM only when you explicitly want quality on short notes and can reindex.
+1. **`Input length N exceeds maximum allowed token size 512`** — NIM E5 via OmniRoute rejects long chunks.
+2. **Timeouts / 409 under bulk load** — free NIM path flakes under parallel cognify.
+3. **Dim mismatch** — Lance is `fixed_size_list[N]`. Switching models → `bin/cognee-reindex-vectors.sh`.
 
 ## Cost (Boundless only on LLM)
 
 | Action | Boundless? | Gate |
 |--------|------------|------|
 | `cognee-fleet-up.sh` | no | — |
-| NIM/fastembed smoke | no | — |
+| local embed smoke | no | — |
 | `cognee-recall` | **maybe** (graph_completion may call Terra) | use when needed |
 | `cognee-remember "short note"` | **yes** (cognify) | soft warning; size cap 50k |
 | Large file / bulk re-ingest | **yes, expensive** | `COGNEE_ALLOW_COSTLY=1` + max docs/chars |
-
-**Agents must work without a special flag** for normal `remember` of short notes.  
-**Scripts must not bulk-ingest** without `COGNEE_ALLOW_COSTLY=1`.
 
 ## Everyday (all agents)
 
@@ -48,21 +63,21 @@ Any agent / Orca
 
 cognee-status
 cognee-recall "L2 core MCP servers?"
-cognee-remember "Decision: we keep NIM E5 optional; default fastembed."
+cognee-remember "Decision: default embed is mxbai-embed-large local."
 ```
 
-Optional stronger embeds (short texts only; **must reindex**):
+Faster local alternative (still strong):
+
+```bash
+export EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
+export EMBEDDING_DIMENSIONS=1024
+bin/cognee-reindex-vectors.sh
+```
+
+Optional NIM (short texts only; **must reindex**):
 
 ```bash
 export COGNEE_EMBED_BACKEND=nim
-bin/cognee-reindex-vectors.sh   # wipe 384 store + restart as NIM 1024
-# then re-seed notes you care about
-cognee-remember "short durable fact"
-```
-
-Back to default:
-
-```bash
-unset COGNEE_EMBED_BACKEND   # or export COGNEE_EMBED_BACKEND=fastembed
 bin/cognee-reindex-vectors.sh
+cognee-remember "short durable fact"
 ```
