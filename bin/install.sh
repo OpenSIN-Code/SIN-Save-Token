@@ -94,6 +94,53 @@ HEAL
   say "     (the installer does NOT edit your hook array automatically — see README)"
 fi
 
+# ── agent-grep: structure-augmented search on PATH + PreToolUse nudge ───────
+# agent-grep tags each hit with its enclosing symbol and self-truncates, so the
+# agent rarely needs a follow-up file read. We (1) put it on PATH and (2) register
+# two idempotent PreToolUse hooks: agent-grep-nudge (points broad Grep-tool calls
+# at agent-grep) and cache-cold-warn (flags a >5min prompt-cache gap).
+if [ "$MODE" != "--check" ]; then
+  BIN_DEST="$HOME/.local/bin"
+  mkdir -p "$BIN_DEST"
+  ln -sfn "$REPO_DIR/bin/agent-grep" "$BIN_DEST/agent-grep"
+  say "✅ agent-grep linked -> $BIN_DEST/agent-grep"
+
+  if [ -f "$CC_SETTINGS" ] && command -v python3 >/dev/null 2>&1; then
+    AGN="$REPO_DIR/hooks/agent-grep-nudge.js"
+    CCW="$REPO_DIR/hooks/cache-cold-warn.js"
+    python3 - "$CC_SETTINGS" "$AGN" "$CCW" <<'PY' && say "✅ PreToolUse hooks (agent-grep-nudge, cache-cold-warn) registered"
+import json, sys, os
+settings, agn, ccw = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    d = json.load(open(settings))
+except Exception:
+    sys.exit(0)  # never break the installer on a malformed settings file
+pt = d.setdefault("hooks", {}).setdefault("PreToolUse", [])
+
+def registered(script):
+    return any(script in h.get("command", "")
+               for grp in pt for h in grp.get("hooks", []))
+
+added = False
+# Grep tool → agent-grep nudge
+if not registered("agent-grep-nudge"):
+    pt.append({"matcher": "Grep",
+               "hooks": [{"type": "command", "command": f'node "{agn}"'}]})
+    added = True
+# any tool → cache-cold warn (matcher "*" = every tool call)
+if not registered("cache-cold-warn"):
+    pt.append({"matcher": "*",
+               "hooks": [{"type": "command", "command": f'node "{ccw}"'}]})
+    added = True
+
+if added:
+    tmp = settings + ".tmp"
+    json.dump(d, open(tmp, "w"), indent=2)
+    os.replace(tmp, settings)
+PY
+  fi
+fi
+
 # ── Verify ──────────────────────────────────────────────────────────────────
 if [ -x "$REPO_DIR/bin/verify-tokens" ]; then
   say ""
