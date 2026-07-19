@@ -105,6 +105,13 @@ if [ "$MODE" != "--check" ]; then
   ln -sfn "$REPO_DIR/bin/agent-grep" "$BIN_DEST/agent-grep"
   say "✅ agent-grep linked -> $BIN_DEST/agent-grep"
 
+  # memory-scope (jcode idea ②) + session-digest (idea ③): on PATH, NO hooks.
+  # memory-scope's own --audit gate says selective-retrieval wiring is negative
+  # ROI until the memory corpus is large; session-digest is an on-demand handoff.
+  ln -sfn "$REPO_DIR/bin/memory-scope" "$BIN_DEST/memory-scope"
+  ln -sfn "$REPO_DIR/bin/session-digest" "$BIN_DEST/session-digest"
+  say "✅ memory-scope + session-digest linked -> $BIN_DEST/"
+
   if [ -f "$CC_SETTINGS" ] && command -v python3 >/dev/null 2>&1; then
     AGN="$REPO_DIR/hooks/agent-grep-nudge.js"
     CCW="$REPO_DIR/hooks/cache-cold-warn.js"

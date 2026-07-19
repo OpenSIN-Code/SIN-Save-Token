@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+"""session-digest — distill any harness transcript into a compact resume handoff.
+
+jcode idea ③ (cross-harness session-resume), ported — but built to the slice
+that is ACTUALLY verifiable on this machine.
+
+The dream of ③ is "resume another harness's session with full context, skipping
+the report round-trip." The honest MVP is a *handoff digest*: read a transcript,
+emit a small, deterministic Markdown brief (task, decisions, files touched, open
+threads) that a fresh session — in ANY harness — can be seeded with. That is the
+token-saving core: instead of re-reading a 6 MB JSONL or re-deriving context, the
+next session ingests a ~1–2 KB digest.
+
+Design: a thin per-harness *adapter* normalizes a transcript to a list of
+{role, text, tool, files} events; the digester is harness-agnostic. Today one
+adapter ships — Claude Code JSONL (`~/.claude/projects/<id>/*.jsonl`), the one
+format present and parseable here. opencode/mimo adapters slot in the same way
+once their on-disk message format is confirmed live (it was NOT at build time:
+the local `orca` is the app-runtime, not the delegation CLI, and opencode stored
+no message transcripts under storage/).
+
+Usage:
+  session-digest <transcript.jsonl>          digest a Claude JSONL file
+  session-digest --latest                     digest newest Claude JSONL for cwd
+  session-digest <file> --max-files 20        cap files listed (default 25)
+  session-digest <file> --format claude        force adapter (default: auto)
+
+Output: Markdown to stdout. Never prints message *values* verbatim beyond short
+snippets, so a digest is safe to paste. Exit 0 ok, 2 not found, 1 usage error.
+"""
+import os
+import re
+import sys
+import json
+import glob
+
+
+# --- adapters: normalize a transcript to events -------------------------------
+def _adapter_claude(path):
+    """Claude Code JSONL → list of events. One JSON object per line."""
+    events = []
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            typ = d.get("type")
+            if typ not in ("user", "assistant"):
+                continue
+            msg = d.get("message")
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role", typ)
+            text_parts, tools, files = [], [], []
+            content = msg.get("content")
+            if isinstance(content, str):
+                text_parts.append(content)
+            elif isinstance(content, list):
+                for blk in content:
+                    if not isinstance(blk, dict):
+                        continue
+                    bt = blk.get("type")
+                    if bt == "text":
+                        text_parts.append(blk.get("text", ""))
+                    elif bt == "tool_use":
+                        tname = blk.get("name", "")
+                        tools.append(tname)
+                        inp = blk.get("input", {})
+                        if isinstance(inp, dict):
+                            for key in ("file_path", "path", "notebook_path"):
+                                v = inp.get(key)
+                                if isinstance(v, str) and v:
+                                    files.append(v)
+            # skip meta/sidechain noise
+            if d.get("isSidechain"):
+                continue
+            events.append({
+                "role": role,
+                "text": "\n".join(t for t in text_parts if t).strip(),
+                "tools": tools,
+                "files": files,
+                "compact": bool(d.get("isCompactSummary")),
+            })
+    return events
+
+
+_ADAPTERS = {"claude": _adapter_claude}
+
+
+def _detect(path):
+    """Sniff format. Only Claude JSONL supported today; hook for more."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            first = fh.readline()
+        d = json.loads(first)
+        if isinstance(d, dict) and ("sessionId" in d or "session_id" in d or d.get("type") in (
+                "user", "assistant", "ai-title", "system")):
+            return "claude"
+    except Exception:
+        pass
+    return "claude"  # default; extend when opencode/mimo formats confirmed
+
+
+# --- digest -------------------------------------------------------------------
+_FIRST_SENT = re.compile(r"[^.!?\n]{4,240}[.!?]?")
+
+
+def _first_line(text, n=200):
+    text = text.strip().replace("\n", " ")
+    return (text[:n] + "…") if len(text) > n else text
+
+
+def _latest_claude_transcript():
+    cwd = os.getcwd()
+    # Claude encodes project dir by replacing / with - and prefixing -
+    enc = "-" + cwd.strip("/").replace("/", "-")
+    base = os.path.expanduser(os.path.join("~/.claude/projects", enc))
+    cands = glob.glob(os.path.join(base, "*.jsonl"))
+    if not cands:
+        # fall back to any project
+        cands = glob.glob(os.path.expanduser("~/.claude/projects/*/*.jsonl"))
+    if not cands:
+        return None
+    return max(cands, key=lambda p: os.path.getmtime(p))
+
+
+def _digest(events, max_files=25):
+    user_msgs = [e for e in events if e["role"] == "user" and e["text"] and not e["compact"]]
+    asst_msgs = [e for e in events if e["role"] == "assistant" and e["text"]]
+
+    # task = first substantive user message
+    task = ""
+    for e in user_msgs:
+        t = e["text"]
+        if t.startswith("<") or t.startswith("Caveat"):
+            continue
+        task = _first_line(t, 300)
+        break
+
+    # recent user intents (the request thread)
+    intents = []
+    for e in user_msgs[-8:]:
+        t = e["text"]
+        if t.startswith("<") or t.startswith("Caveat") or t.startswith("[Request"):
+            continue
+        intents.append(_first_line(t, 160))
+
+    # files touched (ordered, unique)
+    seen, files = set(), []
+    for e in events:
+        for f in e["files"]:
+            if f not in seen:
+                seen.add(f)
+                files.append(f)
+
+    # tool usage tally
+    tally = {}
+    for e in events:
+        for tl in e["tools"]:
+            tally[tl] = tally.get(tl, 0) + 1
+
+    # last assistant message = current state / where we left off
+    last_state = ""
+    for e in reversed(asst_msgs):
+        last_state = _first_line(e["text"], 400)
+        if last_state:
+            break
+
+    out = []
+    out.append("# Session resume digest")
+    out.append("")
+    out.append(f"- **turns**: {len(user_msgs)} user / {len(asst_msgs)} assistant")
+    out.append(f"- **files touched**: {len(files)}")
+    if tally:
+        top = ", ".join(f"{k}×{v}" for k, v in sorted(tally.items(), key=lambda x: -x[1])[:6])
+        out.append(f"- **tools**: {top}")
+    out.append("")
+    if task:
+        out.append("## Original task")
+        out.append(task)
+        out.append("")
+    if intents:
+        out.append("## Request thread (recent)")
+        for i in intents:
+            out.append(f"- {i}")
+        out.append("")
+    if files:
+        out.append("## Files touched")
+        for f in files[:max_files]:
+            out.append(f"- `{f}`")
+        if len(files) > max_files:
+            out.append(f"- … +{len(files) - max_files} more")
+        out.append("")
+    if last_state:
+        out.append("## Left off (last assistant turn)")
+        out.append(last_state)
+        out.append("")
+    out.append("_Seed a fresh session with this digest instead of re-reading the full transcript._")
+    return "\n".join(out)
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+
+    max_files = 25
+    if "--max-files" in argv:
+        i = argv.index("--max-files")
+        try:
+            max_files = int(argv[i + 1])
+            del argv[i:i + 2]
+        except (IndexError, ValueError):
+            sys.stderr.write("session-digest: --max-files needs an integer\n")
+            return 1
+
+    fmt = None
+    if "--format" in argv:
+        i = argv.index("--format")
+        try:
+            fmt = argv[i + 1]
+            del argv[i:i + 2]
+        except IndexError:
+            sys.stderr.write("session-digest: --format needs a value\n")
+            return 1
+
+    if "--latest" in argv:
+        path = _latest_claude_transcript()
+        if not path:
+            sys.stderr.write("session-digest: no Claude transcript found for cwd\n")
+            return 2
+    else:
+        paths = [a for a in argv if not a.startswith("-")]
+        if not paths:
+            sys.stderr.write("session-digest: give a transcript path or --latest\n")
+            return 1
+        path = paths[0]
+
+    if not os.path.isfile(path):
+        sys.stderr.write(f"session-digest: not a file: {path}\n")
+        return 2
+
+    fmt = fmt or _detect(path)
+    adapter = _ADAPTERS.get(fmt)
+    if not adapter:
+        sys.stderr.write(f"session-digest: no adapter for format {fmt!r} "
+                         f"(have: {', '.join(_ADAPTERS)})\n")
+        return 1
+
+    events = adapter(path)
+    if not events:
+        sys.stderr.write("session-digest: transcript parsed to 0 events\n")
+        return 2
+
+    print(_digest(events, max_files=max_files))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

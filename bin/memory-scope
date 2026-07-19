@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""memory-scope — rank memory/skill notes against a task, load only what's relevant.
+
+jcode idea ② (semantic memory-retrieval), ported to Claude Code — but RIGHT-SIZED.
+
+The honest version of ②: the always-loaded memory/skill *index* is tiny today
+(~700 tokens). Standing up an embedding model + vector store to shave that would
+COST more than it SAVES — exactly the "cool tech, no ROI" trap sin-save-token
+warns against. So this tool is:
+
+  1. A zero-dependency, zero-API lexical ranker (BM25-lite, stdlib only) that,
+     given a task string, returns the top-k most relevant memory files. This is
+     the retrieval engine — deterministic, cacheable, free.
+  2. An `--audit` gate that MEASURES the always-loaded surface and tells you
+     honestly whether wiring selective retrieval into a hook is worth it YET.
+     Below the threshold it says "load-all is fine"; past it, it says "activate".
+
+That way ② earns its place only when the memory corpus actually grows large
+enough for selective loading to net-save tokens — and never before.
+
+Usage:
+  memory-scope "<task text>"              rank memories for a task, print top-k
+  memory-scope --audit                    report always-loaded surface + verdict
+  memory-scope "<task>" --dir <path>      override memory dir
+  memory-scope "<task>" -k 3              change top-k (default 5)
+
+Env:
+  MEMORY_SCOPE_DIR    memory directory (default: first existing of the candidates)
+  MEMORY_SCOPE_K      default top-k
+  MEMORY_SCOPE_THRESHOLD_TOKENS   audit activation threshold (default 6000)
+
+Exit codes: 0 ok, 2 no memory dir found, 1 usage error.
+"""
+import os
+import re
+import sys
+import math
+import glob
+
+# --- memory dir discovery -----------------------------------------------------
+# The global CLAUDE.md references /root/.claude/projects/-tmp/memory/, but on
+# this workstation memories live at /tmp/memory. Probe a few candidates so the
+# tool works regardless of which harness/host invoked it.
+_CANDIDATES = [
+    os.environ.get("MEMORY_SCOPE_DIR", ""),
+    "/tmp/memory",
+    os.path.expanduser("~/.claude/memory"),
+    "/root/.claude/projects/-tmp/memory",
+    os.path.expanduser("~/.claude/projects/-tmp/memory"),
+]
+
+STOP = set("""a an the of to in on for and or but is are was were be been being with
+as at by from into this that these those it its it's you your i we they he she them
+their our not no do does did has have had will would can could should may might must
+than then so if else when while about above below over under again further once here
+there all any both each few more most other some such only own same too very just".""".split())
+
+TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
+
+
+def _mem_dir():
+    for c in _CANDIDATES:
+        if c and os.path.isdir(c):
+            return c
+    return None
+
+
+def _tokens(text):
+    return [t.lower() for t in TOKEN_RE.findall(text) if t.lower() not in STOP and len(t) > 1]
+
+
+def _read(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def _approx_tokens(s):
+    # ~4 chars/token is the usual English rule of thumb; good enough for a gate.
+    return max(1, round(len(s) / 4))
+
+
+def _docs(mem_dir):
+    """Return [(name, text)] for every *.md except the index itself."""
+    out = []
+    for p in sorted(glob.glob(os.path.join(mem_dir, "*.md"))):
+        name = os.path.basename(p)
+        if name == "MEMORY.md":
+            continue
+        out.append((name, _read(p)))
+    return out
+
+
+def _bm25_rank(query, docs, k):
+    """BM25-lite lexical ranking. Deterministic, stdlib-only.
+
+    Classic BM25 with k1=1.5, b=0.75. Frontmatter `description:` lines are
+    weighted 2x because they're the human-written relevance hint.
+    """
+    k1, b = 1.5, 0.75
+    q_terms = _tokens(query)
+    if not q_terms:
+        return []
+
+    doc_tokens = []
+    dfl = {}  # document frequency
+    for name, text in docs:
+        # boost description line
+        desc = ""
+        m = re.search(r"^description:\s*(.+)$", text, re.MULTILINE)
+        if m:
+            desc = " " + m.group(1) + " " + m.group(1)
+        toks = _tokens(text + desc)
+        doc_tokens.append((name, toks))
+        for t in set(toks):
+            dfl[t] = dfl.get(t, 0) + 1
+
+    N = len(doc_tokens) or 1
+    avgdl = (sum(len(t) for _, t in doc_tokens) / N) or 1.0
+
+    scored = []
+    for name, toks in doc_tokens:
+        if not toks:
+            scored.append((0.0, name))
+            continue
+        tf = {}
+        for t in toks:
+            tf[t] = tf.get(t, 0) + 1
+        dl = len(toks)
+        score = 0.0
+        for qt in q_terms:
+            if qt not in tf:
+                continue
+            df = dfl.get(qt, 0) or 1
+            idf = math.log(1 + (N - df + 0.5) / (df + 0.5))
+            f = tf[qt]
+            score += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * dl / avgdl))
+        scored.append((score, name))
+
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [(n, s) for s, n in scored][:k]
+
+
+def _audit(mem_dir):
+    docs = _docs(mem_dir)
+    index_path = os.path.join(mem_dir, "MEMORY.md")
+    index_tok = _approx_tokens(_read(index_path)) if os.path.exists(index_path) else 0
+    body_tok = sum(_approx_tokens(t) for _, t in docs)
+    # always-loaded surface = the index (bodies are load-on-recall)
+    threshold = int(os.environ.get("MEMORY_SCOPE_THRESHOLD_TOKENS", "6000"))
+
+    print(f"memory dir        : {mem_dir}")
+    print(f"memory files      : {len(docs)}")
+    print(f"index (always)    : ~{index_tok} tok  (MEMORY.md)")
+    print(f"bodies (on recall): ~{body_tok} tok  ({len(docs)} files)")
+    print(f"activation gate   : {threshold} tok always-loaded")
+    print()
+    if index_tok < threshold:
+        print(f"VERDICT: load-all is FINE. Always-loaded surface (~{index_tok} tok) is")
+        print(f"  below the {threshold}-tok gate. Wiring embedding retrieval now would")
+        print(f"  cost more (model+store) than the ~{index_tok} tok it could save — negative ROI.")
+        print(f"  Re-run this audit as the corpus grows; activate the hook past the gate.")
+    else:
+        print(f"VERDICT: ACTIVATE selective retrieval. Always-loaded surface (~{index_tok}")
+        print(f"  tok) exceeds the {threshold}-tok gate. Wire a SessionStart hook that runs")
+        print(f"  `memory-scope \"$TASK\" -k 5` and injects only the top-k instead of the")
+        print(f"  full index. Verify net savings with ccusage before/after.")
+    return 0
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+
+    mem_dir = None
+    # allow --dir override
+    if "--dir" in argv:
+        i = argv.index("--dir")
+        try:
+            mem_dir = argv[i + 1]
+            del argv[i:i + 2]
+        except IndexError:
+            sys.stderr.write("memory-scope: --dir needs a path\n")
+            return 1
+    if mem_dir is None:
+        mem_dir = _mem_dir()
+    if not mem_dir or not os.path.isdir(mem_dir):
+        sys.stderr.write("memory-scope: no memory dir found (set MEMORY_SCOPE_DIR)\n")
+        return 2
+
+    if argv and argv[0] == "--audit":
+        return _audit(mem_dir)
+
+    k = int(os.environ.get("MEMORY_SCOPE_K", "5"))
+    if "-k" in argv:
+        i = argv.index("-k")
+        try:
+            k = int(argv[i + 1])
+            del argv[i:i + 2]
+        except (IndexError, ValueError):
+            sys.stderr.write("memory-scope: -k needs an integer\n")
+            return 1
+
+    query = " ".join(a for a in argv if not a.startswith("-"))
+    if not query.strip():
+        sys.stderr.write("memory-scope: give a task string, or use --audit\n")
+        return 1
+
+    docs = _docs(mem_dir)
+    if not docs:
+        sys.stderr.write(f"memory-scope: no *.md memories in {mem_dir}\n")
+        return 2
+
+    ranked = _bm25_rank(query, docs, k)
+    hits = [(n, s) for n, s in ranked if s > 0]
+    if not hits:
+        print(f"# no lexical match in {len(docs)} memories — load MEMORY.md index as usual")
+        return 0
+
+    print(f"# top-{len(hits)} of {len(docs)} memories for: {query!r}")
+    for name, score in hits:
+        print(f"  {score:5.2f}  {name}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

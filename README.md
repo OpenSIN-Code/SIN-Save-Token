@@ -119,7 +119,9 @@ SIN-Save-Token/
 ├── bin/
 │   ├── install.sh            ← idempotenter Installer + Self-Heal-Hook-Writer
 │   ├── verify-tokens         ← 4-Layer Compliance-Checker (exit 1 bei Regress)
-│   └── agent-grep            ← struktur-augmentierte, selbst-kürzende Code-Suche
+│   ├── agent-grep            ← struktur-augmentierte, selbst-kürzende Code-Suche
+│   ├── memory-scope          ← jcode ② — Memory-Ranking (BM25-lite) + ehrliches ROI-Gate
+│   └── session-digest        ← jcode ③ — Transcript → kompakter Resume-Digest (~99%)
 ├── docs/
 │   └── BEST-PRACTICES.md     ← kanonischer Standard, Konfig pro Runtime, Quellen
 └── templates/
@@ -153,6 +155,53 @@ Knöpfe: `AGENT_GREP_PER_FILE` (8), `AGENT_GREP_TOTAL` (60), `AGENT_GREP_CTX` (1
 Nutzt `rg` wenn vorhanden (respektiert `.gitignore`), sonst POSIX-`grep`.
 
 ---
+
+## `memory-scope` — jcode ②, aber ehrlich gegatet
+
+jcode injiziert pro Task nur die **top-k relevanten** Memories statt des ganzen
+Index. Portiert — mit einem entscheidenden CEO-Unterschied: die immer-geladene
+Fläche ist heute winzig (~115 tok Index). Ein Embedding-Modell + Vektor-Store
+dafür aufzusetzen **kostet mehr als es spart** — genau die „coole Tech ohne ROI",
+vor der dieses Repo warnt. Also:
+
+1. **Ranking-Engine** (deterministisch, stdlib-only, 0 API): BM25-lite über die
+   Memory-Dateien, `description:`-Zeile 2× gewichtet.
+   ```bash
+   memory-scope "resume opencode session in claude" -k 3
+   #   7.07  idea3-cross-harness-session-resume.md
+   #   2.03  idea2-semantic-memory-retrieval.md
+   ```
+2. **ROI-Gate** (`--audit`): misst die immer-geladene Fläche und sagt **ehrlich**,
+   ob sich ein Hook lohnt — unter der Schwelle „load-all is fine", darüber
+   „ACTIVATE".
+   ```bash
+   memory-scope --audit
+   # index (always): ~115 tok → VERDICT: load-all is FINE (negativer ROI)
+   ```
+
+So verdient ② seinen Hook erst, wenn das Memory-Korpus wirklich groß wird — und
+keinen Turn früher. Kein Embedding-Spend auf Verdacht.
+
+---
+
+## `session-digest` — jcode ③, die testbare Scheibe
+
+Cross-harness Session-Resume: statt ein 6-MB-Transcript neu zu lesen, destilliert
+`session-digest` es zu einem **~700-Token-Brief** (Task, Request-Thread, berührte
+Dateien, „wo wir aufgehört haben"), mit dem eine frische Session geseedet wird.
+
+```bash
+session-digest --latest
+# 6.1 MB / ~1M tok Transcript  →  686 tok Digest  =  99.9% Reduktion
+```
+
+Architektur: dünne **Adapter** normalisieren ein Transcript zu Events; der
+Digester ist harness-agnostisch. Heute liefert **ein** Adapter aus — Claude Code
+JSONL (`~/.claude/projects/<id>/*.jsonl`), das einzige hier live vorhandene &
+parsebare Format. opencode/mimo-Adapter docken gleich an, sobald deren On-Disk-
+Message-Format bestätigt ist (war es beim Bau **nicht** — der lokale `orca` ist
+die App-Runtime, nicht die Delegations-CLI, und opencode legte keine Message-
+Transcripts ab). Bewusst kein Hook: Resume ist ein On-Demand-Handoff.
 
 ---
 
