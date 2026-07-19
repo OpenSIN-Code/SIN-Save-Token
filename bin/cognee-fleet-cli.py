@@ -131,26 +131,33 @@ def _multipart_file(content: bytes, filename: str, dataset: str) -> tuple[bytes,
 
 
 def cmd_remember(ns: argparse.Namespace) -> int:
-    # Cognify uses Boundless Terra — refuse unless explicitly allowed.
-    if os.environ.get("COGNEE_ALLOW_COSTLY", "").strip() not in ("1", "true", "yes"):
-        print(
-            "REFUSED: remember/cognify spends BoundlessAPI credit (gpt-5.6-terra).\n"
-            "  export COGNEE_ALLOW_COSTLY=1   # only when you mean it\n"
-            "Everyday use: cognee-recall (read path). Prefer not re-cognify whole docs.",
-            file=sys.stderr,
-        )
-        return 2
+    """Write path — uses Boundless Terra for cognify (real money).
+
+    Soft cost notice (does not block agents). Hard caps:
+      - refuse files larger than 50k unless COGNEE_ALLOW_COSTLY=1
+      - bulk script still requires COGNEE_ALLOW_COSTLY=1
+    """
     if not _api_key():
         print("error: no COGNEE_API_KEY", file=sys.stderr)
         return 1
+    costly = os.environ.get("COGNEE_ALLOW_COSTLY", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
     if ns.file:
         path = Path(ns.file)
         content = path.read_bytes()
-        # soft cap
-        if len(content) > 200_000:
-            content = content[:200_000]
+        hard_cap = 200_000 if costly else 50_000
+        if len(content) > hard_cap:
+            print(
+                f"REFUSED: file {len(content)} bytes > {hard_cap}. "
+                "For large re-ingest set COGNEE_ALLOW_COSTLY=1 "
+                "(Boundless Terra cognify is paid).",
+                file=sys.stderr,
+            )
+            return 2
         filename = path.name
-        # prefix provenance as text
         prefix = f"# Source: {path}\n\n".encode()
         content = prefix + content
     else:
@@ -160,6 +167,13 @@ def cmd_remember(ns: argparse.Namespace) -> int:
             return 1
         content = text.encode()
         filename = "note.txt"
+    if not costly and not os.environ.get("COGNEE_QUIET_COST", ""):
+        print(
+            "note: remember/cognify uses Boundless gpt-5.6-terra (paid). "
+            "Prefer short durable notes, not whole READMEs. "
+            "COGNEE_QUIET_COST=1 to silence.",
+            file=sys.stderr,
+        )
     body, boundary = _multipart_file(content, filename, ns.dataset or _dataset())
     code, resp = _req(
         "POST",

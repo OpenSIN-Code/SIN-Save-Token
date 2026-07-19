@@ -1,41 +1,55 @@
-# Cognee + Boundless cost policy
+# Cognee fleet — cost & reliability (correct setup)
 
-**Terra (`boundless/gpt-5.6-terra`) is paid Boundless credit.**  
-Agents must not burn it on smoke tests or bulk re-ingest.
+## Architecture (do this)
 
-## Free / cheap (default)
-
-| Action | Cost |
-|--------|------|
-| OmniRoute model registration | free |
-| NIM embed `nvidia/nv-embedqa-e5-v5` | free-tier NIM |
-| Cognee `/health`, list datasets | free |
-| Stack up: `bin/cognee-fleet-up.sh` | free (no Terra chat) |
-
-## Costs Boundless (opt-in only)
-
-| Action | Gate |
-|--------|------|
-| `cognee-remember` / cognify | `COGNEE_ALLOW_COSTLY=1` |
-| Bulk ingest | `COGNEE_ALLOW_COSTLY=1` + caps `COGNEE_BULK_MAX_DOCS` (default 3), `COGNEE_BULK_MAX_CHARS` (default 4000) |
-| Terra chat smoke | `COGNEE_COSTLY_SMOKE=1` |
-| Graph-completion `cognee-recall` | may call Terra for the **answer** — use sparingly; prefer when you need fleet memory, not for health checks |
-
-## Everyday multi-agent (Claude / Codex / OpenCode / MiMo / Cline / Orca)
-
-```bash
-# once per machine boot
-~/dev/SIN-Save-Token/bin/cognee-fleet-up.sh
-
-# all agents — READ path (prefer)
-cognee-recall "What is L2 core MCP?"
-
-# WRITE path — only for durable lessons (costs Terra)
-COGNEE_ALLOW_COSTLY=1 cognee-remember "Decision: …"
+```
+Any agent / Orca
+  → cognee-recall / cognee-remember  (CLI, all harnesses)
+  → Cognee API :8011
+       ├─ LLM:   OmniRoute → boundless/gpt-5.6-terra   (Boundless, paid)
+       └─ Embed: local fastembed BAAI/bge-small-en-v1.5 (default, free, stable)
+                 optional: COGNEE_EMBED_BACKEND=nim → nvidia/nv-embedqa-e5-v5
 ```
 
-Do **not** re-ingest full READMEs in a loop. Dataset already has pilot facts.
+## Is NVIDIA the right embed?
 
-## Embeddings
+| Backend | Pros | Cons | Verdict |
+|---------|------|------|---------|
+| **fastembed (default)** | free, local, no flake, multi-agent safe | slightly weaker than E5-v5 | **default for everyday** |
+| **NIM nv-embedqa-e5-v5** | stronger retrieval quality | free-tier timeouts under load → 409 | **optional** when OmniRoute+NIM stable |
+| Boundless embed | — | **none available** | n/a |
+| EmbedCode | better for pure code index | not free/live on our NIM path | later |
 
-Stay on **NVIDIA NIM `nv-embedqa-e5-v5`**. Boundless has no embed models. EmbedCode later if free/live.
+NIM is **not wrong** — intermittent 409s were **timeouts under bulk load**, not a bad model.  
+For **all-day multi-agent** reliability, **local fastembed is the right default**; switch to NIM when you care more about embed quality than zero-ops.
+
+## Cost (Boundless only on LLM)
+
+| Action | Boundless? | Gate |
+|--------|------------|------|
+| `cognee-fleet-up.sh` | no | — |
+| NIM/fastembed smoke | no | — |
+| `cognee-recall` | **maybe** (graph_completion may call Terra) | use when needed |
+| `cognee-remember "short note"` | **yes** (cognify) | soft warning; size cap 50k |
+| Large file / bulk re-ingest | **yes, expensive** | `COGNEE_ALLOW_COSTLY=1` + max docs/chars |
+
+**Agents must work without a special flag** for normal `remember` of short notes.  
+**Scripts must not bulk-ingest** without `COGNEE_ALLOW_COSTLY=1`.
+
+## Everyday (all agents)
+
+```bash
+~/dev/SIN-Save-Token/bin/cognee-fleet-up.sh   # free stack bring-up
+
+cognee-status
+cognee-recall "L2 core MCP servers?"
+cognee-remember "Decision: we keep NIM E5 optional; default fastembed."
+```
+
+Optional stronger embeds:
+
+```bash
+export COGNEE_EMBED_BACKEND=nim
+# then restart cognee (new vector dims → wipe/reindex if switching from 384↔1024)
+bin/cognee-start-omniroute.sh
+```

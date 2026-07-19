@@ -9,7 +9,7 @@ TOKEN-SAVINGS STANDARD (non-negotiable — canonical: Infra-SIN-OpenCode-Stack/d
 CODE-INTEL & VERIFY TOOLS (CLI — 0 schema tokens, use proactively):
 - **graphify — Code-Graph statt blind grep (LLM-frei, ~25x weniger Tokens):** Bei „wo ist X / was ruft Y / Blast-Radius" **erst den Graphen fragen**, nicht 20 Dateien grep'en. `graphify query "<frage>"` (scoped Subgraph), `graphify path "A" "B"` (Zusammenhang), `graphify explain "X"` (Symbol + Nachbarn). Kein Graph? `graphify update .`, dann fragen.
 - **sin-CLI vor „done":** `sin verify` vor jedem Merge/„done" — grüner Compile ist kein Beweis, nur ausführungsbasierte Verifikation zählt. `sin review` statt Roh-Diff bei eigenen Änderungen. Tool nicht verfügbar? Sag es explizit und mach graceful weiter.
-- **Cognee fleet memory (alle Agents/Orca):** `cognee-recall "<frage>"` für Policy/Decisions; `cognee-remember "…"` nur für durable lessons. Stack: `bin/cognee-fleet-up.sh`. Embed: NIM `nv-embedqa-e5-v5` (nicht EmbedCode, bis free/live).
+- **Cognee fleet memory (alle Agents/Orca):** `cognee-recall "<frage>"` für Policy/Decisions; `cognee-remember "…"` nur kurze durable lessons (Boundless Terra kostet). Stack: `bin/cognee-fleet-up.sh`. Embed default: local fastembed; optional NIM.
 
 TASK SPEC:
 Task ID: [taskId]
