@@ -17,8 +17,31 @@ claude plugin marketplace add topoteretes/cognee-integrations
 claude plugin install cognee-memory@cognee --scope user
 ```
 
-Config: `~/.cognee-plugin/claude-code/config.json` → dataset `sin-fleet`  
-Launch: `export LLM_API_KEY="${LLM_API_KEY:-$OPENAI_API_KEY}" COGNEE_PLUGIN_DATASET=sin-fleet && claude`
+Config: `~/.cognee-plugin/claude-code/config.json` → dataset `sin-fleet`
+
+### OmniRoute LLM + NIM embeddings (recommended)
+
+See **[cognee-omniroute-results.md](./cognee-omniroute-results.md)** for measured results.
+
+```bash
+# 1) OmniRoute up + Boundless terra models
+bin/omniroute-ensure-boundless-terra.sh
+
+# 2) Cognee with Terra (LLM) + nvidia/nv-embedqa-e5-v5 (embed)
+source bin/cognee-omniroute-env.sh
+bin/cognee-start-omniroute.sh
+
+# 3) Claude plugin session (same shell env)
+export COGNEE_PLUGIN_DATASET=sin-fleet
+claude   # expect: Cognee Memory Connected
+```
+
+| Role | Model via OmniRoute |
+|------|---------------------|
+| Cognify / recall LLM | `boundless/gpt-5.6-terra` → BoundlessAPI |
+| Embeddings | `nvidia/nv-embedqa-e5-v5` → NVIDIA NIM (1024-d) |
+
+Legacy (no OmniRoute): `export LLM_API_KEY=… COGNEE_PLUGIN_DATASET=sin-fleet && claude`
 
 ## First session checklist
 
