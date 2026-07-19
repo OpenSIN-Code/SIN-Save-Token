@@ -145,6 +145,29 @@ Vollständiger Ownership-/Install-Vertrag: [docs/ECOSYSTEM.md](docs/ECOSYSTEM.md
 
 ---
 
+## Diagramm-Standard: Archify ist PFLICHT (kein Mermaid)
+
+Teil des **L4 Output**-Standards: Diagramme sind Kommunikations-Artefakte, keine
+Code-Blöcke. Jeder Agent der Flotte erzeugt Architektur-/Workflow-/Sequence-/
+Data-Flow-/Lifecycle-Diagramme **ausschließlich über den `archify`-Skill**
+(`tt-a1i/archify`), nie über Mermaid, PlantUML, ASCII-Art oder handgemachtes SVG.
+
+- **Kanonische Regel:** `wow-my-zsh/shared/AGENTS.md` → Abschnitt *Diagrams are
+  MANDATORY via Archify (never Mermaid)*. Diese Datei ist die einzige Quelle der
+  Wahrheit; alle Agent-Adapter importieren/symlinken sie.
+- **Install (einmalig, fleet-weit):** `npx skills add tt-a1i/archify -g`
+- **Deliverable:** self-contained HTML (Dark/Light-Toggle, PNG/JPEG/WebP/SVG-Export).
+  Mermaid-Source-Blöcke in Chat/Docs sind **verboten** — für inline-Vektor in READMEs
+  Archify-SVG exportieren, nicht Mermaid.
+- **Blocker-Verhalten:** fehlt `archify` im Runtime, wird das explizit gemeldet und
+  gracefully fall-backt — **nie** still Mermaid substituieren.
+
+Archify senkt gleichzeitig Token-Kosten (eine HTML-Datei statt mehrseitiger
+Mermaid-Round-Trips) und hebt die Diagrammqualität — ein echter L4-Gewinn, kein
+Trade-off gegen „nicht dümmer werden".
+
+---
+
 ## Repo-Layout
 
 ```
