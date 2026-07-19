@@ -70,3 +70,16 @@ Epic: https://github.com/OpenSIN-Code/SIN-Save-Token/issues/1
 | #9 | P1 L3 role map |
 
 wow epic: https://github.com/OpenSIN-Code/wow-my-zsh/issues/2
+
+## Status (2026-07-19 closeout)
+
+| Phase | Status |
+|-------|--------|
+| A Honest gates (#2 L2 source, #3 budget, #4 rtk) | **Done** |
+| B MCP hygiene (portable paths, doctor health) | **Done** |
+| C Cognee pilot (plugin + OmniRoute Terra + NIM E5) | **Done — promote hybrid** |
+| D Docs / role map / scaffolds | **Done** |
+| Fleet OCI verify (#8) | **Backlog** (primary Mac green only) |
+| Bulk multi-doc cognify under NIM free | **Known flake** — sequential retry |
+
+NVIDIA embeddings stay on `nv-embedqa-e5-v5` (best free/live). EmbedCode later if endpoint 200.
