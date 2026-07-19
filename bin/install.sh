@@ -34,14 +34,19 @@ else
   say "✅ L1 rtk present ($(rtk --version 2>/dev/null | head -1))"
 fi
 
-# ── Claude Code: rtk PreToolUse hook + lean settings ────────────────────────
+# ── Claude Code: official rtk PreToolUse hook + lean settings ───────────────
+# Prefer the official `rtk hook claude` registration so `rtk gain` stays quiet.
+# SST also ships hooks/rtk-auto-rewrite.js as a compatible dual path (issue #4).
 CC_SETTINGS="$HOME/.claude/settings.json"
 if [ -f "$CC_SETTINGS" ] && command -v rtk >/dev/null 2>&1; then
   if [ "$MODE" != "--check" ]; then
-    # rtk init is idempotent — it will not double-add its hook.
-    rtk init --claude >/dev/null 2>&1 || rtk init >/dev/null 2>&1 || true
+    # -g --auto-patch: register official PreToolUse hook without prompting.
+    rtk init -g --auto-patch >/dev/null 2>&1 \
+      || rtk init -g --hook-only --auto-patch >/dev/null 2>&1 \
+      || rtk init >/dev/null 2>&1 \
+      || true
   fi
-  say "✅ Claude Code rtk hook ensured"
+  say "✅ Claude Code rtk hook ensured (rtk init -g --auto-patch)"
 fi
 
 # ── opencode: rtk plugin (auto-loaded from plugins/) ────────────────────────

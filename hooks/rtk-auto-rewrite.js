@@ -26,6 +26,8 @@
 //   * Any parse error / unexpected shape → exit 0 (allow unchanged). Never block.
 
 const { execFileSync } = require('child_process');
+const path = require('path');
+const { tokenize } = require(path.join(__dirname, 'lib', 'git-cmd.js'));
 
 let input = '';
 const stdinTimeout = setTimeout(() => process.exit(0), 3000);
@@ -60,41 +62,39 @@ process.stdin.on('end', () => {
 
     // Conservative bail-out: any shell control/metacharacter means we do NOT
     // attempt a rewrite. Covers &&, ||, single |, ;, &, subshells, command
-    // substitution, redirects, backgrounding, multi-line, env-var prefixes
-    // that are followed by operators, etc. A missed rewrite is acceptable;
-    // corrupting a compound command is not.
-    //   Note: `=` catches leading env-var assignments like `FOO=1 cargo build`
-    //   (the first token there isn't on the allowlist anyway, but being explicit
-    //   keeps `KEY=val cmd` forms out of the rewrite path entirely).
+    // substitution, redirects, backgrounding, multi-line. A missed rewrite is
+    // acceptable; corrupting a compound command is not.
     if (/[&|;`\n<>()]|\$\(/.test(trimmed)) process.exit(0);
 
-    // First token (the program being invoked).
-    const firstToken = trimmed.split(/\s+/)[0];
-
-    // A leading env-var assignment (FOO=bar) is not an allowlisted program.
-    if (firstToken.includes('=')) process.exit(0);
-
-    if (!ALLOW.has(firstToken)) process.exit(0);
+    // Resolve the real program via git-cmd.tokenize: skip leading ENV=val
+    // assignments and accept full paths (/usr/bin/git → git).
+    const tokens = tokenize(trimmed);
+    let i = 0;
+    while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
+    if (i >= tokens.length) process.exit(0);
+    const progToken = tokens[i];
+    const prog = path.basename(progToken);
+    if (!ALLOW.has(prog)) process.exit(0);
 
     // Guard: rtk must be resolvable on PATH, else pass through unchanged.
-    // `command -v` is a POSIX shell builtin, so invoke it via /bin/sh.
     try {
       execFileSync('/bin/sh', ['-c', 'command -v rtk'], { stdio: 'ignore' });
     } catch {
       process.exit(0);
     }
 
-    // Safe to rewrite: prepend `rtk ` to the (trimmed) command.
-    // updatedInput must contain the COMPLETE tool_input object, so we spread
-    // the original and override only `command`.
+    // Insert `rtk` after any leading env assignments so
+    // `FOO=1 cargo build` → `FOO=1 rtk cargo build` (valid shell).
+    const rewritten = [...tokens.slice(0, i), 'rtk', ...tokens.slice(i)].join(' ');
+
     const output = {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'allow',
-        permissionDecisionReason: `rtk-auto-rewrite: prepended rtk to \`${firstToken}\` for token savings`,
+        permissionDecisionReason: `rtk-auto-rewrite: inserted rtk before \`${prog}\` for token savings`,
         updatedInput: {
           ...toolInput,
-          command: `rtk ${trimmed}`,
+          command: rewritten,
         },
       },
     };

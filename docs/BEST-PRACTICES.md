@@ -120,6 +120,25 @@ A runtime is **compliant** when all four checks pass:
 10. Add to session-start protocol (understand-anything already runs every session) — surface non-compliance as a warning.
 11. Baseline + measure: record `rtk gain` + `/context` numbers weekly; treat percentages as directional, verify against own ledger.
 
+
+## 3.1 L3 role map (one backend per concern)
+
+Do **not** stack four overlapping brains. Use each tool for its job:
+
+| Backend | Role | Always-on? |
+|---------|------|------------|
+| **graphify** | Code structure graph (symbols, calls, blast radius) — **0 LLM tokens** | CLI on demand |
+| **claude-mem** | Session observation stream — what happened in chats | Yes (shared worker+DB) |
+| **cognee** (pilot) | Domain knowledge graph — remember/recall across sessions | Plugin inject; not always-on MCP |
+| **session-digest / dream** | Resume briefs + promote durable lessons into memory | CLI on demand |
+| **simone** | Code AST/LSP + hybrid memory (Qdrant+Neo4j) | optional MCP; fix or demote if down |
+
+**Rules:**
+1. Prefer graphify before broad grep for structural questions.
+2. Prefer claude-mem / cognee recall before re-reading transcripts.
+3. Do not add a new memory MCP without a measured ROI gate (`memory-scope --audit` pattern).
+4. Cognee stays opt-in until pilot metrics land (see `.planning/PLAN-cognee-L3.md`).
+
 ### Phase 4 — Evaluate frontier additions (backlog, measure before adopting)
 - **context-mode** (BM25 retrieval on compaction, ~98% context-bloat reduction claimed) — complements rtk (rtk=CLI, context-mode=MCP output). Pilot in one runtime.
 - **Headroom** (AST-aware CodeCompressor, reversible, 60–95% claimed) — overlaps our Grasp/SCKG; only adopt if it beats them on our own benchmark.

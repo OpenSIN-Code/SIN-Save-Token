@@ -99,22 +99,60 @@ else
   warn ".claudeignore missing — add one to block node_modules/*.log/graphs (BEST-PRACTICES §7)"
 fi
 
-# ── Global L1: rtk present + hook installed ──────────────────────────
+# ── Global L1: rtk present + transparent rewrite path ────────────────
+# Two valid paths (issue #4):
+#   A) Official: `rtk init -g` → settings hook runs `rtk hook claude` (rtk gain quiet)
+#   B) SST:      PreToolUse → hooks/rtk-auto-rewrite.js (rtk gain may still warn)
+# Either is COMPLIANT. Prefer A when both can coexist (idempotent rewrite).
 say "\n[L1] rtk shell layer"
 if command -v rtk >/dev/null 2>&1; then
   pass "rtk on PATH ($(rtk --version 2>/dev/null | head -1))"
-  # transparent hook: rtk gain must NOT warn "No hook installed"
-  if rtk gain 2>&1 | grep -qi "No hook installed"; then
-    fail "rtk gain reports NO hook installed — run: rtk init -g --hook-only --auto-patch"
-  else
-    pass "rtk hook active (no 'No hook installed' warning)"
+  SST_RTK_HOOK=0
+  OFFICIAL_RTK_HOOK=0
+  if [ -f "$CLAUDE_SETTINGS" ]; then
+    eval "$(python3 - "$CLAUDE_SETTINGS" <<'RTK_HOOK_PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print("SST_RTK_HOOK=0"); print("OFFICIAL_RTK_HOOK=0"); raise SystemExit
+pre = d.get("hooks", {}).get("PreToolUse", [])
+cmds = [x.get("command", "") for h in pre for x in h.get("hooks", [])]
+sst = any("rtk-auto-rewrite" in c for c in cmds)
+# official: `rtk hook` / rtk-rewrite / rtk init path
+off = any(
+    ("rtk hook" in c) or ("rtk-rewrite" in c) or c.strip().endswith("rtk hook claude")
+    or ("/rtk " in c and "hook" in c)
+    for c in cmds
+)
+# also: bare command starts with rtk and is not our node rewrite
+off = off or any(c.strip().startswith("rtk ") and "auto-rewrite" not in c for c in cmds)
+print(f"SST_RTK_HOOK={1 if sst else 0}")
+print(f"OFFICIAL_RTK_HOOK={1 if off else 0}")
+RTK_HOOK_PY
+)"
   fi
-  # self-test the rewrite (rtk rewrite exits non-zero as its "was-rewritten" signal;
-  # check the OUTPUT, not the exit code — pipefail would otherwise mask a real match)
+  if [ "${OFFICIAL_RTK_HOOK:-0}" -eq 1 ]; then
+    pass "official rtk PreToolUse hook present (rtk gain path)"
+  fi
+  if [ "${SST_RTK_HOOK:-0}" -eq 1 ]; then
+    pass "SST rtk-auto-rewrite PreToolUse hook present"
+  fi
+  if [ "${OFFICIAL_RTK_HOOK:-0}" -eq 0 ] && [ "${SST_RTK_HOOK:-0}" -eq 0 ]; then
+    fail "no rtk rewrite hook in PreToolUse — run: rtk init -g --auto-patch  OR  bin/install.sh"
+  elif rtk gain 2>&1 | grep -qi "No hook installed"; then
+    if [ "${SST_RTK_HOOK:-0}" -eq 1 ]; then
+      warn "rtk gain says 'No hook' but SST rtk-auto-rewrite is active — OK (issue #4 dual path)"
+    else
+      fail "rtk gain reports NO hook installed — run: rtk init -g --auto-patch"
+    fi
+  else
+    pass "rtk gain sees official hook (no 'No hook installed' warning)"
+  fi
+  # self-test the rewrite CLI (not the Claude hook)
   RW="$(rtk rewrite "git status" 2>&1 || true)"
-  # Ignore macOS "Abort trap" on some rtk versions; check what we got
-  RW="${RW%%Abort*}"  # strip abort output if present
-  RW="$(echo "$RW" | head -1)"  # take first line only
+  RW="${RW%%Abort*}"
+  RW="$(echo "$RW" | head -1)"
   if [ "$RW" = "rtk git status" ]; then
     pass "rtk rewrite works (git status → rtk git status)"
   else

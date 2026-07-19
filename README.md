@@ -141,6 +141,8 @@ Dieses Repo installiert diese Tools **nicht** — es setzt sie voraus und verwei
 Zusammen: wow-my-zsh richtet die Werkzeuge ein, SIN-Save-Token hält ihren
 Verbrauch schlank.
 
+Vollständiger Ownership-/Install-Vertrag: [docs/ECOSYSTEM.md](docs/ECOSYSTEM.md).
+
 ---
 
 ## Repo-Layout
