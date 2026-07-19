@@ -129,7 +129,7 @@ Do **not** stack four overlapping brains. Use each tool for its job:
 |---------|------|------------|
 | **graphify** | Code structure graph (symbols, calls, blast radius) — **0 LLM tokens** | CLI on demand |
 | **claude-mem** | Session observation stream — what happened in chats | Yes (shared worker+DB) |
-| **cognee** (pilot) | Domain knowledge graph — remember/recall across sessions | Plugin inject; not always-on MCP |
+| **cognee fleet** | Domain knowledge graph — multi-agent CLI (`cognee-recall` / `remember`) | HTTP :8011; embed Gemini+local fallback; **not** always-on MCP |
 | **session-digest / dream** | Resume briefs + promote durable lessons into memory | CLI on demand |
 | **simone** | Code AST/LSP + hybrid memory (Qdrant+Neo4j) | optional MCP; fix or demote if down |
 
@@ -137,7 +137,7 @@ Do **not** stack four overlapping brains. Use each tool for its job:
 1. Prefer graphify before broad grep for structural questions.
 2. Prefer claude-mem / cognee recall before re-reading transcripts.
 3. Do not add a new memory MCP without a measured ROI gate (`memory-scope --audit` pattern).
-4. Cognee stays opt-in until pilot metrics land (see `.planning/PLAN-cognee-L3.md`).
+4. Cognee fleet is hybrid production path: CLI for all agents; short `remember` free of flags; bulk needs `COGNEE_ALLOW_COSTLY=1`. See `docs/COGNEE-COST-POLICY.md` + README.
 
 ### Phase 4 — Evaluate frontier additions (backlog, measure before adopting)
 - **context-mode** (BM25 retrieval on compaction, ~98% context-bloat reduction claimed) — complements rtk (rtk=CLI, context-mode=MCP output). Pilot in one runtime.

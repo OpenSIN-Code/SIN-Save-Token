@@ -36,7 +36,7 @@ Prüfen:
 |---|---|---|---|
 | **L1 Shell** | `rtk` komprimiert Shell-Output transparent | Claude Code PreToolUse-Hook, opencode-Plugin, Codex RTK.md | ~80% auf git/test/build/package-Output |
 | **L2 Tools** | Schlanke MCP-Oberfläche | Nur gebrauchte MCP-Server; **kein** aggressives Tool-Search-Deferral | vermeidet 10–60k Tokens/Turn Schema-Bloat |
-| **L3 Memory** | Geteiltes Gedächtnis | 1 claude-mem Worker + 1 DB für alle Runtimes | kein Doppel-Spend |
+| **L3 Memory** | Geteiltes Gedächtnis | claude-mem (Session) + **Cognee fleet** (Domain-Graph, multi-agent CLI) | kein Doppel-Spend |
 | **L4 Output** | Knappe Antworten | terse-Kontrakt in jeder Instruktionsdatei | Output-Tokens sind die teuersten |
 
 **Layer-übergreifende Hebel (Session 3 & 4, alles gated/mandatory):**
@@ -196,6 +196,64 @@ Zwei Dinge über rohem grep:
 
 Knöpfe: `AGENT_GREP_PER_FILE` (8), `AGENT_GREP_TOTAL` (60), `AGENT_GREP_CTX` (160).
 Nutzt `rg` wenn vorhanden (respektiert `.gitignore`), sonst POSIX-`grep`.
+
+---
+
+## Cognee fleet memory (L3 domain graph)
+
+Multi-agent shared graph for Claude / Codex / OpenCode / MiMo / Cline / Orca.
+**Not** always-on MCP (0 schema tax) — HTTP API + CLI only.
+
+```
+Agents → cognee-recall / cognee-remember
+       → Cognee :8011
+            ├─ LLM:  OmniRoute → Boundless gpt-5.6-terra   (paid cognify)
+            └─ Embed: proxy :8012
+                   ├─ primary: Gemini gemini-embedding-001 @ 1024 (free tier)
+                   └─ fallback: local mxbai-embed-large @ 1024 (rate limit / errors)
+```
+
+### Bring-up
+
+```bash
+# once: Gemini key (chmod 600, never commit / never paste into chat)
+umask 077
+mkdir -p ~/.cognee-plugin/secrets
+cat > ~/.cognee-plugin/secrets/gemini_api_key   # paste key, Ctrl-D
+chmod 600 ~/.cognee-plugin/secrets/gemini_api_key
+
+# stack (OmniRoute must already be on :20128)
+./bin/cognee-fleet-up.sh
+```
+
+### Everyday (any agent)
+
+```bash
+cognee-status
+curl -s http://127.0.0.1:8012/health    # gemini_ok / fallback_ok
+cognee-recall "What is L2 core MCP?"
+cognee-remember "short durable decision"   # uses Boundless Terra for cognify
+```
+
+### Cost & ops
+
+| Path | Cost |
+|------|------|
+| Embed (Gemini free tier) | $0, rate-limited → auto local |
+| Local mxbai fallback | $0 unlimited |
+| `remember` / cognify | **Boundless credit** — short notes only |
+| Bulk re-ingest | `COGNEE_ALLOW_COSTLY=1` required |
+
+Full policy, backends, reindex: **[docs/COGNEE-COST-POLICY.md](docs/COGNEE-COST-POLICY.md)**.
+
+```bash
+# pure local embeds
+export COGNEE_EMBED_BACKEND=fastembed
+./bin/cognee-start-omniroute.sh
+
+# after switching embed model/dims
+./bin/cognee-reindex-vectors.sh
+```
 
 ---
 

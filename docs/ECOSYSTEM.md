@@ -38,7 +38,7 @@ Re-run either installer anytime; both are idempotent.
 | MCP server list | wow `shared/mcp/servers.json` | Merged into real agent configs |
 | L2 budget / always-on policy | **TBD joint** (issue: L2 budget) | wow registry tags + SST `verify-tokens` |
 | L1 rtk behavior | SST hooks + `rtk` binary | Claude PreToolUse, opencode plugin, Codex RTK.md |
-| L3 memory backends | SST policy; backends external (claude-mem, optional cognee) | All runtimes |
+| L3 memory backends | SST: claude-mem (session) + Cognee fleet CLI (domain graph) | All runtimes |
 | agent-grep binary | SST `bin/agent-grep` | wow doctor PATH check; house rules |
 
 ## Health commands
@@ -82,7 +82,10 @@ Core allowlist (current): `context7`, `serena`, `tavily`.
 ```
 code structure     graphify (CLI, 0 LLM)
 session observations  claude-mem (shared DB)
-domain graph memory   cognee (pilot — see .planning/PLAN-cognee-L3.md)
+domain graph memory   Cognee fleet (CLI HTTP :8011)
+                        embed: Gemini free → mxbai local fallback (:8012)
+                        LLM cognify: OmniRoute → Boundless terra
+                      see docs/COGNEE-COST-POLICY.md + README "Cognee fleet"
 code AST/LSP          simone (fix health)
 resume / lessons      session-digest, dream (SST CLIs)
 ```
