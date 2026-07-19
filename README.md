@@ -166,6 +166,14 @@ Archify senkt gleichzeitig Token-Kosten (eine HTML-Datei statt mehrseitiger
 Mermaid-Round-Trips) und hebt die Diagrammqualität — ein echter L4-Gewinn, kein
 Trade-off gegen „nicht dümmer werden".
 
+### Beispiel — wow-my-zsh Architektur (mit Archify erzeugt)
+
+![wow-my-zsh architecture](https://raw.githubusercontent.com/OpenSIN-Code/wow-my-zsh/main/docs/wow-my-zsh-architecture-dark.png)
+
+> Quell-IR + gerendertes HTML im wow-my-zsh-Repo:
+> [`docs/wow-my-zsh-architecture.html`](https://github.com/OpenSIN-Code/wow-my-zsh/blob/main/docs/wow-my-zsh-architecture.html)
+> (Dark/Light-Toggle, Export PNG/JPEG/WebP/SVG — `T` zum Umschalten, `E` zum Export).
+
 ---
 
 ## Repo-Layout
