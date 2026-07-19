@@ -191,17 +191,26 @@ Cross-harness Session-Resume: statt ein 6-MB-Transcript neu zu lesen, destillier
 Dateien, „wo wir aufgehört haben"), mit dem eine frische Session geseedet wird.
 
 ```bash
-session-digest --latest
+session-digest --latest                    # Claude: neueste JSONL für cwd
 # 6.1 MB / ~1M tok Transcript  →  686 tok Digest  =  99.9% Reduktion
+
+session-digest ses_09d50c0e4ffe…           # opencode: Session per id
+session-digest --latest --format opencode  # opencode: neueste Session für cwd
+# 23/36-Turn-Session  →  375 tok Digest
 ```
 
 Architektur: dünne **Adapter** normalisieren ein Transcript zu Events; der
-Digester ist harness-agnostisch. Heute liefert **ein** Adapter aus — Claude Code
-JSONL (`~/.claude/projects/<id>/*.jsonl`), das einzige hier live vorhandene &
-parsebare Format. opencode/mimo-Adapter docken gleich an, sobald deren On-Disk-
-Message-Format bestätigt ist (war es beim Bau **nicht** — der lokale `orca` ist
-die App-Runtime, nicht die Delegations-CLI, und opencode legte keine Message-
-Transcripts ab). Bewusst kein Hook: Resume ist ein On-Demand-Handoff.
+Digester ist harness-agnostisch. **Zwei Adapter liefern aus:**
+- **Claude Code JSONL** (`~/.claude/projects/<id>/*.jsonl`).
+- **opencode** — Transcripts liegen in SQLite (`~/.local/share/opencode/opencode.db`),
+  nicht als JSON-Files: eine `message`-Zeile (role) + N `part`-Zeilen (text/tool);
+  Tool-Dateipfade in `part.data.state.input.filePath`. Der Adapter setzt Text +
+  Tools pro Message aus den Parts zusammen.
+
+Damit ist echtes Cross-Harness-Resume live: einen `orca`-Sub (opencode/mimo)
+laufen lassen → dessen opencode-Session digesten → Claude damit seeden, ohne
+Report-Round-Trip. Ein mimo-Adapter dockt gleich an, sobald dessen Format
+bestätigt ist. Bewusst kein Hook: Resume ist ein On-Demand-Handoff.
 
 ---
 

@@ -12,16 +12,16 @@ token-saving core: instead of re-reading a 6 MB JSONL or re-deriving context, th
 next session ingests a ~1–2 KB digest.
 
 Design: a thin per-harness *adapter* normalizes a transcript to a list of
-{role, text, tool, files} events; the digester is harness-agnostic. Today one
-adapter ships — Claude Code JSONL (`~/.claude/projects/<id>/*.jsonl`), the one
-format present and parseable here. opencode/mimo adapters slot in the same way
-once their on-disk message format is confirmed live (it was NOT at build time:
-the local `orca` is the app-runtime, not the delegation CLI, and opencode stored
-no message transcripts under storage/).
+{role, text, tool, files} events; the digester is harness-agnostic. Two adapters
+ship: Claude Code JSONL (`~/.claude/projects/<id>/*.jsonl`) and opencode
+(SQLite at `~/.local/share/opencode/opencode.db`, message+part rows). A mimo
+adapter slots in the same way once its on-disk format is confirmed.
 
 Usage:
   session-digest <transcript.jsonl>          digest a Claude JSONL file
-  session-digest --latest                     digest newest Claude JSONL for cwd
+  session-digest ses_XXXX                     digest an opencode session (by id)
+  session-digest --latest                     newest Claude JSONL for cwd
+  session-digest --latest --format opencode   newest opencode session for cwd
   session-digest <file> --max-files 20        cap files listed (default 25)
   session-digest <file> --format claude        force adapter (default: auto)
 
@@ -33,6 +33,10 @@ import re
 import sys
 import json
 import glob
+import sqlite3
+
+
+_OPENCODE_DB = os.path.expanduser("~/.local/share/opencode/opencode.db")
 
 
 # --- adapters: normalize a transcript to events -------------------------------
@@ -88,11 +92,117 @@ def _adapter_claude(path):
     return events
 
 
-_ADAPTERS = {"claude": _adapter_claude}
+_OC_FILE_KEYS = ("filePath", "file_path", "path", "notebook_path")
+
+
+def _adapter_opencode(path):
+    """opencode session → events. `path` is a session id (ses_…) or a DB path.
+
+    opencode stores transcripts in SQLite (`~/.local/share/opencode/opencode.db`):
+    a `message` row (role in data JSON) plus one or more `part` rows (text /
+    reasoning / tool). We reassemble each message's text + tool calls from its
+    parts, ordered by time_created, so the harness-agnostic digester sees the
+    same {role,text,tools,files} shape as the Claude adapter.
+    """
+    db, session_id = _OPENCODE_DB, None
+    if path.startswith("ses_"):
+        session_id = path
+    elif os.path.isfile(path) and path.endswith(".db"):
+        db = path
+    else:
+        return []
+    if not os.path.isfile(db):
+        return []
+
+    if session_id is None:
+        return []
+
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        cur = con.cursor()
+        msgs = cur.execute(
+            "SELECT id, data FROM message WHERE session_id=? ORDER BY time_created, id",
+            (session_id,),
+        ).fetchall()
+        parts_by_msg = {}
+        for mid, data in cur.execute(
+            "SELECT message_id, data FROM part WHERE session_id=? ORDER BY time_created, id",
+            (session_id,),
+        ).fetchall():
+            parts_by_msg.setdefault(mid, []).append(data)
+    finally:
+        con.close()
+
+    events = []
+    for mid, mdata in msgs:
+        try:
+            m = json.loads(mdata)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        role = m.get("role", "")
+        if role not in ("user", "assistant"):
+            continue
+        text_parts, tools, files = [], [], []
+        for pdata in parts_by_msg.get(mid, []):
+            try:
+                p = json.loads(pdata)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            pt = p.get("type")
+            if pt == "text":
+                t = p.get("text", "")
+                if t:
+                    text_parts.append(t)
+            elif pt == "tool":
+                tname = p.get("tool", "")
+                if tname:
+                    tools.append(tname)
+                inp = (p.get("state") or {}).get("input")
+                if isinstance(inp, dict):
+                    for key in _OC_FILE_KEYS:
+                        v = inp.get(key)
+                        if isinstance(v, str) and v:
+                            files.append(v)
+        events.append({
+            "role": role,
+            "text": "\n".join(t for t in text_parts if t).strip(),
+            "tools": tools,
+            "files": files,
+            "compact": False,
+        })
+    return events
+
+
+_ADAPTERS = {"claude": _adapter_claude, "opencode": _adapter_opencode}
+
+
+def _latest_opencode_session(cwd=None):
+    """Newest opencode session id whose directory matches cwd (or any, if none)."""
+    if not os.path.isfile(_OPENCODE_DB):
+        return None
+    cwd = cwd or os.getcwd()
+    con = sqlite3.connect(f"file:{_OPENCODE_DB}?mode=ro", uri=True)
+    try:
+        cur = con.cursor()
+        row = cur.execute(
+            "SELECT id FROM session WHERE directory=? ORDER BY time_updated DESC LIMIT 1",
+            (cwd,),
+        ).fetchone()
+        if not row:
+            row = cur.execute(
+                "SELECT id FROM session ORDER BY time_updated DESC LIMIT 1"
+            ).fetchone()
+        return row[0] if row else None
+    finally:
+        con.close()
 
 
 def _detect(path):
-    """Sniff format. Only Claude JSONL supported today; hook for more."""
+    """Sniff format. Claude JSONL file, or opencode session id / db."""
+    if path.startswith("ses_"):
+        return "opencode"
+    if path.endswith(".db"):
+        return "opencode"
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             first = fh.readline()
@@ -102,7 +212,7 @@ def _detect(path):
             return "claude"
     except Exception:
         pass
-    return "claude"  # default; extend when opencode/mimo formats confirmed
+    return "claude"  # default; extend when mimo format confirmed
 
 
 # --- digest -------------------------------------------------------------------
@@ -229,10 +339,18 @@ def main(argv):
             return 1
 
     if "--latest" in argv:
-        path = _latest_claude_transcript()
-        if not path:
-            sys.stderr.write("session-digest: no Claude transcript found for cwd\n")
-            return 2
+        want = fmt or "claude"
+        if want == "opencode":
+            sid = _latest_opencode_session()
+            if not sid:
+                sys.stderr.write("session-digest: no opencode session found for cwd\n")
+                return 2
+            path, fmt = sid, "opencode"
+        else:
+            path = _latest_claude_transcript()
+            if not path:
+                sys.stderr.write("session-digest: no Claude transcript found for cwd\n")
+                return 2
     else:
         paths = [a for a in argv if not a.startswith("-")]
         if not paths:
@@ -240,7 +358,9 @@ def main(argv):
             return 1
         path = paths[0]
 
-    if not os.path.isfile(path):
+    # opencode targets are session ids or a .db path, not files on disk
+    is_oc = (fmt == "opencode") or path.startswith("ses_") or path.endswith(".db")
+    if not is_oc and not os.path.isfile(path):
         sys.stderr.write(f"session-digest: not a file: {path}\n")
         return 2
 
