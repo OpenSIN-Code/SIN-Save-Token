@@ -111,6 +111,38 @@ Volle Quellenliste + Konfig-Details: `docs/BEST-PRACTICES.md`.
 
 ---
 
+## Voraussetzungen (externe CLIs)
+
+Dieses Repo installiert diese Tools **nicht** — es setzt sie voraus und verweist auf sie. Fehlt eins, degradiert der jeweilige Hebel still (nie ein harter Fehler):
+
+| CLI | Rolle | Bezug |
+|---|---|---|
+| `rtk` | L1 — komprimiert Shell-Output (Pflicht für den Installer) | `cargo install rtk` / `brew install rtk` |
+| `graphify` | LLM-freier Code-Graph statt grep (Struktur/Blast-Radius, 0 Tokens) | separat installiert |
+| `orca` | Delegation teurer Exploration an billige Modelle (opencode/mimo) | separat installiert |
+| `sin` | SIN-Code-Hub (`sin verify`/`review`/`debt`) | separat installiert |
+| `sin-sync` | verteilt den Standard + fährt `verify-tokens` als Deploy-Gate | `~/.local/bin/sin-sync` |
+| `skillopt` | Session-Review + Skill-Selbstoptimierung | separat installiert |
+| `ccusage` | Real-Dollar-Baseline (`npx ccusage@latest daily`) | via `npx`, keine Installation |
+
+---
+
+## Ökosystem — Verhältnis zu wow-my-zsh
+
+**SIN-Save-Token** und **wow-my-zsh** sind komplementär, nicht überlappend:
+
+- **wow-my-zsh** = *MCP-Config-Transpiler + Symlink-Installer* — eine kanonische
+  Server-Registry, transpiliert in die native Config von 6 Agents (author once,
+  transpile everywhere). Es regelt **welche Tools** ein Agent sieht.
+- **SIN-Save-Token** (dieses Repo) = *Token-Disziplin-Standard* — die 4 Layer
+  (Shell/Tools/Memory/Output) + Hooks, die **wie sparsam** jeder Agent mit
+  Tokens umgeht. Es regelt **wie** die Agents arbeiten.
+
+Zusammen: wow-my-zsh richtet die Werkzeuge ein, SIN-Save-Token hält ihren
+Verbrauch schlank.
+
+---
+
 ## Repo-Layout
 
 ```
@@ -118,11 +150,19 @@ SIN-Save-Token/
 ├── README.md                 ← diese Datei
 ├── bin/
 │   ├── install.sh            ← idempotenter Installer + Self-Heal-Hook-Writer
-│   ├── verify-tokens         ← 4-Layer Compliance-Checker (exit 1 bei Regress)
+│   ├── verify-tokens         ← 4-Layer Compliance-Checker (prüft rtk-Hook/Plugin,
+│   │                            MCP-Server-Zahl, Modell-Routing, always-loaded-Fläche;
+│   │                            exit 1 bei Regress)
 │   ├── agent-grep            ← struktur-augmentierte, selbst-kürzende Code-Suche
 │   ├── memory-scope          ← jcode ② — Memory-Ranking (BM25-lite) + ehrliches ROI-Gate
 │   ├── session-digest        ← jcode ③ — Transcript → kompakter Resume-Digest (~99%)
 │   └── dream                 ← mimo /dream — dauerhafte Lehren → geteiltes Memory
+├── hooks/                    ← agent-agnostische PreToolUse-Hooks (siehe hooks/README.md)
+│   ├── rtk-auto-rewrite.js   ← rewrite `git/cargo/...` → `rtk <cmd>`
+│   ├── orca-delegation-guard.js ← Nudge: teure Exploration an orca delegieren
+│   ├── agent-grep-nudge.js   ← Nudge: broad Grep → agent-grep
+│   ├── cache-cold-warn.js    ← warnt bei kaltem Prompt-Cache (>5 min)
+│   └── lib/git-cmd.js        ← geteilter git-Command-Classifier
 ├── docs/
 │   └── BEST-PRACTICES.md     ← kanonischer Standard, Konfig pro Runtime, Quellen
 └── templates/
