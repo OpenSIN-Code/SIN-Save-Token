@@ -159,6 +159,10 @@ Data-Flow-/Lifecycle-Diagramme **ausschließlich über den `archify`-Skill**
 - **Deliverable:** self-contained HTML (Dark/Light-Toggle, PNG/JPEG/WebP/SVG-Export).
   Mermaid-Source-Blöcke in Chat/Docs sind **verboten** — für inline-Vektor in READMEs
   Archify-SVG exportieren, nicht Mermaid.
+- **Fünf Modi:** `architecture` (Topologie), `workflow` (Prozess), `sequence`
+  (Aufrufkette), `dataflow` (Datenbewegung) und `lifecycle` (Zustände/Retry/
+  Terminal). Pro Frage den passenden Modus wählen, nicht alles in einen Graphen
+  pressen.
 - **Artefaktvertrag:** `*.json` ist die editierbare Archify-IR, `*.html` das
   interaktive Render-Artefakt und `*.svg` der originale Archify-Vektor-Export für
   README/Docs. HTML/SVG nie von Hand bearbeiten; immer aus JSON regenerieren.
