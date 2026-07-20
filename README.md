@@ -159,6 +159,9 @@ Data-Flow-/Lifecycle-Diagramme **ausschließlich über den `archify`-Skill**
 - **Deliverable:** self-contained HTML (Dark/Light-Toggle, PNG/JPEG/WebP/SVG-Export).
   Mermaid-Source-Blöcke in Chat/Docs sind **verboten** — für inline-Vektor in READMEs
   Archify-SVG exportieren, nicht Mermaid.
+- **Artefaktvertrag:** `*.json` ist die editierbare Archify-IR, `*.html` das
+  interaktive Render-Artefakt und `*.svg` der originale Archify-Vektor-Export für
+  README/Docs. HTML/SVG nie von Hand bearbeiten; immer aus JSON regenerieren.
 - **Blocker-Verhalten:** fehlt `archify` im Runtime, wird das explizit gemeldet und
   gracefully fall-backt — **nie** still Mermaid substituieren.
 
@@ -175,6 +178,14 @@ Trade-off gegen „nicht dümmer werden".
 > Das ist der originale Archify-SVG-Export ohne Browser-Chrome oder Screenshot-Ränder.
 > Das HTML unterstützt weiterhin Dark/Light-Toggle und PNG/JPEG/WebP/SVG-Export
 > (`T` zum Umschalten, `E` zum Export).
+
+Der kanonische wow-my-zsh-Workflow prüft diese Artefakte mit
+`node scripts/verify-archify-diagrams.mjs` und einem CI-Gate. Browser-Screenshots
+sind keine Diagramm-Artefakte. Die Manifest-/Exporter-Implementierung liegt im
+[wow-my-zsh-Repo](https://github.com/OpenSIN-Code/wow-my-zsh):
+[`docs/archify-manifest.json`](https://github.com/OpenSIN-Code/wow-my-zsh/blob/main/docs/archify-manifest.json),
+[`scripts/export-archify-svg.mjs`](https://github.com/OpenSIN-Code/wow-my-zsh/blob/main/scripts/export-archify-svg.mjs)
+und [`scripts/verify-archify-diagrams.mjs`](https://github.com/OpenSIN-Code/wow-my-zsh/blob/main/scripts/verify-archify-diagrams.mjs).
 
 ---
 
