@@ -168,11 +168,13 @@ Trade-off gegen „nicht dümmer werden".
 
 ### Beispiel — wow-my-zsh Architektur (mit Archify erzeugt)
 
-![wow-my-zsh architecture](https://raw.githubusercontent.com/OpenSIN-Code/wow-my-zsh/main/docs/wow-my-zsh-architecture-dark.png)
+![wow-my-zsh architecture](https://raw.githubusercontent.com/OpenSIN-Code/wow-my-zsh/main/docs/wow-my-zsh-architecture.svg)
 
 > Quell-IR + gerendertes HTML im wow-my-zsh-Repo:
 > [`docs/wow-my-zsh-architecture.html`](https://github.com/OpenSIN-Code/wow-my-zsh/blob/main/docs/wow-my-zsh-architecture.html)
-> (Dark/Light-Toggle, Export PNG/JPEG/WebP/SVG — `T` zum Umschalten, `E` zum Export).
+> Das ist der originale Archify-SVG-Export ohne Browser-Chrome oder Screenshot-Ränder.
+> Das HTML unterstützt weiterhin Dark/Light-Toggle und PNG/JPEG/WebP/SVG-Export
+> (`T` zum Umschalten, `E` zum Export).
 
 ---
 
