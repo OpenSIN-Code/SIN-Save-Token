@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from types import ModuleType
+
+
+ROOT = Path(__file__).resolve().parent.parent
+MODULE_PATH = ROOT / "bin" / "sin-context"
+
+# sin-context has no .py extension, load it manually
+MODULE = ModuleType("sin_context")
+MODULE.__file__ = str(MODULE_PATH)
+sys.modules["sin_context"] = MODULE
+exec(compile(MODULE_PATH.read_text(encoding="utf-8"), str(MODULE_PATH), "exec"), MODULE.__dict__)
+
+
+class ContextBrokerTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.policy = json.loads(
+            (ROOT / "config" / "context-policy.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_routes_symbol_question_to_graph(self):
+        route = MODULE.select_route(
+            "Which function calls create_commit?",
+            self.policy,
+        )
+        self.assertEqual(route["name"], "code_symbol")
+        self.assertEqual(route["providers"][0], "graphify")
+
+    def test_routes_decision_to_cognee(self):
+        route = MODULE.select_route(
+            "Warum haben wir Cognee statt einer zweiten SQLite-Datei gewählt?",
+            self.policy,
+        )
+        self.assertEqual(route["name"], "domain_memory")
+        self.assertEqual(route["providers"], ["cognee"])
+
+    def test_fallback_is_agent_grep(self):
+        route = MODULE.select_route(
+            "Find FROBNICATOR_VALUE",
+            self.policy,
+        )
+        self.assertEqual(route["name"], "text_search")
+
+    def test_truncation_respects_budget(self):
+        text = "abcd " * 5000
+        result = MODULE.truncate_to_tokens(text, 100)
+        self.assertLessEqual(MODULE.approximate_tokens(result), 110)
+        self.assertIn("context budget reached", result)
+
+    def test_cache_round_trip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = MODULE.ContextCache(Path(directory) / "cache.sqlite3")
+            result = MODULE.ProviderResult(
+                provider="graphify",
+                text="compact result",
+            )
+            cache.put("key", result)
+
+            restored = cache.get("key", ttl=100)
+            self.assertIsNotNone(restored)
+            self.assertEqual(restored.provider, "graphify")
+            self.assertEqual(restored.text, "compact result")
+
+
+if __name__ == "__main__":
+    unittest.main()

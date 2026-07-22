@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "budgets": {
+    "default_tokens": 900,
+    "simple_tokens": 350,
+    "code_navigation_tokens": 650,
+    "architecture_tokens": 1200,
+    "memory_tokens": 500,
+    "session_resume_tokens": 750,
+    "maximum_tokens": 1600
+  },
+  "retrieval": {
+    "maximum_sources": 5,
+    "minimum_score": 0.18,
+    "minimum_novelty": 0.12,
+    "maximum_chars_per_source": 2400,
+    "cache_ttl_seconds": 1800
+  },
+  "routes": [
+    {
+      "name": "code_symbol",
+      "patterns": [
+        "\\b(symbol|function|class|method|definition|reference|references|caller|callers|calls|implementiert|definiert|aufrufer|referenzen)\\b"
+      ],
+      "providers": ["graphify", "simone"],
+      "budget": "code_navigation_tokens"
+    },
+    {
+      "name": "code_architecture",
+      "patterns": [
+        "\\b(architecture|architektur|dependency|dependencies|blast radius|data flow|datenfluss|module|modules|component|komponente)\\b"
+      ],
+      "providers": ["graphify", "sin-code"],
+      "budget": "architecture_tokens"
+    },
+    {
+      "name": "domain_memory",
+      "patterns": [
+        "\\b(decision|decided|rationale|policy|convention|why did we|entscheidung|entschieden|begründung|richtlinie|warum haben wir)\\b"
+      ],
+      "providers": ["cognee"],
+      "budget": "memory_tokens"
+    },
+    {
+      "name": "session_resume",
+      "patterns": [
+        "\\b(resume|continue|where did we stop|last session|fortsetzen|weitermachen|wo aufgehört|letzte session)\\b"
+      ],
+      "providers": ["session-digest"],
+      "budget": "session_resume_tokens"
+    },
+    {
+      "name": "text_search",
+      "patterns": [".*"],
+      "providers": ["agent-grep"],
+      "budget": "default_tokens"
+    }
+  ],
+  "write_policy": {
+    "minimum_length": 40,
+    "maximum_length": 1200,
+    "duplicate_similarity": 0.88,
+    "allowed_types": [
+      "decision",
+      "constraint",
+      "verified_fact",
+      "gotcha",
+      "resolved_failure"
+    ],
+    "reject_patterns": [
+      "^todo\\b",
+      "^maybe\\b",
+      "^possibly\\b",
+      "^perhaps\\b",
+      "^ich glaube\\b",
+      "^vielleicht\\b",
+      "^eventuell\\b"
+    ]
+  }
+}

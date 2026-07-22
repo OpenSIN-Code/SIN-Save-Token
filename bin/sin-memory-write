@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+"""Validated, deduplicated fleet-memory writer."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+POLICY_FILE = ROOT / "config" / "context-policy.json"
+LEDGER_FILE = Path.home() / ".local" / "share" / "sin-save-token" / "memory.sqlite3"
+
+WORD_RE = re.compile(r"[A-Za-zÀ-ÿ0-9_]+")
+
+
+def normalize(text: str) -> str:
+    return " ".join(WORD_RE.findall(text.lower()))
+
+
+def shingles(text: str, size: int = 3) -> set[tuple[str, ...]]:
+    words = normalize(text).split()
+    if len(words) < size:
+        return {tuple(words)} if words else set()
+    return {
+        tuple(words[index : index + size])
+        for index in range(len(words) - size + 1)
+    }
+
+
+def similarity(left: str, right: str) -> float:
+    a = shingles(left)
+    b = shingles(right)
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def initialize(path: Path) -> sqlite3.Connection:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS memories (
+            id TEXT PRIMARY KEY,
+            memory_type TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            content TEXT NOT NULL,
+            source TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            provider TEXT NOT NULL
+        )
+        """
+    )
+    connection.commit()
+    return connection
+
+
+def validate(
+    text: str,
+    memory_type: str,
+    policy: dict,
+) -> str | None:
+    write_policy = policy["write_policy"]
+
+    if memory_type not in write_policy["allowed_types"]:
+        return f"unsupported memory type: {memory_type}"
+
+    if len(text) < int(write_policy["minimum_length"]):
+        return "memory is too short to preserve meaningful context"
+
+    if len(text) > int(write_policy["maximum_length"]):
+        return "memory is too long; store one atomic fact or decision"
+
+    for pattern in write_policy["reject_patterns"]:
+        if re.search(pattern, text.strip(), re.IGNORECASE):
+            return f"unverified/speculative memory rejected by pattern: {pattern}"
+
+    return None
+
+
+def existing_duplicate(
+    connection: sqlite3.Connection,
+    text: str,
+    threshold: float,
+) -> tuple[str, float] | None:
+    rows = connection.execute(
+        "SELECT id, content FROM memories ORDER BY created_at DESC LIMIT 500"
+    ).fetchall()
+
+    best: tuple[str, float] | None = None
+    for memory_id, existing_text in rows:
+        score = similarity(text, existing_text)
+        if best is None or score > best[1]:
+            best = (memory_id, score)
+
+    if best is not None and best[1] >= threshold:
+        return best
+    return None
+
+
+def write_cognee(text: str) -> bool:
+    try:
+        process = subprocess.run(
+            ["cognee-remember", text],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+            env=os.environ.copy(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+    return process.returncode == 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("text")
+    parser.add_argument(
+        "--type",
+        required=True,
+        choices=[
+            "decision",
+            "constraint",
+            "verified_fact",
+            "gotcha",
+            "resolved_failure",
+        ],
+    )
+    parser.add_argument("--scope", default="fleet")
+    parser.add_argument("--source", required=True)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+
+    policy = json.loads(POLICY_FILE.read_text(encoding="utf-8"))
+    problem = validate(args.text, args.type, policy)
+    if problem:
+        print(f"REJECTED: {problem}", file=sys.stderr)
+        return 2
+
+    connection = initialize(LEDGER_FILE)
+    threshold = float(policy["write_policy"]["duplicate_similarity"])
+    duplicate = existing_duplicate(connection, args.text, threshold)
+
+    if duplicate:
+        memory_id, score = duplicate
+        print(f"SKIPPED duplicate={memory_id} similarity={score:.3f}")
+        return 0
+
+    canonical = {
+        "type": args.type,
+        "scope": args.scope,
+        "source": args.source,
+        "content": args.text.strip(),
+    }
+    serialized = json.dumps(canonical, ensure_ascii=False, sort_keys=True)
+    memory_id = hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:20]
+
+    if args.dry_run:
+        print(
+            json.dumps(
+                {"id": memory_id, **canonical},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+
+    # Cognee is the canonical domain-memory owner.
+    if not write_cognee(serialized):
+        print("ERROR: cognee write failed; local ledger not committed", file=sys.stderr)
+        return 3
+
+    connection.execute(
+        """
+        INSERT INTO memories(
+            id, memory_type, scope, content, source, created_at, provider
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            memory_id,
+            args.type,
+            args.scope,
+            args.text.strip(),
+            args.source,
+            int(time.time()),
+            "cognee",
+        ),
+    )
+    connection.commit()
+
+    print(f"STORED {memory_id} provider=cognee")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

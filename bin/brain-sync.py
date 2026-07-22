@@ -1,269 +1,255 @@
 #!/usr/bin/env python3
-"""Bidirectional sync between gbrain (Global-Brain) and Cognee.
+"""Controlled one-way export from gbrain to canonical Cognee memory.
 
-Usage:
-  python3 bin/brain-sync.py gbrain2cognee   # Push gbrain pages → Cognee
-  python3 bin/brain-sync.py cognee2gbrain   # Push Cognee items → gbrain
-  python3 bin/brain-sync.py both            # Bidirectional sync
-  python3 bin/brain-sync.py status          # Show both systems' state
-
-Requires:
-  - gbrain CLI on PATH (~/.bun/bin/gbrain)
-  - Cognee API on :8011 (bin/cognee-fleet-up.sh)
-  - NIM embed proxy on :8012
-  - OmniRoute on :20128 (for gbrain expansion model)
+There is deliberately no automatic Cognee -> gbrain bulk sync.
+Cognee owns durable domain memory. Automatic bidirectional replication creates
+duplicates, feedback loops, stale copies, and higher retrieval cost.
 """
-import json
+
+from __future__ import annotations
+
+import argparse
 import hashlib
+import json
 import os
+import sqlite3
 import subprocess
 import sys
-import urllib.request
-import uuid
+import time
 from pathlib import Path
 
-COGNEE_BASE = "http://127.0.0.1:8011"
-COGNEE_DATASET = "sin-fleet"
-SYNC_TAG = "[brain-sync]"
+STATE_FILE = (
+    Path.home()
+    / ".local"
+    / "share"
+    / "sin-save-token"
+    / "brain-sync.sqlite3"
+)
+MEMORY_WRITER = Path(__file__).resolve().parent / "sin-memory-write"
 
 
-def get_cognee_api_key():
-    """Read Cognee API key from config file."""
-    key_file = Path.home() / ".cognee-plugin" / "api_key.json"
-    if key_file.exists():
-        try:
-            data = json.loads(key_file.read_text())
-            return data.get("api_key") or data.get("key") or ""
-        except Exception:
-            pass
-    return ""
-
-
-def run(cmd, timeout=30, env=None):
-    """Run a shell command and return stdout."""
-    try:
-        r = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True,
-            timeout=timeout, env={**os.environ, **(env or {})}
+def initialize() -> sqlite3.Connection:
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(STATE_FILE)
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS exports (
+            source_system TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            exported_at INTEGER NOT NULL,
+            PRIMARY KEY(source_system, source_id)
         )
-        return r.stdout.strip(), r.returncode
-    except subprocess.TimeoutExpired:
+        """
+    )
+    connection.commit()
+    return connection
+
+
+def run(argv: list[str], timeout: int = 30) -> tuple[str, int]:
+    try:
+        process = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env={
+                **os.environ,
+                "OPENAI_BASE_URL": "http://127.0.0.1:8012/v1",
+            },
+        )
+    except (OSError, subprocess.TimeoutExpired):
         return "", 1
 
-
-def content_hash(text):
-    """SHA-256 hash of content for dedup."""
-    return hashlib.sha256(text.encode()).hexdigest()[:16]
+    return process.stdout.strip(), process.returncode
 
 
-# ── gbrain → Cognee ──────────────────────────────────────────────────────
-
-def gbrain_search_all():
-    """Get all gbrain pages via gbrain list."""
-    env = {"OPENAI_BASE_URL": "http://127.0.0.1:8012/v1"}
-    out, rc = run('gbrain list -n 100 2>/dev/null', env=env)
-    if rc != 0 or not out:
+def list_gbrain_pages() -> list[str]:
+    output, returncode = run(["gbrain", "list", "-n", "500"])
+    if returncode != 0:
         return []
-    pages = []
-    for line in out.split("\n"):
-        line = line.strip()
+
+    pages: list[str] = []
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
         if not line:
             continue
-        # Format: slug\ttype\tdate\ttitle (tab-separated)
-        parts = line.split("\t")
-        if parts:
-            slug = parts[0].strip()
-            if slug and not slug.startswith("Pages:") and not slug.startswith("By "):
-                pages.append(slug)
+
+        slug = line.split("\t", 1)[0].strip()
+        if not slug or slug.startswith(("Pages:", "By ")):
+            continue
+
+        pages.append(slug)
+
     return pages
 
 
-def cognee_remember(text):
-    """Ingest text into Cognee via multipart/form-data API."""
-    api_key = get_cognee_api_key()
-    if not api_key:
-        print("  ERROR: no Cognee API key", file=sys.stderr)
-        return None
+def read_gbrain_page(slug: str) -> str:
+    output, returncode = run(["gbrain", "get", slug])
+    return output if returncode == 0 else ""
 
-    boundary = f"----sync{uuid.uuid4().hex}"
-    parts = []
-    for name, value in [("datasetName", COGNEE_DATASET), ("run_in_background", "false")]:
-        parts.append(f"--{boundary}\r\n".encode())
-        parts.append(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
-        parts.append(str(value).encode())
-        parts.append(b"\r\n")
 
-    content = text.encode()
-    parts.append(f"--{boundary}\r\n".encode())
-    parts.append(
-        b'Content-Disposition: form-data; name="data"; filename="sync-note.txt"\r\n'
-        b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+def hash_content(content: str) -> str:
+    normalized = " ".join(content.split())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def previously_exported(
+    connection: sqlite3.Connection,
+    slug: str,
+    digest: str,
+) -> bool:
+    row = connection.execute(
+        """
+        SELECT content_hash
+        FROM exports
+        WHERE source_system = 'gbrain' AND source_id = ?
+        """,
+        (slug,),
+    ).fetchone()
+    return row is not None and row[0] == digest
+
+
+def mark_exported(
+    connection: sqlite3.Connection,
+    slug: str,
+    digest: str,
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO exports(source_system, source_id, content_hash, exported_at)
+        VALUES ('gbrain', ?, ?, ?)
+        ON CONFLICT(source_system, source_id) DO UPDATE SET
+            content_hash = excluded.content_hash,
+            exported_at = excluded.exported_at
+        """,
+        (slug, digest, int(time.time())),
     )
-    parts.append(content)
-    parts.append(b"\r\n")
-    parts.append(f"--{boundary}--\r\n".encode())
-    body = b"".join(parts)
+    connection.commit()
 
-    headers = {
-        "Content-Type": f"multipart/form-data; boundary={boundary}",
-        "X-Api-Key": api_key
-    }
-    req = urllib.request.Request(
-        f"{COGNEE_BASE}/api/v1/remember",
-        data=body, headers=headers, method="POST"
+
+def eligible(content: str) -> bool:
+    lowered = content.lower()
+
+    # Only explicitly curated pages cross the boundary.
+    accepted_markers = (
+        "memory-export: true",
+        "memory_export: true",
+        "tags: [decision",
+        "type: decision",
+        "type: constraint",
+        "type: verified_fact",
+        "type: gotcha",
+        "type: resolved_failure",
     )
-    try:
-        with urllib.request.urlopen(req, timeout=300) as resp:
-            return json.loads(resp.read())
-    except Exception as e:
-        print(f"  ERROR cognee_remember: {e}", file=sys.stderr)
-        return None
+    return any(marker in lowered for marker in accepted_markers)
 
 
-def gbrain2cognee():
-    """Push gbrain pages to Cognee."""
-    print("=== gbrain → Cognee ===")
-    pages = gbrain_search_all()
-    if not pages:
-        print("  No pages found in gbrain")
-        return 0
+def infer_type(content: str) -> str:
+    lowered = content.lower()
 
-    synced = 0
-    for slug in pages:
-        # Read page content via gbrain get (use subprocess to avoid shell escaping)
-        try:
-            r = subprocess.run(
-                ["gbrain", "get", slug],
-                capture_output=True, text=True, timeout=10,
-                env={**os.environ, "OPENAI_BASE_URL": "http://127.0.0.1:8012/v1"}
-            )
-            out = r.stdout.strip() if r.returncode == 0 else ""
-        except Exception:
-            out = ""
+    for memory_type in (
+        "decision",
+        "constraint",
+        "verified_fact",
+        "gotcha",
+        "resolved_failure",
+    ):
+        if f"type: {memory_type}" in lowered:
+            return memory_type
 
-        if not out:
-            print(f"  SKIP {slug}: could not read")
-            continue
-
-        # Skip if already synced
-        if SYNC_TAG in out:
-            print(f"  SKIP {slug}: already synced")
-            continue
-
-        tagged = f"{SYNC_TAG} {out}"
-        result = cognee_remember(tagged)
-        if result and result.get("status") == "completed":
-            synced += 1
-            print(f"  ✓ {slug}")
-        else:
-            print(f"  ✗ {slug}")
-
-    print(f"  Synced {synced}/{len(pages)} pages")
-    return synced
+    return "verified_fact"
 
 
-# ── Cognee → gbrain ──────────────────────────────────────────────────────
+def export_page(
+    connection: sqlite3.Connection,
+    slug: str,
+    *,
+    dry_run: bool,
+) -> str:
+    content = read_gbrain_page(slug)
+    if not content:
+        return "read-failed"
 
-def cognee_recall(query="*", top_k=100):
-    """Recall all items from Cognee."""
-    api_key = get_cognee_api_key()
-    data = json.dumps({
-        "query": query,
-        "datasets": [COGNEE_DATASET],
-        "top_k": top_k
-    }).encode()
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["X-Api-Key"] = api_key
-    req = urllib.request.Request(
-        f"{COGNEE_BASE}/api/v1/recall",
-        data=data, headers=headers, method="POST"
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            return json.loads(resp.read())
-    except Exception as e:
-        print(f"  ERROR cognee_recall: {e}", file=sys.stderr)
-        return []
+    if not eligible(content):
+        return "not-curated"
+
+    digest = hash_content(content)
+    if previously_exported(connection, slug, digest):
+        return "unchanged"
+
+    command = [
+        str(MEMORY_WRITER),
+        content,
+        "--type",
+        infer_type(content),
+        "--scope",
+        "fleet",
+        "--source",
+        f"gbrain:{slug}",
+    ]
+    if dry_run:
+        command.append("--dry-run")
+
+    output, returncode = run(command, timeout=150)
+    if returncode != 0:
+        print(output, file=sys.stderr)
+        return "write-failed"
+
+    if not dry_run:
+        mark_exported(connection, slug, digest)
+
+    return "exported"
 
 
-def gbrain_put_page(slug, content):
-    """Write a page to gbrain via put_page MCP tool."""
-    # Use gbrain call put_page with JSON args
-    args = json.dumps({"slug": slug, "content": content})
-    out, rc = run(
-        f"OPENAI_BASE_URL=http://127.0.0.1:8012/v1 gbrain call put_page '{args}' 2>/dev/null",
-        timeout=30
-    )
-    return rc == 0 and "error" not in (out or "").lower()
+def status(connection: sqlite3.Connection) -> int:
+    count = connection.execute("SELECT COUNT(*) FROM exports").fetchone()[0]
+    newest = connection.execute(
+        "SELECT MAX(exported_at) FROM exports"
+    ).fetchone()[0]
 
-
-def cognee2gbrain():
-    """Push Cognee items to gbrain."""
-    print("=== Cognee → gbrain ===")
-    results = cognee_recall()
-    items = results if isinstance(results, list) else []
-    if not items:
-        print("  No items found in Cognee")
-        return 0
-
-    synced = 0
-    for item in items:
-        text = item.get("text") or item.get("raw", {}).get("value") or str(item)
-        if SYNC_TAG in text:
-            continue  # Skip our own synced items
-
-        slug = f"cognee-{content_hash(text)}"
-        frontmatter = (
-            f"---\ntitle: \"[cognee] {slug}\"\n"
-            f"tags: [cognee, synced]\n"
-            f"type: fact\nscope: fleet\n---\n\n"
+    print(
+        json.dumps(
+            {
+                "exported_pages": count,
+                "newest_export_unix": newest,
+                "direction": "gbrain -> cognee",
+                "automatic_reverse_sync": False,
+            },
+            indent=2,
         )
-        content = frontmatter + text
-
-        if gbrain_put_page(slug, content):
-            synced += 1
-            print(f"  ✓ {slug}")
-        else:
-            print(f"  ✗ {slug}")
-
-    print(f"  Synced {synced}/{len(items)} items")
-    return synced
+    )
+    return 0
 
 
-# ── Status ────────────────────────────────────────────────────────────────
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-def show_status():
-    """Show status of both systems."""
-    print("=== Brain Sync Status ===\n")
+    export_parser = subparsers.add_parser("export")
+    export_parser.add_argument("--slug")
+    export_parser.add_argument("--dry-run", action="store_true")
 
-    # gbrain
-    out, rc = run("OPENAI_BASE_URL=http://127.0.0.1:8012/v1 gbrain stats 2>/dev/null", env={"OPENAI_BASE_URL": "http://127.0.0.1:8012/v1"})
-    print(f"gbrain:\n{out}\n" if out else "gbrain: not available\n")
+    subparsers.add_parser("status")
+    args = parser.parse_args()
 
-    # Cognee
-    try:
-        req = urllib.request.Request(f"{COGNEE_BASE}/health")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            health = json.loads(resp.read())
-        print(f"Cognee: {health.get('status', 'unknown')}")
-    except Exception:
-        print("Cognee: not available")
+    connection = initialize()
 
+    if args.command == "status":
+        return status(connection)
 
-# ── Main ──────────────────────────────────────────────────────────────────
+    pages = [args.slug] if args.slug else list_gbrain_pages()
+    counters: dict[str, int] = {}
+
+    for slug in pages:
+        result = export_page(connection, slug, dry_run=args.dry_run)
+        counters[result] = counters.get(result, 0) + 1
+        print(f"{slug}: {result}")
+
+    print(json.dumps(counters, sort_keys=True))
+    return 0 if counters.get("write-failed", 0) == 0 else 3
+
 
 if __name__ == "__main__":
-    cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
-    if cmd == "gbrain2cognee":
-        gbrain2cognee()
-    elif cmd == "cognee2gbrain":
-        cognee2gbrain()
-    elif cmd == "both":
-        gbrain2cognee()
-        cognee2gbrain()
-    elif cmd == "status":
-        show_status()
-    else:
-        print(__doc__)
-        sys.exit(1)
+    raise SystemExit(main())

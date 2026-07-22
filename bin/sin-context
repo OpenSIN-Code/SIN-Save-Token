@@ -1,0 +1,393 @@
+#!/usr/bin/env python3
+"""SIN context broker.
+
+One query enters. At most one provider normally wins.
+The broker prevents agents from querying every memory and code system in sequence.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shlex
+import sqlite3
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_POLICY = ROOT / "config" / "context-policy.json"
+DEFAULT_CACHE = Path.home() / ".cache" / "sin-save-token" / "context.sqlite3"
+
+
+@dataclass(frozen=True)
+class ProviderResult:
+    provider: str
+    text: str
+    score: float = 1.0
+
+
+def load_policy(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def approximate_tokens(text: str) -> int:
+    # Conservative multilingual approximation.
+    return max(1, (len(text) + 2) // 3)
+
+
+def truncate_to_tokens(text: str, limit: int) -> str:
+    if approximate_tokens(text) <= limit:
+        return text.strip()
+
+    char_limit = max(1, limit * 3)
+    clipped = text[:char_limit]
+
+    # Avoid cutting through a line where possible.
+    last_newline = clipped.rfind("\n")
+    if last_newline > char_limit * 0.65:
+        clipped = clipped[:last_newline]
+
+    return clipped.rstrip() + "\n[… context budget reached]"
+
+
+def normalize_query(query: str) -> str:
+    return re.sub(r"\s+", " ", query.strip().lower())
+
+
+def cache_key(route: str, provider: str, query: str, cwd: str) -> str:
+    raw = json.dumps(
+        {
+            "route": route,
+            "provider": provider,
+            "query": normalize_query(query),
+            "cwd": os.path.realpath(cwd),
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+class ContextCache:
+    def __init__(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.connection = sqlite3.connect(path)
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS context_cache (
+                cache_key TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                value TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        self.connection.commit()
+
+    def get(self, key: str, ttl: int) -> ProviderResult | None:
+        row = self.connection.execute(
+            """
+            SELECT provider, value, created_at
+            FROM context_cache
+            WHERE cache_key = ?
+            """,
+            (key,),
+        ).fetchone()
+
+        if row is None:
+            return None
+
+        provider, value, created_at = row
+        if int(time.time()) - int(created_at) > ttl:
+            self.connection.execute(
+                "DELETE FROM context_cache WHERE cache_key = ?", (key,)
+            )
+            self.connection.commit()
+            return None
+
+        return ProviderResult(provider=provider, text=value)
+
+    def put(self, key: str, result: ProviderResult) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO context_cache(cache_key, provider, value, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(cache_key) DO UPDATE SET
+                provider = excluded.provider,
+                value = excluded.value,
+                created_at = excluded.created_at
+            """,
+            (key, result.provider, result.text, int(time.time())),
+        )
+        self.connection.commit()
+
+
+def executable_exists(name: str) -> bool:
+    from shutil import which
+
+    return which(name) is not None
+
+
+def run_command(
+    argv: list[str],
+    *,
+    cwd: str,
+    timeout: int = 25,
+) -> str:
+    try:
+        process = subprocess.run(
+            argv,
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+            env=os.environ.copy(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+    output = process.stdout.strip()
+    if process.returncode != 0 and not output:
+        return ""
+
+    return output
+
+
+def provider_graphify(query: str, cwd: str) -> ProviderResult | None:
+    if not executable_exists("graphify"):
+        return None
+
+    # `explain` is normally more compact and useful than a raw graph dump.
+    output = run_command(["graphify", "explain", query], cwd=cwd)
+    if not output:
+        output = run_command(["graphify", "query", query], cwd=cwd)
+
+    return ProviderResult("graphify", output) if output else None
+
+
+def provider_simone(query: str, cwd: str) -> ProviderResult | None:
+    # Prefer a compact CLI bridge. Do not activate a large MCP schema just to recall.
+    command = os.environ.get("SIN_SIMONE_QUERY_COMMAND", "simone-query")
+    argv = shlex.split(command)
+
+    if not argv or not executable_exists(argv[0]):
+        return None
+
+    output = run_command([*argv, query], cwd=cwd)
+    return ProviderResult("simone", output) if output else None
+
+
+def provider_sin_code(query: str, cwd: str) -> ProviderResult | None:
+    if not executable_exists("sin"):
+        return None
+
+    output = run_command(["sin", "code", "map", "--query", query], cwd=cwd)
+    if not output:
+        output = run_command(["sin", "code", "grasp", query], cwd=cwd)
+
+    return ProviderResult("sin-code", output) if output else None
+
+
+def provider_cognee(query: str, cwd: str) -> ProviderResult | None:
+    if not executable_exists("cognee-recall"):
+        return None
+
+    output = run_command(
+        ["cognee-recall", "--top-k", "5", query],
+        cwd=cwd,
+        timeout=45,
+    )
+    return ProviderResult("cognee", output) if output else None
+
+
+def provider_session_digest(query: str, cwd: str) -> ProviderResult | None:
+    del query
+
+    if not executable_exists("session-digest"):
+        local_binary = ROOT / "bin" / "session-digest"
+        if not local_binary.exists():
+            return None
+        command = str(local_binary)
+    else:
+        command = "session-digest"
+
+    output = run_command([command, "--latest"], cwd=cwd, timeout=30)
+    return ProviderResult("session-digest", output) if output else None
+
+
+def provider_agent_grep(query: str, cwd: str) -> ProviderResult | None:
+    local_binary = ROOT / "bin" / "agent-grep"
+    command = str(local_binary) if local_binary.exists() else "agent-grep"
+
+    if command == "agent-grep" and not executable_exists(command):
+        return None
+
+    # Extract high-information identifiers instead of searching the whole sentence.
+    candidates = re.findall(
+        r"[A-Za-z_][A-Za-z0-9_.:/-]{2,}",
+        query,
+    )
+    stop = {
+        "where",
+        "what",
+        "which",
+        "when",
+        "code",
+        "file",
+        "function",
+        "class",
+        "warum",
+        "welche",
+        "wo",
+        "datei",
+        "funktion",
+    }
+
+    terms = [term for term in candidates if term.lower() not in stop]
+    pattern = terms[-1] if terms else query
+
+    output = run_command([command, pattern, "."], cwd=cwd)
+    return ProviderResult("agent-grep", output) if output else None
+
+
+PROVIDERS = {
+    "graphify": provider_graphify,
+    "simone": provider_simone,
+    "sin-code": provider_sin_code,
+    "cognee": provider_cognee,
+    "session-digest": provider_session_digest,
+    "agent-grep": provider_agent_grep,
+}
+
+
+def select_route(query: str, policy: dict[str, Any]) -> dict[str, Any]:
+    for route in policy["routes"]:
+        for pattern in route["patterns"]:
+            if re.search(pattern, query, flags=re.IGNORECASE):
+                return route
+    raise RuntimeError("Policy contains no fallback route")
+
+
+def useful(result: ProviderResult | None) -> bool:
+    if result is None:
+        return False
+
+    stripped = result.text.strip()
+    if len(stripped) < 20:
+        return False
+
+    negative_markers = (
+        "no results",
+        "not found",
+        "keine treffer",
+        "nothing found",
+        "0 matches",
+    )
+    lowered = stripped.lower()
+    return not any(marker in lowered for marker in negative_markers)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("query", nargs="+")
+    parser.add_argument("--cwd", default=os.getcwd())
+    parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
+    parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
+    parser.add_argument("--no-cache", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+
+    query = " ".join(args.query).strip()
+    policy = load_policy(args.policy)
+    route = select_route(query, policy)
+
+    budget_name = route["budget"]
+    budget = min(
+        int(policy["budgets"][budget_name]),
+        int(policy["budgets"]["maximum_tokens"]),
+    )
+    ttl = int(policy["retrieval"]["cache_ttl_seconds"])
+    cache = ContextCache(args.cache)
+
+    attempted: list[str] = []
+
+    for provider_name in route["providers"]:
+        attempted.append(provider_name)
+        provider = PROVIDERS.get(provider_name)
+        if provider is None:
+            continue
+
+        key = cache_key(route["name"], provider_name, query, args.cwd)
+
+        if not args.no_cache:
+            cached = cache.get(key, ttl)
+            if useful(cached):
+                text = truncate_to_tokens(cached.text, budget)
+                payload = {
+                    "route": route["name"],
+                    "provider": provider_name,
+                    "cached": True,
+                    "approx_tokens": approximate_tokens(text),
+                    "context": text,
+                }
+                print(json.dumps(payload, ensure_ascii=False) if args.json else text)
+                return 0
+
+        result = provider(query, args.cwd)
+        if not useful(result):
+            continue
+
+        bounded = ProviderResult(
+            provider=result.provider,
+            text=truncate_to_tokens(result.text, budget),
+            score=result.score,
+        )
+
+        if not args.no_cache:
+            cache.put(key, bounded)
+
+        payload = {
+            "route": route["name"],
+            "provider": bounded.provider,
+            "cached": False,
+            "approx_tokens": approximate_tokens(bounded.text),
+            "context": bounded.text,
+        }
+        print(
+            json.dumps(payload, ensure_ascii=False)
+            if args.json
+            else bounded.text
+        )
+        return 0
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "route": route["name"],
+                    "provider": None,
+                    "cached": False,
+                    "attempted": attempted,
+                    "context": "",
+                }
+            )
+        )
+    else:
+        print(
+            f"# no useful context; attempted: {', '.join(attempted)}",
+            file=sys.stderr,
+        )
+
+    return 3
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
