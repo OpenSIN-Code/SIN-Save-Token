@@ -108,6 +108,10 @@ class ProviderRuntime:
         finally:
             connection.close()
 
+    def health(self, provider: str) -> dict[str, Any]:
+        """Return a read-only provider health snapshot for diagnostics."""
+        return self._health(provider)
+
     def _record_success(
         self,
         provider: str,
@@ -319,11 +323,12 @@ class ProviderRuntime:
             (time.monotonic() - started) * 1000
         )
 
-        full_output = (
-            process.stdout
-            + "\n"
-            + process.stderr
-        ).strip()
+        stdout = process.stdout.strip()
+        stderr = process.stderr.strip()
+        full_output = "\n".join(
+            part for part in (stdout, stderr) if part
+        )
+        successful_output = stdout or stderr
 
         output_sha256 = hashlib.sha256(
             full_output.encode("utf-8")
@@ -353,7 +358,7 @@ class ProviderRuntime:
         self._record_success(spec.name)
 
         truncated = (
-            len(full_output)
+            len(successful_output)
             > spec.maximum_output_chars
         )
 
@@ -364,12 +369,13 @@ class ProviderRuntime:
             "argv": argv,
             "exit_code": 0,
             "duration_ms": duration_ms,
-            "output": full_output[
+            "output": successful_output[
                 :spec.maximum_output_chars
             ],
             "output_sha256": output_sha256,
-            "output_chars": len(full_output),
+            "output_chars": len(successful_output),
             "truncated": truncated,
+            "stderr_tail": stderr[-2000:] if stderr else "",
         }
 
     def call_first_available(
@@ -429,9 +435,17 @@ def load_provider_specs(
         if not isinstance(config, dict):
             continue
 
+        argv = config.get("argv")
+        if not isinstance(argv, list) or not argv or not all(
+            isinstance(item, str) and item for item in argv
+        ):
+            raise ValueError(
+                f"provider {name!r} requires a non-empty argv string list"
+            )
+
         result[name] = ProviderSpec(
             name=name,
-            argv=list(config["argv"]),
+            argv=list(argv),
             timeout_seconds=int(
                 config.get("timeout_seconds", 120)
             ),

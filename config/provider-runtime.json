@@ -1,6 +1,73 @@
 {
-  "version": 1,
+  "version": 2,
   "providers": {
+    "simone": {
+      "argv": [
+        "simone-query",
+        "{query}"
+      ],
+      "timeout_seconds": 30,
+      "maximum_output_chars": 12000,
+      "failure_threshold": 2,
+      "cooldown_seconds": 180
+    },
+    "graphify": {
+      "argv": [
+        "graphify",
+        "explain",
+        "{query}"
+      ],
+      "timeout_seconds": 120,
+      "maximum_output_chars": 16000,
+      "failure_threshold": 3,
+      "cooldown_seconds": 300
+    },
+    "sin-code": {
+      "argv": [
+        "sin",
+        "code",
+        "map",
+        "--query",
+        "{query}"
+      ],
+      "timeout_seconds": 120,
+      "maximum_output_chars": 16000,
+      "failure_threshold": 3,
+      "cooldown_seconds": 300
+    },
+    "cognee": {
+      "argv": [
+        "cognee-recall",
+        "--top-k",
+        "5",
+        "{query}"
+      ],
+      "timeout_seconds": 45,
+      "maximum_output_chars": 12000,
+      "failure_threshold": 2,
+      "cooldown_seconds": 300
+    },
+    "session-digest": {
+      "argv": [
+        "session-digest",
+        "--latest"
+      ],
+      "timeout_seconds": 30,
+      "maximum_output_chars": 9000,
+      "failure_threshold": 2,
+      "cooldown_seconds": 120
+    },
+    "agent-grep": {
+      "argv": [
+        "agent-grep",
+        "{pattern}",
+        "."
+      ],
+      "timeout_seconds": 25,
+      "maximum_output_chars": 12000,
+      "failure_threshold": 3,
+      "cooldown_seconds": 120
+    },
     "code-review-graph": {
       "argv": [
         "code-review-graph",
@@ -11,17 +78,6 @@
       ],
       "timeout_seconds": 180,
       "maximum_output_chars": 24000,
-      "failure_threshold": 3,
-      "cooldown_seconds": 300
-    },
-    "graphify": {
-      "argv": [
-        "graphify",
-        "explain",
-        "{query}"
-      ],
-      "timeout_seconds": 120,
-      "maximum_output_chars": 16000,
       "failure_threshold": 3,
       "cooldown_seconds": 300
     },

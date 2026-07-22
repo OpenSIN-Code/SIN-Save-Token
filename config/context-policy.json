@@ -24,7 +24,7 @@
       "patterns": [
         "\\b(symbol|function|class|method|definition|reference|references|caller|callers|calls|implementiert|definiert|aufrufer|referenzen)\\b"
       ],
-      "providers": ["graphify", "simone"],
+      "providers": ["simone", "graphify"],
       "budget": "code_navigation_tokens"
     },
     {

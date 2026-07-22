@@ -27,13 +27,13 @@ class ContextBrokerTests(unittest.TestCase):
             )
         )
 
-    def test_routes_symbol_question_to_graph(self):
+    def test_routes_symbol_question_to_simone_first(self):
         route = MODULE.select_route(
             "Which function calls create_commit?",
             self.policy,
         )
         self.assertEqual(route["name"], "code_symbol")
-        self.assertEqual(route["providers"][0], "graphify")
+        self.assertEqual(route["providers"], ["simone", "graphify"])
 
     def test_routes_decision_to_cognee(self):
         route = MODULE.select_route(
@@ -67,6 +67,25 @@ class ContextBrokerTests(unittest.TestCase):
             self.assertEqual(restored.provider, "graphify")
             self.assertEqual(restored.text, "compact result")
             self.assertFalse(restored.is_negative)
+
+    def test_every_routed_provider_has_runtime_config(self):
+        specs = MODULE.load_provider_specs(
+            ROOT / "config" / "provider-runtime.json"
+        )
+        routed = {
+            provider
+            for route in self.policy["routes"]
+            for provider in route["providers"]
+        }
+        self.assertEqual(routed - set(specs), set())
+
+    def test_infrastructure_failure_is_not_negative_cached(self):
+        outcome = MODULE.ProviderOutcome(
+            result=None,
+            status="circuit-open",
+            cache_negative=False,
+        )
+        self.assertFalse(outcome.cache_negative)
 
 
 if __name__ == "__main__":

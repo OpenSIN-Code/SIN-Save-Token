@@ -1,0 +1,57 @@
+name: Token Architecture CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  architecture-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install schema validator
+        run: python3 -m pip install --disable-pip-version-check 'jsonschema>=4.18,<5'
+
+      - name: Validate JSON documents
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            python3 -m json.tool "$file" >/dev/null
+          done < <(find config schemas -type f -name '*.json' -print0)
+
+      - name: Compile Python sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile $(find lib tests -type f -name '*.py' -print)
+          python3 -m py_compile bin/sin-context bin/sin-orca bin/audit-token-architecture.py
+
+      - name: Run unit and contract tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Run cross-repository architecture audit with fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture_root="$RUNNER_TEMP/token-architecture-fixtures"
+          python3 tests/build_cross_repo_ci_fixtures.py "$fixture_root"
+          python3 bin/audit-token-architecture.py \
+            --sst . \
+            --wow "$fixture_root/wow-my-zsh" \
+            --global-brain "$fixture_root/global-brain"
+
+      - name: Check whitespace
+        run: git diff --check

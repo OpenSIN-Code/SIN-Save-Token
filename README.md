@@ -5,7 +5,7 @@ Ein Setup, das jeder Agent (Claude Code, opencode, Codex, Orca) **automatisch se
 niemand muss je einen Agenten daran erinnern.
 
 > Ziel: **so viele Tokens wie möglich sparen, ohne dass Agenten dümmer werden.**
-> Jede Entscheidung hier ist durch abgerechnete Benchmarks belegt (siehe [Evidenz](#evidenz)).
+> Architekturentscheidungen sind durch Gates und vorhandene Evidenz begründet. Eine weltweite Bestplatzierung oder garantiert minimale Kosten gelten erst nach einem reproduzierbaren lokalen A/B-Benchmark als belegt.
 
 ---
 
@@ -297,31 +297,42 @@ export COGNEE_EMBED_BACKEND=fastembed
 
 ---
 
-## gbrain (Global Brain) — shared rules across agents
+## gbrain / global-brain — kuratierter Vorbereich und Archiv
 
-19+ knowledge rules indexed with NIM embeddings, searchable via hybrid query (vector + keyword).
-Connected to Cognee via `bin/brain-sync.py` for bidirectional sync.
+Cognee ist der **einzige kanonische Besitzer langlebiger Domain-Memory**. gbrain dient als kuratierter Vorbereich; global-brain verwaltet Pläne, Archive und Knowledge-Artefakte. Keines dieser Systeme injiziert im tokenminimalen Standard automatisch Kontext in Prompts.
 
-```
-Agents (MCP sin-brain) → gbrain :pglite
-                       → NIM-Proxy :8012 (embeddings)
-                       → OmniRoute :20128 (expansion model)
+`bin/brain-sync.py` unterstützt absichtlich ausschließlich einen idempotenten, kuratierten Export:
+
+```text
+gbrain --(nur markierte Einträge)--> Cognee
+Cognee ----------------------------X gbrain
 ```
 
 ### Everyday
 
 ```bash
-gbrain stats                              # pages, links, tags
-gbrain search "credentials"               # keyword search
-gbrain query "Was ist SIN-Save-Token?"    # hybrid search (vector + LLM expansion)
-python3 bin/brain-sync.py gbrain2cognee   # sync gbrain → Cognee
-python3 bin/brain-sync.py cognee2gbrain   # sync Cognee → gbrain
+gbrain stats
+
+gbrain search "credentials"
+python3 bin/brain-sync.py export --dry-run
+python3 bin/brain-sync.py export
+python3 bin/brain-sync.py status
 ```
 
-### E2E Test
+Nur Einträge mit expliziten Export-Markern beziehungsweise erlaubten Memory-Typen werden übertragen. Es gibt keine automatische Rücksynchronisation, damit keine Dubletten, Feedback-Schleifen oder mehrfaches Retrieval entstehen.
+
+### E2E-Gate
 
 ```bash
-bin/e2e-memory-test.sh    # 14 checks: services, gbrain, Cognee, sync, agent configs
+bash bin/e2e-memory-test.sh
+```
+
+Das Gate prüft Dienste, Portkonsistenz, Routing-Konfiguration und die Einweg-Sync-Policy ohne Testdaten dauerhaft in Cognee zu schreiben.
+
+Für den vollständigen lokalen Rollout einschließlich Unix-Modus-Reparatur, Tests, Minimal-MCP-Konvergenz, Doctor und Smoke-Benchmark:
+
+```bash
+bash bin/apply-token-minimal-local.sh
 ```
 
 ---

@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opensin.invalid/schemas/benchmark-report.schema.json",
+  "title": "SIN Context A/B/C Benchmark Report",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generated_at",
+    "claimable_abc_comparison",
+    "task_set_hash",
+    "variants",
+    "errors",
+    "environment"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "claimable_abc_comparison": {
+      "type": "boolean"
+    },
+    "task_set_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "variants": {
+      "type": "object",
+      "required": ["baseline", "sst", "full_stack"],
+      "additionalProperties": false,
+      "properties": {
+        "baseline": {"$ref": "#/$defs/variant"},
+        "sst": {"$ref": "#/$defs/variant"},
+        "full_stack": {"$ref": "#/$defs/variant"}
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "environment": {
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "variant": {
+      "type": "object",
+      "required": ["runs"],
+      "properties": {
+        "runs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/run"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "run": {
+      "type": "object",
+      "required": ["task_id", "variant", "metrics"],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "variant": {
+          "enum": ["baseline", "sst", "full_stack"]
+        },
+        "metrics": {
+          "$ref": "#/$defs/metrics"
+        }
+      },
+      "additionalProperties": true
+    },
+    "metrics": {
+      "type": "object",
+      "required": [
+        "input_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "output_tokens",
+        "duration_ms",
+        "success",
+        "provider_attempts",
+        "cache_hit"
+      ],
+      "properties": {
+        "input_tokens": {"type": "integer", "minimum": 0},
+        "cache_read_tokens": {"type": "integer", "minimum": 0},
+        "cache_write_tokens": {"type": "integer", "minimum": 0},
+        "output_tokens": {"type": "integer", "minimum": 0},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "success": {"type": "boolean"},
+        "provider_attempts": {"type": "integer", "minimum": 0},
+        "cache_hit": {"type": "boolean"}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

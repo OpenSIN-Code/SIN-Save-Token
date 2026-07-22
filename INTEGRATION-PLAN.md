@@ -11,39 +11,36 @@
                     Codex GPT-5.6 Sol
                     (Planung, Entscheidung, Verifikation)
                            │
-                    Simone MCP
-                    (Task-/Workflowzustand)
-                           │
           ┌────────────────┼────────────────┐
           │                │                │
       sin-orca       sin-context     sin-review-context
-      (Worker-       (Retrieval-     (Diff-/Review-
-       Ausführung)     Broker)         Intelligence)
+      (Worker-       (einziges       (Diff-/Review-
+       Ausführung)    Retrieval-Gate) Intelligence)
           │                │                │
-    Capability-       Graphify        code-review-graph
-      Loader       (Knowledge/      (Diff/Flows/Test-
-          │        Architecture)     Gaps/Risk)
-     ┌────┴────┐        │                │
-   explore  implement   │                │
-   research  verify     │                │
-   review               │                │
-          │                │                │
-          └────────────────┼────────────────┘
+    Capability-      Route nach       code-review-graph
+      Loader         Aufgabenart      (Diff/Flows/Test-
+          │          ┌────┼────┐       Gaps/Risk)
+     ┌────┴────┐  Simone Graphify Cognee
+   explore implement Symbol  Architektur Memory
+   research verify   │        │        │
+   review             └────────┴────────┘
                            │
-                 L1/L2/L3 Memory Layer
+                 begrenztes Context-Paket
                            │
                     actual Git-Diff
                     Tests / Typecheck / Lint
 ```
 
+Simone kann zusätzlich Task-/Workflowzustand verwalten, ist aber kein paralleles automatisches Kontext-Gate neben `sin-context`.
+
 ## Responsibility Matrix
 
 | Component | Responsibility | Stores |
 |---|---|---|
-| Simone MCP | Task definitions, steps, acceptance criteria, research plans, checkpoint/review status, evidence references, architecture decisions, activity/event log | task.json, events.jsonl, decisions.json |
+| Simone MCP | Precise symbol/reference/LSP navigation plus task definitions, steps, acceptance criteria and checkpoints | task.json, events.jsonl, decisions.json |
 | sin-orca | Worker dispatch, capability loading, intervention, verification, blind review orchestration | task state, command history, activity |
-| sin-context | Unified retrieval broker across all sources | cache, query routing |
-| Graphify | General code understanding, symbol search, paths, architecture, rationale, ADRs | knowledge graph |
+| sin-context | Only automatic retrieval broker; selects at most two providers and emits one bounded context packet | cache, query routing, provider health |
+| Graphify | LLM-free code graph, paths, dependencies, architecture, rationale and ADRs | knowledge graph |
 | code-review-graph | Diff analysis, changed function mapping, affected flows, test gaps, risk signals | review artifacts |
 | DeepTutor principles | Research decomposition, citation management, memory layers | L1/L2/L3 memory |
 | Codex GPT-5.6 Sol | Planning, evaluation, final decision | decisions only |

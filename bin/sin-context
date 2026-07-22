@@ -28,8 +28,16 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 from sin_context.evidence_firewall import render_for_model, wrap_evidence  # noqa: E402
+from sin_context.provider_runtime import (  # noqa: E402
+    ProviderRuntime,
+    ProviderSpec,
+    load_provider_specs,
+)
+
 DEFAULT_POLICY = ROOT / "config" / "context-policy.json"
+DEFAULT_PROVIDER_CONFIG = ROOT / "config" / "provider-runtime.json"
 DEFAULT_CACHE = Path.home() / ".cache" / "sin-save-token" / "context.sqlite3"
+DEFAULT_PROVIDER_HEALTH = Path.home() / ".cache" / "sin" / "provider-health.sqlite3"
 
 WORD_PATTERN = re.compile(r"[A-Za-zÀ-ÿ0-9_]+")
 
@@ -46,6 +54,14 @@ class CachedResult:
     provider: str
     text: str
     is_negative: bool
+
+
+@dataclass(frozen=True)
+class ProviderOutcome:
+    result: ProviderResult | None
+    status: str
+    cache_negative: bool = False
+    duration_ms: int | None = None
 
 
 def load_policy(path: Path) -> dict[str, Any]:
@@ -180,80 +196,185 @@ class ContextCache:
         self.connection.commit()
 
 
-def executable_exists(name: str) -> bool:
-    from shutil import which
-    return which(name) is not None
+def with_argv(spec: ProviderSpec, argv: list[str]) -> ProviderSpec:
+    """Clone a provider spec while preserving its health policy."""
+    return ProviderSpec(
+        name=spec.name,
+        argv=argv,
+        timeout_seconds=spec.timeout_seconds,
+        maximum_output_chars=spec.maximum_output_chars,
+        failure_threshold=spec.failure_threshold,
+        cooldown_seconds=spec.cooldown_seconds,
+    )
 
 
-def run_command(argv: list[str], *, cwd: str, timeout: int = 25) -> str:
+def call_runtime_provider(
+    provider_name: str,
+    *,
+    cwd: str,
+    variables: dict[str, str],
+    runtime: ProviderRuntime,
+    specs: dict[str, ProviderSpec],
+    argv_override: list[str] | None = None,
+) -> ProviderOutcome:
+    spec = specs.get(provider_name)
+    if spec is None:
+        return ProviderOutcome(None, "unconfigured")
+
+    if argv_override is not None:
+        spec = with_argv(spec, argv_override)
+
     try:
-        process = subprocess.run(argv, cwd=cwd, text=True, capture_output=True, timeout=timeout, check=False, env=os.environ.copy())
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
-    output = process.stdout.strip()
-    if process.returncode != 0 and not output:
-        return ""
-    return output
+        raw = runtime.call(
+            spec,
+            cwd=Path(cwd).resolve(),
+            variables=variables,
+        )
+    except (OSError, ValueError) as error:
+        return ProviderOutcome(None, f"configuration-error:{error}")
 
+    status = str(raw.get("status", "unknown"))
+    duration_ms = raw.get("duration_ms")
+    if raw.get("ok") is not True:
+        return ProviderOutcome(
+            None,
+            status,
+            cache_negative=False,
+            duration_ms=int(duration_ms) if duration_ms is not None else None,
+        )
 
-def provider_graphify(query: str, cwd: str) -> ProviderResult | None:
-    if not executable_exists("graphify"):
-        return None
-    output = run_command(["graphify", "explain", query], cwd=cwd)
+    output = str(raw.get("output", "")).strip()
     if not output:
-        output = run_command(["graphify", "query", query], cwd=cwd)
-    return ProviderResult("graphify", output) if output else None
+        return ProviderOutcome(
+            None,
+            "empty",
+            cache_negative=True,
+            duration_ms=int(duration_ms) if duration_ms is not None else None,
+        )
+
+    return ProviderOutcome(
+        ProviderResult(provider_name, output),
+        "completed",
+        cache_negative=False,
+        duration_ms=int(duration_ms) if duration_ms is not None else None,
+    )
 
 
-def provider_simone(query: str, cwd: str) -> ProviderResult | None:
-    command = os.environ.get("SIN_SIMONE_QUERY_COMMAND", "simone-query")
-    argv = shlex.split(command)
-    if not argv or not executable_exists(argv[0]):
-        return None
-    output = run_command([*argv, query], cwd=cwd)
-    return ProviderResult("simone", output) if output else None
+def provider_graphify(
+    query: str,
+    cwd: str,
+    runtime: ProviderRuntime,
+    specs: dict[str, ProviderSpec],
+) -> ProviderOutcome:
+    return call_runtime_provider(
+        "graphify",
+        cwd=cwd,
+        variables={"query": query},
+        runtime=runtime,
+        specs=specs,
+    )
 
 
-def provider_sin_code(query: str, cwd: str) -> ProviderResult | None:
-    if not executable_exists("sin"):
-        return None
-    output = run_command(["sin", "code", "map", "--query", query], cwd=cwd)
-    if not output:
-        output = run_command(["sin", "code", "grasp", query], cwd=cwd)
-    return ProviderResult("sin-code", output) if output else None
+def provider_simone(
+    query: str,
+    cwd: str,
+    runtime: ProviderRuntime,
+    specs: dict[str, ProviderSpec],
+) -> ProviderOutcome:
+    command = os.environ.get("SIN_SIMONE_QUERY_COMMAND", "").strip()
+    argv_override = None
+    if command:
+        argv = shlex.split(command)
+        if not argv:
+            return ProviderOutcome(None, "configuration-error:empty-simone-command")
+        argv_override = [*argv, "{query}"]
+
+    return call_runtime_provider(
+        "simone",
+        cwd=cwd,
+        variables={"query": query},
+        runtime=runtime,
+        specs=specs,
+        argv_override=argv_override,
+    )
 
 
-def provider_cognee(query: str, cwd: str) -> ProviderResult | None:
-    if not executable_exists("cognee-recall"):
-        return None
-    output = run_command(["cognee-recall", "--top-k", "5", query], cwd=cwd, timeout=45)
-    return ProviderResult("cognee", output) if output else None
+def provider_sin_code(
+    query: str,
+    cwd: str,
+    runtime: ProviderRuntime,
+    specs: dict[str, ProviderSpec],
+) -> ProviderOutcome:
+    return call_runtime_provider(
+        "sin-code",
+        cwd=cwd,
+        variables={"query": query},
+        runtime=runtime,
+        specs=specs,
+    )
 
 
-def provider_session_digest(query: str, cwd: str) -> ProviderResult | None:
+def provider_cognee(
+    query: str,
+    cwd: str,
+    runtime: ProviderRuntime,
+    specs: dict[str, ProviderSpec],
+) -> ProviderOutcome:
+    return call_runtime_provider(
+        "cognee",
+        cwd=cwd,
+        variables={"query": query},
+        runtime=runtime,
+        specs=specs,
+    )
+
+
+def provider_session_digest(
+    query: str,
+    cwd: str,
+    runtime: ProviderRuntime,
+    specs: dict[str, ProviderSpec],
+) -> ProviderOutcome:
     del query
-    if not executable_exists("session-digest"):
-        local_binary = ROOT / "bin" / "session-digest"
-        if not local_binary.exists():
-            return None
-        command = str(local_binary)
-    else:
-        command = "session-digest"
-    output = run_command([command, "--latest"], cwd=cwd, timeout=30)
-    return ProviderResult("session-digest", output) if output else None
+    local_binary = ROOT / "bin" / "session-digest"
+    argv_override = [str(local_binary), "--latest"] if local_binary.exists() else None
+    return call_runtime_provider(
+        "session-digest",
+        cwd=cwd,
+        variables={},
+        runtime=runtime,
+        specs=specs,
+        argv_override=argv_override,
+    )
 
 
-def provider_agent_grep(query: str, cwd: str) -> ProviderResult | None:
-    local_binary = ROOT / "bin" / "agent-grep"
-    command = str(local_binary) if local_binary.exists() else "agent-grep"
-    if command == "agent-grep" and not executable_exists(command):
-        return None
+def provider_agent_grep(
+    query: str,
+    cwd: str,
+    runtime: ProviderRuntime,
+    specs: dict[str, ProviderSpec],
+) -> ProviderOutcome:
     candidates = re.findall(r"[A-Za-z_][A-Za-z0-9_.:/-]{2,}", query)
-    stop = {"where", "what", "which", "when", "code", "file", "function", "class", "warum", "welche", "wo", "datei", "funktion"}
+    stop = {
+        "where", "what", "which", "when", "code", "file", "function",
+        "class", "warum", "welche", "wo", "datei", "funktion",
+    }
     terms = [term for term in candidates if term.lower() not in stop]
     pattern = terms[-1] if terms else query
-    output = run_command([command, pattern, "."], cwd=cwd)
-    return ProviderResult("agent-grep", output) if output else None
+    local_binary = ROOT / "bin" / "agent-grep"
+    argv_override = (
+        [str(local_binary), "{pattern}", "."]
+        if local_binary.exists()
+        else None
+    )
+    return call_runtime_provider(
+        "agent-grep",
+        cwd=cwd,
+        variables={"pattern": pattern},
+        runtime=runtime,
+        specs=specs,
+        argv_override=argv_override,
+    )
 
 
 PROVIDERS = {
@@ -327,6 +448,16 @@ def main() -> int:
     parser.add_argument("query", nargs="+")
     parser.add_argument("--cwd", default=os.getcwd())
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
+    parser.add_argument(
+        "--provider-config",
+        type=Path,
+        default=DEFAULT_PROVIDER_CONFIG,
+    )
+    parser.add_argument(
+        "--provider-health",
+        type=Path,
+        default=DEFAULT_PROVIDER_HEALTH,
+    )
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -344,19 +475,31 @@ def main() -> int:
     maximum_attempts = int(policy["retrieval"].get("maximum_provider_attempts", 2))
     cache = ContextCache(args.cache)
 
+    try:
+        provider_specs = load_provider_specs(args.provider_config)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        print(f"invalid provider runtime config: {error}", file=sys.stderr)
+        return 2
+    provider_runtime = ProviderRuntime(state_path=args.provider_health)
+
     # Load packet builder
     packet_spec = importlib.util.spec_from_file_location(
         "sin_context_packet", ROOT / "bin" / "sin-context-packet.py"
     )
     packet_mod = importlib.util.module_from_spec(packet_spec)
+    sys.modules["sin_context_packet"] = packet_mod
     packet_spec.loader.exec_module(packet_mod)
 
     attempted: list[str] = []
+    attempt_details: list[dict[str, Any]] = []
 
     for provider_name in route["providers"][:maximum_attempts]:
         attempted.append(provider_name)
         provider = PROVIDERS.get(provider_name)
         if provider is None:
+            attempt_details.append(
+                {"provider": provider_name, "status": "unknown-provider"}
+            )
             continue
 
         key = cache_key(
@@ -373,21 +516,51 @@ def main() -> int:
 
         if cached is not None:
             if cached.is_negative:
+                attempt_details.append(
+                    {"provider": provider_name, "status": "negative-cache"}
+                )
                 continue
+            attempt_details.append(
+                {"provider": provider_name, "status": "cache-hit"}
+            )
             text = truncate_to_tokens(cached.text, budget)
             if args.packet:
                 packet = packet_mod.build_packet(text, provider_name, route["name"], approximate_tokens(text))
                 print(packet.to_json())
             elif args.json:
-                payload = {"route": route["name"], "provider": provider_name, "cached": True, "approx_tokens": approximate_tokens(text), "context": text}
+                payload = {
+                    "route": route["name"],
+                    "provider": provider_name,
+                    "cached": True,
+                    "approx_tokens": approximate_tokens(text),
+                    "attempts": attempt_details,
+                    "context": text,
+                }
                 print(json.dumps(payload, ensure_ascii=False))
             else:
                 print(text)
             return 0
 
-        result = provider(query, args.cwd)
+        outcome = provider(
+            query,
+            args.cwd,
+            provider_runtime,
+            provider_specs,
+        )
+        attempt_details.append(
+            {
+                "provider": provider_name,
+                "status": outcome.status,
+                **(
+                    {"duration_ms": outcome.duration_ms}
+                    if outcome.duration_ms is not None
+                    else {}
+                ),
+            }
+        )
+        result = outcome.result
         if not useful(result):
-            if not args.no_cache:
+            if not args.no_cache and outcome.cache_negative:
                 cache.put(key, None, provider=provider_name)
             continue
 
@@ -414,14 +587,32 @@ def main() -> int:
             packet = packet_mod.build_packet(bounded.text, bounded.provider, route["name"], approximate_tokens(bounded.text))
             print(packet.to_json())
         elif args.json:
-            payload = {"route": route["name"], "provider": bounded.provider, "cached": False, "approx_tokens": approximate_tokens(bounded.text), "context": bounded.text}
+            payload = {
+                "route": route["name"],
+                "provider": bounded.provider,
+                "cached": False,
+                "approx_tokens": approximate_tokens(bounded.text),
+                "attempts": attempt_details,
+                "context": bounded.text,
+            }
             print(json.dumps(payload, ensure_ascii=False))
         else:
             print(bounded.text)
         return 0
 
     if args.json:
-        print(json.dumps({"route": route["name"], "provider": None, "cached": False, "attempted": attempted, "context": ""}))
+        print(
+            json.dumps(
+                {
+                    "route": route["name"],
+                    "provider": None,
+                    "cached": False,
+                    "attempted": attempted,
+                    "attempts": attempt_details,
+                    "context": "",
+                }
+            )
+        )
     elif args.packet:
         packet = packet_mod.build_packet("", "", route["name"], 0)
         packet.uncertainty = f"No useful context found. Attempted: {', '.join(attempted)}"

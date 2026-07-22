@@ -1,0 +1,399 @@
+#!/usr/bin/env python3
+"""Reproducible A/B/C benchmark for context retrieval cost and quality.
+
+The benchmark never invents a baseline. Commands for the unspecialized baseline
+and the deliberately full stack must be supplied explicitly so the same agent,
+model and task can be compared honestly against sin-context.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import platform
+import shlex
+import subprocess
+import sys
+import tempfile
+import time
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_TASKS = ROOT / "config" / "benchmark-tasks.json"
+DEFAULT_OUTPUT_DIR = ROOT / ".sin" / "audit"
+SIN_CONTEXT = ROOT / "bin" / "sin-context"
+
+
+@dataclass
+class RunResult:
+    task_id: str
+    mode: str
+    repetition: int
+    command: list[str]
+    exit_code: int
+    duration_ms: int
+    success: bool
+    expected_match: str | None
+    stdout_chars: int
+    stderr_chars: int
+    approx_output_tokens: int
+    provider: str | None = None
+    cached: bool | None = None
+    reported_approx_tokens: int | None = None
+    stdout_sha256: str = ""
+    stderr_tail: str = ""
+
+
+def approximate_tokens(text: str) -> int:
+    return max(0, (len(text) + 2) // 3)
+
+
+def load_tasks(path: Path) -> list[dict[str, Any]]:
+    document = json.loads(path.read_text(encoding="utf-8"))
+    tasks = document.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        raise ValueError("benchmark task file requires a non-empty tasks array")
+
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in tasks:
+        if not isinstance(item, dict):
+            raise ValueError("each benchmark task must be an object")
+        task_id = str(item.get("id", "")).strip()
+        query = str(item.get("query", "")).strip()
+        expected = item.get("expected_any", [])
+        if not task_id or not query:
+            raise ValueError("each benchmark task requires id and query")
+        if task_id in seen:
+            raise ValueError(f"duplicate benchmark task id: {task_id}")
+        if not isinstance(expected, list) or not all(
+            isinstance(marker, str) and marker for marker in expected
+        ):
+            raise ValueError(f"task {task_id}: expected_any must be a string list")
+        seen.add(task_id)
+        normalized.append(
+            {"id": task_id, "query": query, "expected_any": expected}
+        )
+    return normalized
+
+
+def render_external_command(template: str, *, query: str, cwd: Path) -> list[str]:
+    rendered = template.format(query=query, cwd=str(cwd))
+    argv = shlex.split(rendered)
+    if not argv:
+        raise ValueError("rendered benchmark command is empty")
+    return argv
+
+
+def sin_context_command(
+    *,
+    query: str,
+    cwd: Path,
+    cache: Path,
+    health: Path,
+    no_cache: bool,
+) -> list[str]:
+    argv = [
+        sys.executable,
+        str(SIN_CONTEXT),
+        query,
+        "--cwd",
+        str(cwd),
+        "--cache",
+        str(cache),
+        "--provider-health",
+        str(health),
+        "--json",
+    ]
+    if no_cache:
+        argv.append("--no-cache")
+    return argv
+
+
+def parse_sin_context_metadata(stdout: str) -> tuple[str | None, bool | None, int | None]:
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None, None, None
+    provider = payload.get("provider")
+    cached = payload.get("cached")
+    approx = payload.get("approx_tokens")
+    return (
+        str(provider) if provider else None,
+        bool(cached) if isinstance(cached, bool) else None,
+        int(approx) if isinstance(approx, int) else None,
+    )
+
+
+def evaluate_success(
+    *,
+    exit_code: int,
+    stdout: str,
+    expected_any: list[str],
+) -> tuple[bool, str | None]:
+    lowered = stdout.lower()
+    for marker in expected_any:
+        if marker.lower() in lowered:
+            return exit_code == 0, marker
+    if expected_any:
+        return False, None
+    return exit_code == 0 and bool(stdout.strip()), None
+
+
+def execute(
+    *,
+    task: dict[str, Any],
+    mode: str,
+    repetition: int,
+    argv: list[str],
+    cwd: Path,
+    timeout_seconds: int,
+) -> RunResult:
+    started = time.monotonic()
+    try:
+        process = subprocess.run(
+            argv,
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+            check=False,
+            env=os.environ.copy(),
+        )
+        exit_code = process.returncode
+        stdout = process.stdout
+        stderr = process.stderr
+    except subprocess.TimeoutExpired as error:
+        exit_code = 124
+        stdout = error.stdout if isinstance(error.stdout, str) else ""
+        stderr = error.stderr if isinstance(error.stderr, str) else ""
+        stderr += "\nbenchmark timeout"
+    except OSError as error:
+        exit_code = 127
+        stdout = ""
+        stderr = str(error)
+
+    duration_ms = int((time.monotonic() - started) * 1000)
+    success, marker = evaluate_success(
+        exit_code=exit_code,
+        stdout=stdout,
+        expected_any=task["expected_any"],
+    )
+    provider = cached = reported = None
+    if mode.startswith("sst-"):
+        provider, cached, reported = parse_sin_context_metadata(stdout)
+
+    return RunResult(
+        task_id=task["id"],
+        mode=mode,
+        repetition=repetition,
+        command=argv,
+        exit_code=exit_code,
+        duration_ms=duration_ms,
+        success=success,
+        expected_match=marker,
+        stdout_chars=len(stdout),
+        stderr_chars=len(stderr),
+        approx_output_tokens=approximate_tokens(stdout),
+        provider=provider,
+        cached=cached,
+        reported_approx_tokens=reported,
+        stdout_sha256=hashlib.sha256(stdout.encode("utf-8")).hexdigest(),
+        stderr_tail=stderr.strip()[-1000:],
+    )
+
+
+def summarize(results: list[RunResult]) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    modes = sorted({result.mode for result in results})
+    for mode in modes:
+        selected = [result for result in results if result.mode == mode]
+        durations = sorted(result.duration_ms for result in selected)
+        tokens = sorted(result.approx_output_tokens for result in selected)
+        successes = sum(1 for result in selected if result.success)
+        middle = len(selected) // 2
+        summary[mode] = {
+            "runs": len(selected),
+            "successes": successes,
+            "success_rate": successes / len(selected) if selected else 0.0,
+            "duration_ms_total": sum(durations),
+            "duration_ms_median": durations[middle] if durations else None,
+            "approx_output_tokens_total": sum(tokens),
+            "approx_output_tokens_median": tokens[middle] if tokens else None,
+        }
+    return summary
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--tasks", type=Path, default=DEFAULT_TASKS)
+    parser.add_argument("--cwd", type=Path, default=ROOT)
+    parser.add_argument("--out", type=Path)
+    parser.add_argument("--repetitions", type=int, default=1)
+    parser.add_argument("--timeout-seconds", type=int, default=180)
+    parser.add_argument(
+        "--baseline-command",
+        default=os.environ.get("SST_BENCH_BASELINE_COMMAND", ""),
+        help="command template for no-SST run; supports {query} and {cwd}",
+    )
+    parser.add_argument(
+        "--full-stack-command",
+        default=os.environ.get("SST_BENCH_FULL_STACK_COMMAND", ""),
+        help="command template for all-systems run; supports {query} and {cwd}",
+    )
+    parser.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="record SST-only results when external A/C commands are unavailable",
+    )
+    args = parser.parse_args()
+
+    if args.repetitions < 1:
+        parser.error("--repetitions must be at least 1")
+
+    cwd = args.cwd.resolve()
+    tasks = load_tasks(args.tasks.resolve())
+    missing_modes = []
+    if not args.baseline_command:
+        missing_modes.append("baseline")
+    if not args.full_stack_command:
+        missing_modes.append("full-stack")
+    if missing_modes and not args.allow_partial:
+        print(
+            "Missing required comparable commands: " + ", ".join(missing_modes),
+            file=sys.stderr,
+        )
+        print(
+            "Set SST_BENCH_BASELINE_COMMAND and SST_BENCH_FULL_STACK_COMMAND "
+            "or pass --allow-partial for a non-claimable SST smoke benchmark.",
+            file=sys.stderr,
+        )
+        return 2
+
+    results: list[RunResult] = []
+    with tempfile.TemporaryDirectory(prefix="sst-benchmark-") as temporary:
+        temp = Path(temporary)
+        for repetition in range(1, args.repetitions + 1):
+            for task in tasks:
+                if args.baseline_command:
+                    results.append(
+                        execute(
+                            task=task,
+                            mode="baseline",
+                            repetition=repetition,
+                            argv=render_external_command(
+                                args.baseline_command,
+                                query=task["query"],
+                                cwd=cwd,
+                            ),
+                            cwd=cwd,
+                            timeout_seconds=args.timeout_seconds,
+                        )
+                    )
+
+                cold_cache = temp / f"cold-{repetition}-{task['id']}.sqlite3"
+                cold_health = temp / f"health-{repetition}-{task['id']}.sqlite3"
+                results.append(
+                    execute(
+                        task=task,
+                        mode="sst-cold",
+                        repetition=repetition,
+                        argv=sin_context_command(
+                            query=task["query"],
+                            cwd=cwd,
+                            cache=cold_cache,
+                            health=cold_health,
+                            no_cache=True,
+                        ),
+                        cwd=cwd,
+                        timeout_seconds=args.timeout_seconds,
+                    )
+                )
+
+                warm_cache = temp / f"warm-{repetition}-{task['id']}.sqlite3"
+                warm_health = temp / f"warm-health-{repetition}-{task['id']}.sqlite3"
+                warmup = sin_context_command(
+                    query=task["query"],
+                    cwd=cwd,
+                    cache=warm_cache,
+                    health=warm_health,
+                    no_cache=False,
+                )
+                execute(
+                    task=task,
+                    mode="sst-warmup",
+                    repetition=repetition,
+                    argv=warmup,
+                    cwd=cwd,
+                    timeout_seconds=args.timeout_seconds,
+                )
+                results.append(
+                    execute(
+                        task=task,
+                        mode="sst-warm",
+                        repetition=repetition,
+                        argv=warmup,
+                        cwd=cwd,
+                        timeout_seconds=args.timeout_seconds,
+                    )
+                )
+
+                if args.full_stack_command:
+                    results.append(
+                        execute(
+                            task=task,
+                            mode="full-stack",
+                            repetition=repetition,
+                            argv=render_external_command(
+                                args.full_stack_command,
+                                query=task["query"],
+                                cwd=cwd,
+                            ),
+                            cwd=cwd,
+                            timeout_seconds=args.timeout_seconds,
+                        )
+                    )
+
+    timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    output = args.out or DEFAULT_OUTPUT_DIR / f"context-benchmark-{timestamp}.json"
+    output = output.resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    report = {
+        "schema_version": 1,
+        "generated_at_unix": int(time.time()),
+        "claimable_abc_comparison": not missing_modes,
+        "missing_modes": missing_modes,
+        "repository": str(cwd),
+        "tasks_file": str(args.tasks.resolve()),
+        "repetitions": args.repetitions,
+        "environment": {
+            "python": sys.version,
+            "platform": platform.platform(),
+        },
+        "summary": summarize(results),
+        "runs": [asdict(result) for result in results],
+    }
+    output.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(output)
+
+    required_modes = {"sst-cold", "sst-warm"}
+    if not missing_modes:
+        required_modes |= {"baseline", "full-stack"}
+    failed = [
+        result
+        for result in results
+        if result.mode in required_modes and not result.success
+    ]
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

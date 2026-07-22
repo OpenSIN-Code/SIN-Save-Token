@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "description": "Representative retrieval tasks for identical A/B/C context-cost comparison.",
+  "tasks": [
+    {
+      "id": "symbol-navigation",
+      "query": "Which function calls repository_fingerprint and where is it defined?",
+      "expected_any": ["repository_fingerprint", "sin-context"]
+    },
+    {
+      "id": "architecture-flow",
+      "query": "Explain the provider routing architecture and the data flow through sin-context.",
+      "expected_any": ["provider", "route", "sin-context"]
+    },
+    {
+      "id": "domain-decision",
+      "query": "Why is Cognee the canonical durable memory and why is reverse sync disabled?",
+      "expected_any": ["Cognee", "canonical", "sync"]
+    },
+    {
+      "id": "session-resume",
+      "query": "Resume the latest session and state where work stopped.",
+      "expected_any": ["session", "resume", "latest"]
+    },
+    {
+      "id": "text-fallback",
+      "query": "Find maximum_provider_attempts in this repository.",
+      "expected_any": ["maximum_provider_attempts", "context-policy.json"]
+    }
+  ]
+}

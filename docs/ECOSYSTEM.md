@@ -36,7 +36,7 @@ Re-run either installer anytime; both are idempotent.
 |---------|-----------------|-----------|
 | House rules text | wow `shared/AGENTS.md` | All agents via symlink/import |
 | MCP server list | wow `shared/mcp/servers.json` | Merged into real agent configs |
-| L2 budget / always-on policy | **TBD joint** (issue: L2 budget) | wow registry tags + SST `verify-tokens` |
+| L2 budget / task-profile policy | wow `shared/mcp/servers.json` + `task-profiles.json` | wow generator/doctor + SST `verify-tokens` |
 | L1 rtk behavior | SST hooks + `rtk` binary | Claude PreToolUse, opencode plugin, Codex RTK.md |
 | L3 memory backends | SST: claude-mem (session) + Cognee fleet CLI (domain graph) | All runtimes |
 | agent-grep binary | SST `bin/agent-grep` | wow doctor PATH check; house rules |
@@ -60,15 +60,17 @@ Source of truth: **wow-my-zsh** `shared/mcp/servers.json` fields:
 
 | Profile | Command | Effect |
 |---------|---------|--------|
-| **core** (default) | `./install.sh` or `--profile core` | Merge always_on only; prune managed optionals |
-| **full** | `./install.sh --profile full` | All registry servers for each agent |
+| **minimal** (default) | `./install.sh` or `--profile minimal` | Zero managed MCP servers; lowest schema tax |
+| **core** | `./install.sh --profile core` | Only `always_on=true` servers; currently zero |
+| **task** | `bin/sin-mcp-profile <task> <agent>` | Capability-based set with a hard cap of one or two servers |
+| **full** | `SIN_ADMIN_CONFIRM=1 ./install.sh --profile full` | All registry servers for each agent; explicit administrative opt-in |
 
 Enforcement:
 
-- wow `doctor.sh` — missing core or leftover optionals under profile=core → drift
-- SST `verify-tokens` — optional in live config → 🚨 unless `SST_ALLOW_OPTIONAL_MCP=1`
+- wow `doctor.sh` — any managed server under `minimal`, or disallowed server under `core`, is drift
+- SST `verify-tokens` — managed MCPs outside the selected budget fail unless an explicit diagnostic override is set
 
-Core allowlist (current): `context7`, `serena`, `tavily`.
+Core allowlist (current): **empty**. Tool access is selected per task, not globally preloaded.
 
 ## Change rules
 
@@ -80,14 +82,15 @@ Core allowlist (current): `context7`, `serena`, `tavily`.
 ## Memory stack (current + proposed)
 
 ```
-code structure     graphify (CLI, 0 LLM)
-session observations  claude-mem (shared DB)
-domain graph memory   Cognee fleet (CLI HTTP :8011)
-                        embed: NVIDIA NIM free → mxbai local fallback (:8012)
-                        LLM cognify: OmniRoute → GLM 5.2 (Vercel AI Gateway)
-                      see docs/COGNEE-COST-POLICY.md + README "Cognee fleet"
-code AST/LSP          simone (fix health)
-resume / lessons      session-digest, dream (SST CLIs)
+code structure         graphify (CLI, 0 LLM)
+code symbols/LSP       Simone (primary for symbol navigation)
+session observations   claude-mem (short-lived, pull-based)
+domain graph memory    Cognee fleet (only canonical durable memory; CLI HTTP :8011)
+                         embed: NVIDIA NIM / local fallback (:8012)
+                         LLM cognify: OmniRoute
+curated staging         gbrain → one-way curated export to Cognee
+archive / plans         global-brain, on-demand; no default prompt injection
+resume / lessons        session-digest, dream (SST CLIs)
 ```
 
 Do not add a fourth overlapping “brain” without a measured ROI gate.
