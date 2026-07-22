@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "providers": {
+    "symbol_navigation": {
+      "primary": "simone",
+      "fallback": "agent-grep"
+    },
+    "general_code_graph": {
+      "primary": "graphify",
+      "fallback": "gitnexus",
+      "allow_simultaneous_execution": false
+    },
+    "change_review": {
+      "primary": "code-review-graph",
+      "supplementary": [
+        "sin-code-intent-based-diffing"
+      ]
+    },
+    "verification": {
+      "primary": "sin-code-verification-oracle",
+      "supplementary": [
+        "repository-native-tests",
+        "typechecker",
+        "linter"
+      ]
+    },
+    "project_memory": {
+      "primary": "cognee"
+    },
+    "local_code_memory": {
+      "primary": "simone-hybrid-memory"
+    },
+    "session_resume": {
+      "primary": "session-digest"
+    }
+  },
+  "rules": {
+    "never_run_graphify_and_gitnexus_for_the_same_query": true,
+    "never_treat_graph_risk_as_ground_truth": true,
+    "never_accept_code_without_controller_verification": true,
+    "never_expose_raw_worker_transcripts_to_codex": true,
+    "never_install_external_mcp_integrations_automatically": true
+  }
+}

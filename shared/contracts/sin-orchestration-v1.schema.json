@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opensin.local/contracts/sin-orchestration-v1.schema.json",
+  "title": "SIN Orchestration Envelope",
+  "type": "object",
+  "required": ["schema_version", "kind", "payload"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"enum": ["task", "checkpoint", "worker_report", "review", "event", "artifact"]},
+    "payload": {"type": "object"}
+  },
+  "$defs": {
+    "step": {
+      "type": "object",
+      "required": ["id", "instruction"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^S[0-9]{2,}$"},
+        "instruction": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "task": {
+      "type": "object",
+      "required": ["task_id", "task_hash", "base_sha", "role", "objective", "allowed_paths", "steps", "acceptance_criteria"],
+      "properties": {
+        "task_id": {"type": "string", "minLength": 3},
+        "task_hash": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "base_sha": {"type": "string", "pattern": "^[a-f0-9]{40,64}$"},
+        "role": {"enum": ["explorer", "librarian", "implementer", "reviewer"]},
+        "objective": {"type": "string", "minLength": 1},
+        "allowed_paths": {"type": "array", "items": {"type": "string"}},
+        "forbidden_paths": {"type": "array", "items": {"type": "string"}, "default": []},
+        "steps": {"type": "array", "items": {"$ref": "#/$defs/step"}, "minItems": 1},
+        "acceptance_criteria": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "text"],
+            "properties": {
+              "id": {"type": "string", "pattern": "^AC[0-9]{2,}$"},
+              "text": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": false
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["source", "sha256"],
+      "properties": {
+        "source": {"type": "string"},
+        "path": {"type": "string"},
+        "start_line": {"type": "integer", "minimum": 1},
+        "end_line": {"type": "integer", "minimum": 1},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "claim": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "checkpoint": {
+      "type": "object",
+      "required": ["task_id", "task_hash", "base_sha", "sequence", "checkpoint", "step_id", "status"],
+      "properties": {
+        "task_id": {"type": "string"},
+        "task_hash": {"type": "string"},
+        "base_sha": {"type": "string"},
+        "sequence": {"type": "integer", "minimum": 1},
+        "checkpoint": {"type": "string"},
+        "step_id": {"type": ["string", "null"]},
+        "status": {"enum": ["waiting", "blocked", "complete", "failed"]},
+        "claims": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
+        "changed_files": {"type": "array", "items": {"type": "string"}},
+        "next_requested_step": {"type": ["string", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "review": {
+      "type": "object",
+      "required": ["task_id", "task_hash", "verdict", "criteria", "scope_violation", "regressions", "unverified"],
+      "properties": {
+        "task_id": {"type": "string"},
+        "task_hash": {"type": "string"},
+        "verdict": {"enum": ["accept", "reject"]},
+        "criteria": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "status", "evidence"],
+            "properties": {
+              "id": {"type": "string"},
+              "status": {"enum": ["proven", "failed", "unverified"]},
+              "evidence": {"type": "array", "items": {"type": "string"}}
+            },
+            "additionalProperties": false
+          }
+        },
+        "scope_violation": {"type": "boolean"},
+        "regressions": {"type": "array"},
+        "unverified": {"type": "array"}
+      },
+      "additionalProperties": false
+    },
+    "event": {
+      "type": "object",
+      "required": ["sequence", "type", "timestamp", "payload", "previous_hash", "event_hash"],
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 1},
+        "type": {"type": "string"},
+        "timestamp": {"type": "string", "format": "date-time"},
+        "payload": {"type": "object"},
+        "previous_hash": {"type": "string"},
+        "event_hash": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

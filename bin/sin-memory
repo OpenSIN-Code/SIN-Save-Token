@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""sin-memory – Memory-Layer CLI."""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from sin_memory import MemoryStore
+
+
+def get_store() -> MemoryStore:
+    root = Path.home() / ".local" / "state" / "sin-memory"
+    return MemoryStore(root)
+
+
+def command_write_l1(args: argparse.Namespace) -> int:
+    store = get_store()
+    event = store.append_l1_event(args.task_id, args.event_type, json.loads(args.payload))
+    print(json.dumps(event, indent=2))
+    return 0
+
+
+def command_read_l1(args: argparse.Namespace) -> int:
+    store = get_store()
+    events = store.read_l1_events(args.task_id)
+    print(json.dumps(events, indent=2))
+    return 0
+
+
+def command_write_l2(args: argparse.Namespace) -> int:
+    store = get_store()
+    entry = store.write_l2_summary(args.topic, args.content)
+    print(json.dumps(entry, indent=2))
+    return 0
+
+
+def command_read_l2(args: argparse.Namespace) -> int:
+    store = get_store()
+    entry = store.read_l2_summary(args.topic)
+    if entry:
+        print(json.dumps(entry, indent=2))
+    else:
+        print(json.dumps({"error": "not_found"}))
+        return 1
+    return 0
+
+
+def command_list_l2(args: argparse.Namespace) -> int:
+    store = get_store()
+    topics = store.list_l2_topics()
+    print(json.dumps(topics))
+    return 0
+
+
+def command_write_l3(args: argparse.Namespace) -> int:
+    store = get_store()
+    entry = store.write_l3_decision(args.decision_id, args.decision, args.rationale)
+    print(json.dumps(entry, indent=2))
+    return 0
+
+
+def command_read_l3(args: argparse.Namespace) -> int:
+    store = get_store()
+    entry = store.read_l3_decision(args.decision_id)
+    if entry:
+        print(json.dumps(entry, indent=2))
+    else:
+        print(json.dumps({"error": "not_found"}))
+        return 1
+    return 0
+
+
+def command_list_l3(args: argparse.Namespace) -> int:
+    store = get_store()
+    decisions = store.list_l3_decisions()
+    print(json.dumps(decisions))
+    return 0
+
+
+def command_context(args: argparse.Namespace) -> int:
+    store = get_store()
+    ctx = store.context_for_task({})
+    print(json.dumps(ctx, indent=2))
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="sin-memory", description="Memory-Layer CLI")
+    sub = parser.add_subparsers(dest="command")
+
+    p = sub.add_parser("write-l1")
+    p.add_argument("task_id")
+    p.add_argument("event_type")
+    p.add_argument("payload")
+
+    p = sub.add_parser("read-l1")
+    p.add_argument("task_id")
+
+    p = sub.add_parser("write-l2")
+    p.add_argument("topic")
+    p.add_argument("content")
+
+    p = sub.add_parser("read-l2")
+    p.add_argument("topic")
+
+    sub.add_parser("list-l2")
+
+    p = sub.add_parser("write-l3")
+    p.add_argument("decision_id")
+    p.add_argument("decision")
+    p.add_argument("rationale")
+
+    p = sub.add_parser("read-l3")
+    p.add_argument("decision_id")
+
+    sub.add_parser("list-l3")
+    sub.add_parser("context")
+
+    args = parser.parse_args()
+    if not args.command:
+        parser.print_help()
+        return 1
+
+    cmds = {
+        "write-l1": command_write_l1,
+        "read-l1": command_read_l1,
+        "write-l2": command_write_l2,
+        "read-l2": command_read_l2,
+        "list-l2": command_list_l2,
+        "write-l3": command_write_l3,
+        "read-l3": command_read_l3,
+        "list-l3": command_list_l3,
+        "context": command_context,
+    }
+    return cmds[args.command](args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

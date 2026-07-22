@@ -1,0 +1,36 @@
+{
+  "worker_control": {
+    "maximum_worker_steps": null,
+    "maximum_commands": null,
+    "maximum_wall_seconds": null,
+    "repeated_failure_policy": {
+      "maximum_identical_failures_without_codex_intervention": 2,
+      "compare_by": ["command", "exit_code", "normalized_error_hash"],
+      "action": "pause_for_codex"
+    },
+    "stalled_worker_policy": {
+      "enabled": true,
+      "maximum_inactive_seconds": 1200,
+      "ignore_while_child_process_running": true,
+      "action": "notify_codex"
+    },
+    "codex_context_policy": {
+      "maximum_checkpoint_chars": 8000,
+      "maximum_summary_chars": 16000,
+      "maximum_error_chars": 2000,
+      "allow_raw_terminal_transcript": false
+    }
+  },
+  "verification": {
+    "command_timeout_seconds": 600,
+    "maximum_output_chars": 4000,
+    "required_for_roles": ["implementer"]
+  },
+  "review": {
+    "required_for_roles": ["implementer"],
+    "blind": true,
+    "maximum_diff_chars": 60000,
+    "require_all_criteria_proven": true,
+    "preferred_agents": ["kilo-code", "opencode", "mimo-code"]
+  }
+}

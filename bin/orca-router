@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""orca-router — classify a task description → agent + model (no spawn).
+"""orca-router — classify a task description → worker role + suggested agent.
 
-Routing rule (owner-fixed):
-  trivial / default → mimo-code | opencode  (cheap)
-  heavy             → codex with model gpt-5.6-sol
+This is a role classifier, NOT an agent router.
+Codex decides which agent to use. This only suggests a worker role.
 
 Usage:
   orca-router "fix the typo in README"
@@ -12,14 +11,13 @@ Usage:
   orca-router --help
 
 stdout (machine-readable, single line):
-  agent=<mimo-code|opencode|codex> model=<gpt-5.6-sol|->
+  role=<explorer|librarian|implementer|reviewer> agent=<mimo-code|opencode|kilo-code>
 
 Env:
-  ORCA_DEFAULT_CHEAP=mimo-code|opencode   (default: mimo-code)
-  ORCA_HEAVY_MODEL=gpt-5.6-sol            (default: gpt-5.6-sol)
-
-No network. No spawn. Exit 0 always (empty input → default cheap).
+  ORCA_DEFAULT_EXPLORER=mimo-code   (default: mimo-code)
+  ORCA_DEFAULT_IMPLEMENTER=opencode (default: opencode)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -27,153 +25,84 @@ import os
 import re
 import sys
 
-HEAVY_MODEL_DEFAULT = "gpt-5.6-sol"
+DEFAULT_EXPLORER = os.environ.get("ORCA_DEFAULT_EXPLORER", "mimo-code")
+DEFAULT_IMPLEMENTER = os.environ.get("ORCA_DEFAULT_IMPLEMENTER", "opencode")
 
-# Keywords that push toward heavy (codex).
-HEAVY_KW = re.compile(
-    r"\b("
-    r"build|rebuild|refactor|rearchitect|architecture|audit|migrate|migration|"
-    r"multi[- ]?file|redesign|rewrite|implement|security|overhaul|benchmark|"
-    r"performance|optimize\s+system|full[- ]?stack|end[- ]?to[- ]?end|e2e|"
-    r"large|complex|subsystem|infra|infrastructure|deploy\s+pipeline|"
-    r"breaking\s+change|cross[- ]?cutting|system[- ]?wide"
-    r")\b",
-    re.I,
-)
+EXPLORER_PATTERNS = [
+    r"\b(search|find|grep|locate|discover|explore|investigate|trace|list)\b",
+    r"\b(welche|wo|suche|finde|entdecke|untersuche)\b",
+    r"\b(read|check|inspect|verify|audit|scan)\b",
+]
 
-# Keywords that push toward trivial/cheap.
-TRIVIAL_KW = re.compile(
-    r"\b("
-    r"read|lint|rename|typo|status|help|list|show|cat|grep|check|smoke|"
-    r"1[- ]?file|single[- ]?file|one[- ]?file|docs?|comment|format|"
-    r"prettier|eslint|typecheck|dry[- ]?run|version|ping|warmup|warm"
-    r")\b",
-    re.I,
-)
+LIBRARIAN_PATTERNS = [
+    r"\b(docs?|documentation|api|reference|manual|wiki|readme)\b",
+    r"\b(search web|web search|google|research|look up)\b",
+    r"\b(dependency|dependencies|package|npm|pip|cargo)\b",
+]
 
-# Explicit multi-file signals
-MULTI_FILE = re.compile(
-    r"\b(\d+)\s+files?\b|\bacross\s+\d+|\bmultiple\s+files?\b|\bmany\s+files?\b",
-    re.I,
-)
+REVIEWER_PATTERNS = [
+    r"\b(review|pr|pull request|diff|verify|validate|check)\b",
+    r"\b(test|tests|failing|broken|regression)\b",
+    r"\b(prüfe|validiere|teste)\b",
+]
+
+IMPLEMENTER_PATTERNS = [
+    r"\b(implement|fix|build|create|add|change|modify|update|refactor)\b",
+    r"\b(write|edit|patch|deploy|migrate)\b",
+    r"\b(erstelle|ändere|baue|fixe|implementiere)\b",
+]
 
 
-def default_cheap() -> str:
-    v = (os.environ.get("ORCA_DEFAULT_CHEAP") or "mimo-code").strip().lower()
-    if v in ("mimo-code", "mimo", "opencode"):
-        return "opencode" if v == "opencode" else "mimo-code"
-    return "mimo-code"
+def classify(text: str) -> tuple[str, str]:
+    lower = text.lower()
+
+    for pattern in REVIEWER_PATTERNS:
+        if re.search(pattern, lower):
+            return "reviewer", DEFAULT_IMPLEMENTER
+
+    for pattern in EXPLORER_PATTERNS:
+        if re.search(pattern, lower):
+            return "explorer", DEFAULT_EXPLORER
+
+    for pattern in LIBRARIAN_PATTERNS:
+        if re.search(pattern, lower):
+            return "librarian", DEFAULT_EXPLORER
+
+    for pattern in IMPLEMENTER_PATTERNS:
+        if re.search(pattern, lower):
+            return "implementer", DEFAULT_IMPLEMENTER
+
+    return "explorer", DEFAULT_EXPLORER
 
 
-def heavy_model() -> str:
-    return (os.environ.get("ORCA_HEAVY_MODEL") or HEAVY_MODEL_DEFAULT).strip() or HEAVY_MODEL_DEFAULT
+def explain(text: str) -> str:
+    role, agent = classify(text)
+    return f"role={role} agent={agent} reason=pattern-match"
 
 
-def classify(text: str) -> tuple[str, str, list[str]]:
-    """Return (agent, model, reasons)."""
-    reasons: list[str] = []
-    t = (text or "").strip()
-    if not t:
-        reasons.append("empty input → default cheap")
-        return default_cheap(), "-", reasons
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("query", nargs="*")
+    parser.add_argument("--explain", action="store_true")
+    args = parser.parse_args()
 
-    score = 0  # >0 heavy, <0 trivial
-    low = t.lower()
+    text = " ".join(args.query).strip()
 
-    if HEAVY_KW.search(t):
-        hits = HEAVY_KW.findall(t)
-        score += 2 + min(3, len(hits))
-        reasons.append(f"heavy keywords: {', '.join(dict.fromkeys(h.lower() if isinstance(h, str) else h[0].lower() for h in hits))}")
+    if not text and not sys.stdin.isatty():
+        text = sys.stdin.read().strip()
 
-    if TRIVIAL_KW.search(t):
-        hits = TRIVIAL_KW.findall(t)
-        score -= 2 + min(2, len(hits))
-        reasons.append(f"trivial keywords: {', '.join(dict.fromkeys(h.lower() if isinstance(h, str) else h[0].lower() for h in hits))}")
-
-    m = MULTI_FILE.search(t)
-    if m:
-        score += 3
-        reasons.append(f"multi-file signal: {m.group(0)!r}")
-
-    # Length / scope heuristic
-    words = re.findall(r"\w+", t)
-    n = len(words)
-    if n >= 40:
-        score += 2
-        reasons.append(f"long brief ({n} words)")
-    elif n <= 8 and score <= 0:
-        score -= 1
-        reasons.append(f"short brief ({n} words)")
-
-    # Path enumeration: many path-like tokens → heavy
-    paths = re.findall(r"[\w./-]+\.(?:py|js|ts|tsx|rs|go|md|json|yml|yaml|sh|toml)", t)
-    if len(paths) >= 3:
-        score += 2
-        reasons.append(f"{len(paths)} file paths mentioned")
-    elif len(paths) == 1 and score <= 0:
-        score -= 1
-        reasons.append("single file path")
-
-    # Explicit agent hints in the task text (owner override light)
-    if re.search(r"\b(use\s+)?codex\b|\bgpt-5\.6-sol\b|\bheavy\b", low):
-        score += 4
-        reasons.append("explicit heavy/codex hint")
-    if re.search(r"\b(use\s+)?(mimo-code|opencode|cheap|trivial)\b", low):
-        score -= 3
-        reasons.append("explicit cheap-agent hint")
-
-    if score >= 2:
-        reasons.append(f"score={score} → heavy")
-        return "codex", heavy_model(), reasons
-
-    reasons.append(f"score={score} → cheap")
-    return default_cheap(), "-", reasons
-
-
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(
-        prog="orca-router",
-        description="Classify task → agent=… model=… (routing only, no spawn).",
-    )
-    ap.add_argument("task", nargs="*", help="Task description (or stdin)")
-    ap.add_argument(
-        "--explain",
-        action="store_true",
-        help="Print routing reasons on stderr (stdout stays machine-readable).",
-    )
-    ap.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Same as normal classify (no side effects).",
-    )
-    ap.add_argument(
-        "--json",
-        action="store_true",
-        help="Emit JSON object instead of key=value line.",
-    )
-    args = ap.parse_args(argv)
-
-    if args.task:
-        text = " ".join(args.task)
-    elif not sys.stdin.isatty():
-        text = sys.stdin.read()
+    if not text:
+        role, agent = "explorer", DEFAULT_EXPLORER
     else:
-        text = ""
-
-    agent, model, reasons = classify(text)
+        role, agent = classify(text)
 
     if args.explain:
-        for r in reasons:
-            print(f"  reason: {r}", file=sys.stderr)
-
-    if args.json:
-        import json
-
-        print(json.dumps({"agent": agent, "model": model, "reasons": reasons}))
+        print(explain(text))
     else:
-        print(f"agent={agent} model={model}")
+        print(f"role={role} agent={agent}")
+
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

@@ -22,21 +22,6 @@ class ContextPacketTests(unittest.TestCase):
         self.assertIn("src/main.py", files)
         self.assertIn("lib/utils.py", files)
 
-    def test_extract_symbols(self):
-        text = "The function createCommit calls CommitHelper"
-        symbols = MODULE.extract_symbols(text)
-        self.assertIn("CommitHelper", symbols)
-
-    def test_novelty_empty_prior(self):
-        text = "New information about the system"
-        score = MODULE.estimate_novelty(text, "")
-        self.assertEqual(score, 1.0)
-
-    def test_novelty_same_content(self):
-        text = "Same words here"
-        score = MODULE.estimate_novelty(text, "Same words here")
-        self.assertEqual(score, 0.0)
-
     def test_uncertainty_detection(self):
         text = "This result is not sure about the answer"
         uncertainty = MODULE.detect_uncertainty(text)
@@ -46,7 +31,6 @@ class ContextPacketTests(unittest.TestCase):
         packet = MODULE.ContextPacket(
             answer="Test answer",
             files=["src/main.py"],
-            uncertainty="",
             approx_tokens=100,
             provider="graphify",
             route="code_symbol",
@@ -55,6 +39,8 @@ class ContextPacketTests(unittest.TestCase):
         self.assertEqual(data["answer"], "Test answer")
         self.assertEqual(data["files"], ["src/main.py"])
         self.assertEqual(data["provider"], "graphify")
+        self.assertNotIn("evidence", data)
+        self.assertNotIn("novelty_score", data)
 
     def test_build_packet(self):
         text = "The function createCommit is in src/main.py"
@@ -62,6 +48,13 @@ class ContextPacketTests(unittest.TestCase):
         self.assertIn("createCommit", packet.answer)
         self.assertIn("src/main.py", packet.files)
         self.assertEqual(packet.provider, "graphify")
+
+    def test_empty_packet_has_no_empty_fields(self):
+        packet = MODULE.ContextPacket(answer="simple answer")
+        data = json.loads(packet.to_json())
+        self.assertNotIn("files", data)
+        self.assertNotIn("uncertainty", data)
+        self.assertNotIn("next_read", data)
 
 
 if __name__ == "__main__":

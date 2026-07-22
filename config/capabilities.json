@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "capabilities": {
+    "explore": {
+      "description": "Code exploration and understanding",
+      "tools": ["graphify_query", "graphify_path", "graphify_explain", "grep", "read", "glob"],
+      "max_steps": null,
+      "allowed_artifacts": ["checkpoint.json", "report.json"],
+      "prompt_template": "explore-prompt.md"
+    },
+    "research": {
+      "description": "Structured research with evidence and citations",
+      "tools": ["web_search", "sin_http_get", "graphify_query", "read", "grep"],
+      "max_steps": null,
+      "allowed_artifacts": ["checkpoint.json", "report.json", "citation.json"],
+      "prompt_template": "research-prompt.md",
+      "allows_dynamic_subquestions": true
+    },
+    "implement": {
+      "description": "Code implementation with approval gates",
+      "tools": ["edit", "write", "bash", "graphify_query", "read", "grep", "glob"],
+      "max_steps": null,
+      "allowed_artifacts": ["checkpoint.json", "report.json"],
+      "prompt_template": "implement-prompt.md",
+      "requires_approval": true
+    },
+    "verify": {
+      "description": "Run tests, typecheck, lint verification",
+      "tools": ["bash", "graphify_query", "read"],
+      "max_steps": null,
+      "allowed_artifacts": ["checkpoint.json", "report.json"],
+      "prompt_template": "verify-prompt.md"
+    },
+    "review": {
+      "description": "Code review with CRG integration and blind reviewer",
+      "tools": ["sin_review_context", "graphify_query", "read", "bash"],
+      "max_steps": null,
+      "allowed_artifacts": ["review.json"],
+      "prompt_template": "review-prompt.md"
+    }
+  }
+}

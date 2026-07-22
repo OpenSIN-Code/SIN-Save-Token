@@ -302,7 +302,6 @@ def main() -> int:
     packet_spec.loader.exec_module(packet_mod)
 
     attempted: list[str] = []
-    prior_context = ""
 
     for provider_name in route["providers"][:maximum_attempts]:
         attempted.append(provider_name)
@@ -321,7 +320,7 @@ def main() -> int:
                 continue
             text = truncate_to_tokens(cached.text, budget)
             if args.packet:
-                packet = packet_mod.build_packet(text, provider_name, route["name"], approximate_tokens(text), prior_context)
+                packet = packet_mod.build_packet(text, provider_name, route["name"], approximate_tokens(text))
                 print(packet.to_json())
             elif args.json:
                 payload = {"route": route["name"], "provider": provider_name, "cached": True, "approx_tokens": approximate_tokens(text), "context": text}
@@ -343,7 +342,7 @@ def main() -> int:
             cache.put(key, bounded, provider=provider_name)
 
         if args.packet:
-            packet = packet_mod.build_packet(bounded.text, bounded.provider, route["name"], approximate_tokens(bounded.text), prior_context)
+            packet = packet_mod.build_packet(bounded.text, bounded.provider, route["name"], approximate_tokens(bounded.text))
             print(packet.to_json())
         elif args.json:
             payload = {"route": route["name"], "provider": bounded.provider, "cached": False, "approx_tokens": approximate_tokens(bounded.text), "context": bounded.text}

@@ -15,6 +15,12 @@ graphify-out/
 .qoder/
 .sin/
 .skillopt-sleep/
+.mimocode/
 sin_goal_mode.db
 run_gbrain_test.sh
 test-gbrain.sh
+vercel_pool.db
+
+# Python
+__pycache__/
+*.pyc
