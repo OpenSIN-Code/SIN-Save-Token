@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""cache-prefix-stability — report what makes the prompt-cache prefix unstable.
+
+Read-only scan of known prefix files. Flags timestamps, auto-gen blocks,
+rtk-init rewrites, and large volatile sections that bust the cache mid-session.
+
+Usage:
+  cache-prefix-stability [--root DIR] [--json]
+  cache-prefix-stability --help
+
+No mutation. Exit 0 always (report tool).
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+PREFIX_CANDIDATES = (
+    "CLAUDE.md",
+    "AGENTS.md",
+    "settings.json",
+    ".claude/settings.json",
+    "shared/mcp/servers.json",
+    "mcp/servers.json",
+    "servers.json",
+    "hooks/README.md",
+)
+
+# Patterns that often inject volatility into always-loaded prefix files
+UNSTABLE_PATTERNS = [
+    (re.compile(r"\b20\d{2}-\d{2}-\d{2}[T ]\d{2}:\d{2}", re.I), "timestamp-like"),
+    (re.compile(r"\b(?:generated|auto[- ]?generated|do not edit)\b", re.I), "auto-gen marker"),
+    (re.compile(r"\brtk[- ]?init\b|\brtk rewrite\b", re.I), "rtk-init/rewrite"),
+    (re.compile(r"\$\{?(?:DATE|TIME|NOW|TIMESTAMP|SESSION_ID)\}?", re.I), "env time/session var"),
+    (re.compile(r"\b[0-9a-f]{32,}\b"), "long hex (possible rotating id)"),
+    (re.compile(r"<!--\s*cache-bust", re.I), "explicit cache-bust comment"),
+]
+
+
+def repo_root(explicit: str | None) -> Path:
+    if explicit:
+        return Path(explicit).resolve()
+    here = Path.cwd().resolve()
+    for p in [here, *here.parents]:
+        if (p / "CACHE-SPEC.md").is_file() or (p / "BRIEF.md").is_file():
+            return p
+    return here
+
+
+def scan_file(path: Path) -> dict:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return {"path": str(path), "error": str(e)}
+    st = path.stat()
+    flags: list[dict] = []
+    for rx, label in UNSTABLE_PATTERNS:
+        for m in rx.finditer(text):
+            # cap per pattern
+            if sum(1 for f in flags if f["kind"] == label) >= 3:
+                break
+            line_no = text.count("\n", 0, m.start()) + 1
+            snippet = text[m.start() : m.start() + 60].replace("\n", " ")
+            flags.append({"kind": label, "line": line_no, "snippet": snippet})
+    return {
+        "path": str(path),
+        "bytes": st.st_size,
+        "mtime": int(st.st_mtime),
+        "sha256_16": hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:16],
+        "unstable_hits": flags,
+        "hit_count": len(flags),
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="cache-prefix-stability",
+        description="Report instability risks in prompt-cache prefix files (read-only).",
+    )
+    ap.add_argument("--root", default=None, help="Repo root (default: auto)")
+    ap.add_argument("--json", action="store_true", help="JSON output")
+    ap.add_argument("--dry-run", action="store_true", help="Same as normal (read-only)")
+    args = ap.parse_args(argv)
+
+    root = repo_root(args.root)
+    reports = []
+    for rel in PREFIX_CANDIDATES:
+        p = root / rel
+        if p.is_file():
+            reports.append(scan_file(p))
+
+    if args.json:
+        print(json.dumps({"root": str(root), "files": reports, "ts": int(time.time())}, indent=2))
+        return 0
+
+    print(f"cache-prefix-stability root={root}")
+    if not reports:
+        print("  (no prefix candidate files found)")
+        return 0
+    total = 0
+    for r in reports:
+        n = r.get("hit_count", 0)
+        total += n
+        status = "⚠️" if n else "✅"
+        print(
+            f"  {status} {r['path']}  bytes={r.get('bytes')}  "
+            f"hash={r.get('sha256_16')}  hits={n}"
+        )
+        for h in r.get("unstable_hits") or []:
+            print(f"      L{h['line']} [{h['kind']}] {h['snippet']!r}")
+    print(f"summary: files={len(reports)} unstable_hits={total}")
+    print("note: read-only report — no files modified.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

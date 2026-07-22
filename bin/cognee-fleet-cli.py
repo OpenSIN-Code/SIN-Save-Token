@@ -169,7 +169,7 @@ def cmd_remember(ns: argparse.Namespace) -> int:
         filename = "note.txt"
     if not costly and not os.environ.get("COGNEE_QUIET_COST", ""):
         print(
-            "note: remember/cognify uses Boundless gpt-5.6-terra (paid). "
+            "note: remember/cognify uses Qwen 3.8 via Qoder (subscription credits). "
             "Prefer short durable notes, not whole READMEs. "
             "COGNEE_QUIET_COST=1 to silence.",
             file=sys.stderr,

@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""orca-batch — STUB: batch several small tasks into one warm worker context.
+
+Intended behavior (not fully implemented):
+  - Accept N task descriptions / a task file.
+  - Route via orca-router; group trivial tasks onto one cheap agent session.
+  - Emit a batch plan (JSON) the orchestrator can execute without cold starts.
+
+Usage:
+  orca-batch --help
+  orca-batch plan task1.txt task2.txt   # stub plan
+  orca-batch run --dry-run …            # stub
+
+Exit 0. No spawn in stub mode.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="orca-batch",
+        description="STUB: batch small tasks into one warm context. Not fully implemented.",
+    )
+    sub = ap.add_subparsers(dest="cmd")
+    p_plan = sub.add_parser("plan", help="Emit a batch plan (stub)")
+    p_plan.add_argument("tasks", nargs="*", help="Task files or inline strings")
+    p_run = sub.add_parser("run", help="Execute a batch (stub — dry only)")
+    p_run.add_argument("--dry-run", action="store_true", default=True)
+    p_run.add_argument("tasks", nargs="*")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args(argv)
+
+    if not args.cmd:
+        ap.print_help()
+        print(
+            "\n[stub] Batching not implemented. Route each task with orca-router for now.",
+            file=sys.stderr,
+        )
+        return 0
+
+    items = []
+    for i, t in enumerate(getattr(args, "tasks", []) or []):
+        text = t
+        p = Path(t)
+        if p.is_file():
+            try:
+                text = p.read_text(encoding="utf-8", errors="replace")[:500]
+            except OSError:
+                pass
+        items.append({"i": i, "preview": text.strip().replace("\n", " ")[:120], "agent": "mimo-code"})
+
+    plan = {"stub": True, "count": len(items), "items": items or [{"i": 0, "preview": "(empty)", "agent": "mimo-code"}]}
+    if args.cmd == "plan":
+        print(json.dumps(plan, indent=2))
+        return 0
+    if args.cmd == "run":
+        print(json.dumps({"stub": True, "action": "run", "dry_run": True, "plan": plan}, indent=2))
+        print("orca-batch: stub run — no workers spawned", file=sys.stderr)
+        return 0
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

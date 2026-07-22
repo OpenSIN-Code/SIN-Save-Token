@@ -1,0 +1,123 @@
+#!/usr/bin/env node
+// orca-route — Classifier CLI (no spawn). Reads task text from arg or stdin,
+// classifies into trivial/heavy/default, prints machine-readable output.
+//
+// Usage:
+//   bin/orca-route "rename a variable in one file" --explain
+//   echo "refactor auth across 6 files" | bin/orca-route
+//
+// Output: agent=<mimo-code|opencode|codex> model=<gpt-5.6-sol|->
+
+const { readFileSync } = require('fs');
+
+const HELP = `Usage: orca-route [OPTIONS] [TASK]
+
+Classifies a task and prints the recommended agent + model.
+Reads task from first argument or stdin.
+
+Options:
+  --explain    Print human-readable classification reason
+  --help       Show this help
+
+Output format:
+  agent=<mimo-code|opencode|codex> model=<gpt-5.6-sol|->
+`;
+
+function classify(task) {
+  const t = task.toLowerCase().trim();
+
+  // Trivial → mimo-code
+  const trivialPatterns = [
+    /\brename\b/,
+    /\bfix (a |the )?typo\b/,
+    /\btypo\b/,
+    /\b1 file\b/,
+    /\bone file\b/,
+    /\bsingle file\b/,
+    /\blint\b/,
+    /\bformat\b/,
+    /\bcomment\b/,
+    /\badd (a )?(comment|doc|docstring)\b/,
+    /\bremove (a )?(comment|blank line|empty line)\b/,
+    /\bupdate (a )?version\b/,
+    /\bbump (a )?version\b/,
+  ];
+
+  // Heavy → codex gpt-5.6-sol
+  const heavyPatterns = [
+    /\brefactor\b/,
+    /\bmigrat(e|ion|ing)\b/,
+    /\baudit\b/,
+    /\bsecurity (audit|review|scan)\b/,
+    /\bbuild\b/,
+    /\bmulti.?file\b/,
+    /\bacross \d+ files\b/,
+    /\barchitecture\b/,
+    /\bschema\b/,
+    /\bdatabase\b/,
+    /\bdeploy\b/,
+    /\bci\/cd\b/,
+    /\bpipeline\b/,
+    /\bperformance\b/,
+    /\bbenchmark\b/,
+    /\btest (suite|framework|runner)\b/,
+    /\bintegration test\b/,
+    /\bend.?to.?end\b/,
+    /\be2e\b/,
+    /\bcomprehensive\b/,
+    /\bfull.?scale\b/,
+    /\bproduction\b/,
+    /\bcritical\b/,
+    /\bregression\b/,
+    /\bcomplex\b/,
+    /\bdesign\b/,
+    /\bapi (design|redesign|versioning)\b/,
+  ];
+
+  for (const p of trivialPatterns) {
+    if (p.test(t)) {
+      return { agent: 'mimo-code', model: '-', reason: `matched trivial pattern: ${p}` };
+    }
+  }
+
+  for (const p of heavyPatterns) {
+    if (p.test(t)) {
+      return { agent: 'codex', model: 'gpt-5.6-sol', reason: `matched heavy pattern: ${p}` };
+    }
+  }
+
+  // Default → opencode
+  return { agent: 'opencode', model: '-', reason: 'no trivial or heavy pattern matched (default)' };
+}
+
+function main() {
+  const args = process.argv.slice(2);
+  const explain = args.includes('--explain');
+  const help = args.includes('--help');
+  if (help) { console.log(HELP); process.exit(0); }
+
+  const taskArgs = args.filter(a => !a.startsWith('--'));
+  let task = taskArgs.join(' ').trim();
+
+  if (!task) {
+    // Read from stdin
+    const buf = readFileSync(0, 'utf8').trim();
+    task = buf;
+  }
+
+  if (!task) {
+    console.error('No task provided. Usage: orca-route "task description"');
+    process.exit(0);
+  }
+
+  const result = classify(task);
+  const output = `agent=${result.agent} model=${result.model}`;
+  if (explain) {
+    console.log(`${output}\n# reason: ${result.reason}`);
+  } else {
+    console.log(output);
+  }
+  process.exit(0);
+}
+
+main();

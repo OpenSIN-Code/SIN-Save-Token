@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# cache-warm-ping — lightweight OmniRoute keepalive ping.
+# Touches the pool directly (tiny /v1/chat/completions with max_tokens=1),
+# NOT an orca agent. Reads OMNIROUTE_MASTER_KEY from env or ~/.omniroute/.env.
+# Flags: --watch (loop every 240s), --stop, --help.
+# All network calls have a timeout; fail-open exit 0. Never print the key.
+
+set -euo pipefail
+
+SCRIPT_NAME="$(basename "$0")"
+STATE_DIR="${CACHE_WARM_ROOT:-$(pwd)}/.cache-opt"
+PID_FILE="${STATE_DIR}/ping.pid"
+STAMP_FILE="${STATE_DIR}/ping.stamp"
+LOG_FILE="${STATE_DIR}/ping.log"
+ENDPOINT="${OMNIROUTE_ENDPOINT:-http://localhost:20128/v1/chat/completions}"
+INTERVAL="${PING_INTERVAL:-240}"
+
+usage() {
+  cat <<EOF
+Usage: $SCRIPT_NAME [OPTIONS]
+
+Lightweight OmniRoute keepalive ping. Sends a tiny chat completion request
+(max_tokens=1) directly to the OmniRoute pool to keep models warm.
+
+Options:
+  --watch     Loop every ${INTERVAL}s, PID sidecar in repo (idempotent)
+  --stop      Stop a running --watch loop
+  --help      Show this help
+
+Env vars:
+  OMNIROUTE_MASTER_KEY   Auth key (also read from ~/.omniroute/.env)
+  OMNIROUTE_ENDPOINT     Pool URL (default: ${ENDPOINT})
+  PING_INTERVAL          Watch loop interval in seconds (default: ${INTERVAL})
+  CACHE_WARM_ROOT        Repo root for state files (default: cwd)
+
+Fail-open: all errors exit 0. The key is never printed.
+EOF
+}
+
+load_key() {
+  if [[ -n "${OMNIROUTE_MASTER_KEY:-}" ]]; then
+    return 0
+  fi
+  local env_file="$HOME/.omniroute/.env"
+  if [[ -f "$env_file" ]]; then
+    local line
+    while IFS= read -r line; do
+      case "$line" in
+        OMNIROUTE_MASTER_KEY=*)
+          export "${line}" 2>/dev/null || true
+          return 0
+          ;;
+      esac
+    done < "$env_file"
+  fi
+  return 1
+}
+
+do_ping() {
+  if ! load_key; then
+    return 0
+  fi
+  curl -s -o /dev/null -w '' \
+    --max-time 8 --connect-timeout 3 \
+    -H "Authorization: Bearer ${OMNIROUTE_MASTER_KEY}" \
+    -H "Content-Type: application/json" \
+    -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"ping"}],"max_tokens":1}' \
+    "$ENDPOINT" 2>/dev/null || true
+  date +%s > "$STAMP_FILE"
+  return 0
+}
+
+do_stop() {
+  if [[ -f "$PID_FILE" ]]; then
+    local pid
+    pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+    fi
+    rm -f "$PID_FILE"
+  fi
+  exit 0
+}
+
+do_watch() {
+  mkdir -p "$STATE_DIR"
+  # Idempotent: if PID file exists and process is alive, exit cleanly
+  if [[ -f "$PID_FILE" ]]; then
+    local existing_pid
+    existing_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+      exit 0
+    fi
+    rm -f "$PID_FILE"
+  fi
+  # Write our PID
+  echo $$ > "$PID_FILE"
+  trap 'rm -f "$PID_FILE"; exit 0' TERM INT
+  # First ping immediately
+  do_ping
+  while true; do
+    sleep "$INTERVAL" &
+    wait $! 2>/dev/null || true
+    do_ping
+  done
+}
+
+case "${1:-}" in
+  --help|-h)
+    usage
+    exit 0
+    ;;
+  --stop)
+    do_stop
+    ;;
+  --watch)
+    do_watch
+    ;;
+  "")
+    do_ping
+    ;;
+  *)
+    echo "Unknown option: $1" >&2
+    usage
+    exit 0
+    ;;
+esac
+
+exit 0

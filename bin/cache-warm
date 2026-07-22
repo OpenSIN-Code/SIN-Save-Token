@@ -1,0 +1,312 @@
+#!/usr/bin/env python3
+"""cache-warm — warm the stable prompt-cache prefix with one cheap ping.
+
+Sends a minimal, deterministic completion request with cache_control on a
+stable prefix blob so the first real turn can hit a warm cache.
+
+Usage:
+  cache-warm [--dry-run] [--timeout SEC] [--provider auto|anthropic|openai]
+  cache-warm --help
+
+Env (never hardcode secrets — only ${VAR} at runtime):
+  ANTHROPIC_API_KEY / ORCA_CACHE_API_KEY   API key
+  ANTHROPIC_BASE_URL / ORCA_CACHE_BASE_URL  base URL (default api.anthropic.com)
+  ORCA_CACHE_MODEL                          model id override
+  ORCA_CACHE_PROVIDER                       auto|anthropic|openai
+
+Fail-open: unreachable provider / missing key → warn on stderr, exit 0.
+Sidecar state lives under <repo>/.cache-opt/ (never external paths).
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+TTL_HINT_SEC = 5 * 60
+DEFAULT_TIMEOUT = 12
+PING_USER = "cache-warm ping"  # fixed; must stay stable for cache hits
+STABLE_NAMES = (
+    "CLAUDE.md",
+    "AGENTS.md",
+    "settings.json",
+    ".claude/settings.json",
+    "shared/mcp/servers.json",
+    "mcp/servers.json",
+    "servers.json",
+)
+
+
+def repo_root() -> Path:
+    """Resolve worktree root: walk up from cwd looking for BRIEF/CACHE-SPEC/bin."""
+    here = Path.cwd().resolve()
+    for p in [here, *here.parents]:
+        if (p / "CACHE-SPEC.md").is_file() or (p / "bin" / "cache-warm").is_file():
+            return p
+        if (p / "BRIEF.md").is_file() and (p / "bin").is_dir():
+            return p
+    # fallback: directory of this script's parent (…/bin → repo)
+    return Path(__file__).resolve().parent.parent
+
+
+def state_dir(root: Path) -> Path:
+    d = root / ".cache-opt"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def load_stable_prefix(root: Path) -> tuple[str, list[str]]:
+    """Build a deterministic stable-prefix text from known cache-buster files."""
+    parts: list[str] = []
+    used: list[str] = []
+    for name in STABLE_NAMES:
+        path = root / name
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        # Cap each file so the warm ping stays cheap.
+        if len(text) > 12_000:
+            text = text[:12_000] + "\n/* truncated for cache-warm */\n"
+        parts.append(f"===== {name} =====\n{text}")
+        used.append(name)
+    if not parts:
+        # Still warm something deterministic so the API path is exercised.
+        parts.append(
+            "===== cache-warm/default =====\n"
+            "stable prefix placeholder — no CLAUDE.md/AGENTS.md found in repo.\n"
+        )
+        used.append("(default)")
+    blob = "\n\n".join(parts)
+    return blob, used
+
+
+def prefix_hash(blob: str) -> str:
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def resolve_provider(cli: str | None) -> str:
+    p = (cli or os.environ.get("ORCA_CACHE_PROVIDER") or "auto").strip().lower()
+    if p not in ("auto", "anthropic", "openai"):
+        p = "auto"
+    if p != "auto":
+        return p
+    # Prefer Anthropic-style when Anthropic key/base present; else OpenAI-compatible.
+    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ORCA_CACHE_API_KEY"):
+        base = os.environ.get("ANTHROPIC_BASE_URL") or os.environ.get("ORCA_CACHE_BASE_URL") or ""
+        if "openai" in base.lower() or "v1/chat" in base.lower():
+            return "openai"
+        return "anthropic"
+    if os.environ.get("OPENAI_API_KEY"):
+        return "openai"
+    return "anthropic"
+
+
+def api_key(provider: str) -> str:
+    if provider == "openai":
+        return (
+            os.environ.get("OPENAI_API_KEY")
+            or os.environ.get("ORCA_CACHE_API_KEY")
+            or os.environ.get("ANTHROPIC_API_KEY")
+            or ""
+        )
+    return (
+        os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get("ORCA_CACHE_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+        or ""
+    )
+
+
+def base_url(provider: str) -> str:
+    env = (
+        os.environ.get("ORCA_CACHE_BASE_URL")
+        or os.environ.get("ANTHROPIC_BASE_URL")
+        or os.environ.get("OPENAI_BASE_URL")
+        or ""
+    )
+    if env:
+        return env.rstrip("/")
+    if provider == "openai":
+        return "https://api.openai.com/v1"
+    return "https://api.anthropic.com"
+
+
+def model_for(provider: str) -> str:
+    m = os.environ.get("ORCA_CACHE_MODEL") or os.environ.get("CACHE_WARM_MODEL") or ""
+    if m:
+        return m
+    if provider == "openai":
+        return "gpt-4o-mini"
+    return "claude-haiku-4-5-20251001"
+
+
+def touch_stamp(root: Path, meta: dict) -> None:
+    d = state_dir(root)
+    stamp = d / "warm-stamp"
+    stamp.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    # Also a plain mtime marker for simple TTL checks
+    (d / "warm.mtime").write_text(str(int(time.time())), encoding="utf-8")
+
+
+def post_json(url: str, headers: dict, body: dict, timeout: float) -> tuple[int, str]:
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.getcode(), resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace") if e.fp else ""
+        return e.code, err_body
+    except Exception as e:  # noqa: BLE001 — fail-open path
+        return 0, f"{type(e).__name__}: {e}"
+
+
+def warm_anthropic(prefix: str, timeout: float) -> tuple[bool, str]:
+    key = api_key("anthropic")
+    if not key:
+        return False, "no ANTHROPIC_API_KEY / ORCA_CACHE_API_KEY in env"
+    url = f"{base_url('anthropic')}/v1/messages"
+    model = model_for("anthropic")
+    body = {
+        "model": model,
+        "max_tokens": 1,
+        "system": [
+            {
+                "type": "text",
+                "text": prefix,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        "messages": [{"role": "user", "content": PING_USER}],
+    }
+    headers = {
+        "content-type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "prompt-caching-2024-07-31",
+    }
+    code, text = post_json(url, headers, body, timeout)
+    if 200 <= code < 300:
+        return True, f"anthropic ok model={model} http={code}"
+    return False, f"anthropic fail http={code} body={text[:240]}"
+
+
+def warm_openai(prefix: str, timeout: float) -> tuple[bool, str]:
+    key = api_key("openai")
+    if not key:
+        return False, "no OPENAI_API_KEY / ORCA_CACHE_API_KEY in env"
+    base = base_url("openai")
+    # Accept either …/v1 or bare host
+    url = base if base.endswith("/chat/completions") else f"{base}/chat/completions"
+    if not url.endswith("/chat/completions"):
+        # base_url() already ends with /v1 typically
+        if not base.endswith("/v1"):
+            url = f"{base}/v1/chat/completions"
+        else:
+            url = f"{base}/chat/completions"
+    model = model_for("openai")
+    # OpenAI-compatible: put stable prefix in system; some gateways honor cache hints
+    # via extra headers / body fields — keep payload minimal.
+    body = {
+        "model": model,
+        "max_tokens": 1,
+        "messages": [
+            {"role": "system", "content": prefix},
+            {"role": "user", "content": PING_USER},
+        ],
+    }
+    headers = {
+        "content-type": "application/json",
+        "authorization": f"Bearer {key}",
+    }
+    code, text = post_json(url, headers, body, timeout)
+    if 200 <= code < 300:
+        return True, f"openai ok model={model} http={code}"
+    return False, f"openai fail http={code} body={text[:240]}"
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="cache-warm",
+        description="Warm the stable prompt-cache prefix with one cheap ping (fail-open).",
+    )
+    ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be pinged; no network call.",
+    )
+    ap.add_argument(
+        "--timeout",
+        type=float,
+        default=float(os.environ.get("CACHE_WARM_TIMEOUT", DEFAULT_TIMEOUT)),
+        help=f"HTTP timeout seconds (default {DEFAULT_TIMEOUT}).",
+    )
+    ap.add_argument(
+        "--provider",
+        choices=("auto", "anthropic", "openai"),
+        default=None,
+        help="Provider (default: auto from env).",
+    )
+    args = ap.parse_args(argv)
+
+    root = repo_root()
+    prefix, used = load_stable_prefix(root)
+    ph = prefix_hash(prefix)
+    provider = resolve_provider(args.provider)
+    model = model_for(provider)
+    base = base_url(provider)
+
+    if args.dry_run:
+        print(
+            f"cache-warm dry-run provider={provider} model={model} base={base} "
+            f"prefix_hash={ph} files={','.join(used)} bytes={len(prefix)} "
+            f"timeout={args.timeout}s",
+            file=sys.stdout,
+        )
+        print(
+            "Would POST minimal completion with cache_control on stable prefix; "
+            f"user={PING_USER!r}; state_dir={state_dir(root)}",
+            file=sys.stdout,
+        )
+        return 0
+
+    if provider == "openai":
+        ok, msg = warm_openai(prefix, args.timeout)
+    else:
+        ok, msg = warm_anthropic(prefix, args.timeout)
+
+    meta = {
+        "ts": int(time.time()),
+        "ok": ok,
+        "provider": provider,
+        "model": model,
+        "prefix_hash": ph,
+        "files": used,
+        "msg": msg,
+        "ttl_hint_sec": TTL_HINT_SEC,
+    }
+    try:
+        touch_stamp(root, meta)
+    except OSError as e:
+        print(f"cache-warm: warn stamp write failed: {e}", file=sys.stderr)
+
+    if ok:
+        print(f"cache-warm: warmed prefix_hash={ph} {msg}", file=sys.stdout)
+        return 0
+
+    # Fail-open
+    print(f"cache-warm: warn (fail-open) {msg}", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

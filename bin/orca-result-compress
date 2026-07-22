@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""orca-result-compress — distill worker raw output to a signal report.
+
+Reads a worker transcript / raw log (file or stdin) and emits a compact
+WORKER-REPORT-style signal: changed paths + 1-line purpose + verification status.
+Keeps expensive raw output in the cheap sub; only the signal returns to the lead.
+
+Usage:
+  orca-result-compress RAW.txt
+  orca-result-compress --purpose "cache-opt tools" RAW.txt
+  cat worker.log | orca-result-compress
+  orca-result-compress --help
+
+stdout: Markdown signal report. stderr: only errors. Exit 0 on success, 1 usage.
+"""
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from collections import OrderedDict
+from pathlib import Path
+
+# Path-like tokens in free text / logs
+PATH_RE = re.compile(
+    r"(?P<p>(?:[A-Za-z]:)?(?:\.{0,2}/)?[\w./@+-]+\.(?:py|js|ts|tsx|jsx|mjs|cjs|rs|go|md|json|ya?ml|toml|sh|bash|zsh|css|html|txt|sql|proto|swift|kt|java|rb|php))"
+)
+
+# Diff / git style
+DIFF_A = re.compile(r"^\+\+\+\s+b/(.+)$", re.M)
+DIFF_B = re.compile(r"^---\s+a/(.+)$", re.M)
+GIT_STATUS = re.compile(
+    r"^(?:[ MADRCU?]{1,2})\s+(.+)$", re.M
+)
+# Common agent phrases
+CHANGED = re.compile(
+    r"(?i)(?:wrote|created|updated|modified|edited|deleted|patched|touched)\s+[`'\"]?([^\s`'\"]+)"
+)
+FILE_LINE = re.compile(
+    r"(?i)(?:file|path)\s*[:=]\s*[`'\"]?([^\s`'\"]+)"
+)
+
+# Verification signals
+VERIF_PASS = re.compile(
+    r"(?i)\b(pass(ed|ing)?|ok|success|✅|all tests? passed|exit 0|smoke ok|verified)\b"
+)
+VERIF_FAIL = re.compile(
+    r"(?i)\b(fail(ed|ure)?|error|❌|assert|panic|traceback|exit [1-9]|regression)\b"
+)
+
+# One-line purpose candidates
+PURPOSE_RE = re.compile(
+    r"(?im)^(?:purpose|ziel|summary|tl;dr|done|result)\s*[:=—-]\s*(.+)$"
+)
+
+
+def extract_paths(text: str) -> list[str]:
+    found: "OrderedDict[str, None]" = OrderedDict()
+
+    def add(p: str) -> None:
+        p = p.strip().strip("`\"'")
+        if not p or p.startswith("http"):
+            return
+        # drop noise
+        if p in (".", "..", "/dev/null"):
+            return
+        if len(p) > 240:
+            return
+        found[p] = None
+
+    for rx in (DIFF_A, DIFF_B):
+        for m in rx.finditer(text):
+            add(m.group(1))
+
+    for m in GIT_STATUS.finditer(text):
+        add(m.group(1))
+
+    for m in CHANGED.finditer(text):
+        add(m.group(1))
+
+    for m in FILE_LINE.finditer(text):
+        add(m.group(1))
+
+    for m in PATH_RE.finditer(text):
+        add(m.group("p"))
+
+    return list(found.keys())
+
+
+def extract_purpose(text: str, override: str | None) -> str:
+    if override:
+        return override.strip()
+    m = PURPOSE_RE.search(text)
+    if m:
+        return m.group(1).strip()[:200]
+    # First non-empty non-code line as weak purpose
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or s.startswith("```"):
+            continue
+        if s.startswith("{") or s.startswith("["):
+            continue
+        if len(s) < 12:
+            continue
+        return s[:200]
+    return "(no purpose detected)"
+
+
+def extract_verification(text: str) -> str:
+    fails = len(VERIF_FAIL.findall(text))
+    passes = len(VERIF_PASS.findall(text))
+    if fails > passes and fails > 0:
+        return f"FAIL (signals fail={fails} pass={passes})"
+    if passes > 0 and fails == 0:
+        return f"PASS (signals pass={passes})"
+    if passes > 0:
+        return f"MIXED (signals pass={passes} fail={fails})"
+    # Look for --help / exit patterns
+    if re.search(r"(?m)^usage:", text) or "--help" in text:
+        return "PASS (help/smoke present)"
+    return "UNKNOWN (no clear verification signals)"
+
+
+def compress(text: str, purpose: str | None = None, max_paths: int = 40) -> str:
+    paths = extract_paths(text)[:max_paths]
+    purp = extract_purpose(text, purpose)
+    ver = extract_verification(text)
+    lines = [
+        "# WORKER-REPORT (compressed signal)",
+        "",
+        f"**Purpose:** {purp}",
+        "",
+        f"**Verification:** {ver}",
+        "",
+        "## Changed / touched paths",
+    ]
+    if paths:
+        for p in paths:
+            lines.append(f"- `{p}`")
+    else:
+        lines.append("- (none detected)")
+    lines.append("")
+    lines.append("## Status table")
+    lines.append("")
+    lines.append("| Path | Status |")
+    lines.append("|---|---|")
+    if paths:
+        for p in paths:
+            lines.append(f"| `{p}` | ✅ signal |")
+    else:
+        lines.append("| — | ⏭️ no paths |")
+    lines.append("")
+    lines.append(
+        f"_Raw input: {len(text)} chars → signal: paths={len(paths)}. "
+        "Lead should not re-ingest raw worker logs._"
+    )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="orca-result-compress",
+        description="Compress worker raw output to WORKER-REPORT signal (paths + purpose + verify).",
+    )
+    ap.add_argument("file", nargs="?", help="Raw worker output file (default: stdin)")
+    ap.add_argument("--purpose", default=None, help="Override 1-line purpose")
+    ap.add_argument("--max-paths", type=int, default=40, help="Cap listed paths")
+    ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Read and report stats only (still prints signal).",
+    )
+    args = ap.parse_args(argv)
+
+    if args.file:
+        try:
+            text = Path(args.file).read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            print(f"orca-result-compress: cannot read {args.file}: {e}", file=sys.stderr)
+            return 1
+    else:
+        if sys.stdin.isatty():
+            ap.print_help()
+            return 1
+        text = sys.stdin.read()
+
+    report = compress(text, purpose=args.purpose, max_paths=args.max_paths)
+    sys.stdout.write(report)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

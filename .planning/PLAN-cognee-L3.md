@@ -23,7 +23,7 @@ Mechanics under the hood (from product + MCP):
 1. **Ingest** domain material → cognify into a **knowledge graph** (entities + relations, not just chunks).
 2. **Session memory** + permanent graph (`remember` with/without `session_id`).
 3. **Recall** auto-routes search strategy; injects only relevant subgraph context.
-4. Claude plugin hooks: `SessionStart` / `UserPromptSubmit` inject / `PostToolUse` capture / `PreCompact` preserve / `SessionEnd` sync.
+4. Claude plugin hooks: `SessionStart` / `UserPromptSubmit` inject / `PostToolUse` capture / `PreCompact` preserve / `Stop` sync.
 5. MCP surface is intentionally tiny: **`remember` · `recall` · `forget`** → low L2 schema tax.
 
 That last point is why this is *not* just another heavy MCP: it aligns with SST’s “CLI + thin tools > fat always-on manifests.”

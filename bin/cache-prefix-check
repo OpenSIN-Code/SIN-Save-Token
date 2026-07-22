@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Gate prompt-cache buster files on their committed git state."""
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+BUSTERS = ("CLAUDE.md", "AGENTS.md", "settings.json", "shared/mcp/servers.json")
+
+
+def repo_root(explicit: str | None) -> Path:
+    if explicit:
+        return Path(explicit).resolve()
+    here = Path.cwd().resolve()
+    for candidate in (here, *here.parents):
+        if (candidate / ".git").exists() or (candidate / "BRIEF.md").is_file():
+            return candidate
+    return here
+
+
+def prefix_report(root: Path) -> int:
+    tool = resolve_command(
+        "cache-prefix-stability",
+        root.parent / "cache-opt-grok" / "bin" / "cache-prefix-stability",
+    )
+    if tool is None:
+        print("cache-prefix-check: missing cache-prefix-stability", file=sys.stderr)
+        return 1
+    try:
+        result = subprocess.run(
+            [str(tool), "--root", str(root)],
+            cwd=str(root),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except OSError as exc:
+        print(f"cache-prefix-check: could not run stability scan: {exc}", file=sys.stderr)
+        return 1
+    if result.stdout:
+        sys.stdout.write(result.stdout)
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+    return result.returncode
+
+
+def resolve_command(name: str, fallback: Path) -> Path | None:
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = Path(directory) / name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return fallback if fallback.is_file() else None
+
+
+def changed_busters(root: Path) -> list[str]:
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--",
+                *BUSTERS,
+            ],
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except OSError as exc:
+        print(f"cache-prefix-check: git unavailable: {exc}", file=sys.stderr)
+        return list(BUSTERS)
+    if result.returncode != 0:
+        print(result.stderr.strip() or "cache-prefix-check: git status failed", file=sys.stderr)
+        return list(BUSTERS)
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="cache-prefix-check",
+        description="Run cache-prefix-stability and gate uncommitted cache-buster files.",
+    )
+    parser.add_argument("--root", help="Repository root (default: auto-detect).")
+    parser.add_argument(
+        "--warn-only",
+        action="store_true",
+        help="Report cache-buster changes but always exit 0.",
+    )
+    args = parser.parse_args(argv)
+    root = repo_root(args.root)
+
+    scan_status = prefix_report(root)
+    if scan_status != 0:
+        return 0 if args.warn_only else scan_status
+
+    changed = changed_busters(root)
+    if changed:
+        print("cache-prefix-check: uncommitted cache-buster changes:", file=sys.stderr)
+        for entry in changed:
+            print(f"  {entry}", file=sys.stderr)
+        return 0 if args.warn_only else 1
+
+    print("cache-prefix-check: cache-buster files clean.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

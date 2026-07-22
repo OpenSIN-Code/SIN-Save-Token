@@ -255,22 +255,17 @@ Multi-agent shared graph for Claude / Codex / OpenCode / MiMo / Cline / Orca.
 ```
 Agents → cognee-recall / cognee-remember
        → Cognee :8011
-            ├─ LLM:  OmniRoute → Boundless gpt-5.6-terra   (paid cognify)
-            └─ Embed: proxy :8012
-                   ├─ primary: Gemini gemini-embedding-001 @ 1024 (free tier)
-                   └─ fallback: local mxbai-embed-large @ 1024 (rate limit / errors)
+            ├─ LLM:  qoder-proxy :8013 → qodercli → Qwen 3.8  (Qoder sub)
+            └─ Embed: nim-embed-proxy :8012 → NVIDIA NIM nemotron-3-embed-1b @ 2048 (free)
 ```
 
 ### Bring-up
 
 ```bash
-# once: Gemini key (chmod 600, never commit / never paste into chat)
-umask 077
-mkdir -p ~/.cognee-plugin/secrets
-cat > ~/.cognee-plugin/secrets/gemini_api_key   # paste key, Ctrl-D
-chmod 600 ~/.cognee-plugin/secrets/gemini_api_key
+# NVIDIA_API_KEY env var needed (free from build.nvidia.com)
+# Qoder PAT in ~/dev/qoder-proxy/.env
 
-# stack (OmniRoute must already be on :20128)
+# full stack (auto-starts qoder-proxy + nim-embed-proxy + cognee)
 ./bin/cognee-fleet-up.sh
 ```
 
@@ -278,24 +273,23 @@ chmod 600 ~/.cognee-plugin/secrets/gemini_api_key
 
 ```bash
 cognee-status
-curl -s http://127.0.0.1:8012/health    # gemini_ok / fallback_ok
+curl -s http://127.0.0.1:8012/health    # nim ok/error stats
 cognee-recall "What is L2 core MCP?"
-cognee-remember "short durable decision"   # uses Boundless Terra for cognify
+cognee-remember "short durable decision"   # uses Qwen 3.8 for cognify
 ```
 
 ### Cost & ops
 
 | Path | Cost |
 |------|------|
-| Embed (Gemini free tier) | $0, rate-limited → auto local |
-| Local mxbai fallback | $0 unlimited |
-| `remember` / cognify | **Boundless credit** — short notes only |
+| Embed (NVIDIA NIM free tier) | $0, ~40 RPM |
+| `remember` / cognify | **Qoder subscription** — short notes only |
 | Bulk re-ingest | `COGNEE_ALLOW_COSTLY=1` required |
 
 Full policy, backends, reindex: **[docs/COGNEE-COST-POLICY.md](docs/COGNEE-COST-POLICY.md)**.
 
 ```bash
-# pure local embeds
+# pure local embeds (fallback)
 export COGNEE_EMBED_BACKEND=fastembed
 ./bin/cognee-start-omniroute.sh
 

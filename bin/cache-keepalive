@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+"""cache-keepalive — keep the prompt cache warm across idle/think pauses.
+
+Daemon-capable sidecar that issues a cheap cache-warm ping every ~4 min
+(< Anthropic ~5 min TTL). Never blocks the main agent flow.
+
+Usage:
+  cache-keepalive start [--interval SEC] [--dry-run]
+  cache-keepalive stop
+  cache-keepalive status
+  cache-keepalive once [--dry-run]     # single ping (same as cache-warm)
+  cache-keepalive --help
+
+State (repo-local only):
+  <repo>/.cache-opt/keepalive.pid
+  <repo>/.cache-opt/keepalive.log
+  <repo>/.cache-opt/warm-stamp   (via cache-warm)
+
+Fail-open: start failures warn and exit 0; stop of missing daemon is exit 0.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+DEFAULT_INTERVAL = 240  # 4 min — under ~5 min cache TTL
+
+
+def repo_root() -> Path:
+    here = Path.cwd().resolve()
+    for p in [here, *here.parents]:
+        if (p / "CACHE-SPEC.md").is_file() or (p / "bin" / "cache-keepalive").is_file():
+            return p
+        if (p / "BRIEF.md").is_file() and (p / "bin").is_dir():
+            return p
+    return Path(__file__).resolve().parent.parent
+
+
+def state_dir(root: Path) -> Path:
+    d = root / ".cache-opt"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def pid_path(root: Path) -> Path:
+    return state_dir(root) / "keepalive.pid"
+
+
+def log_path(root: Path) -> Path:
+    return state_dir(root) / "keepalive.log"
+
+
+def warm_bin(root: Path) -> Path:
+    return root / "bin" / "cache-warm"
+
+
+def read_pid(root: Path) -> int | None:
+    pp = pid_path(root)
+    if not pp.is_file():
+        return None
+    try:
+        raw = pp.read_text(encoding="utf-8").strip()
+        return int(raw) if raw else None
+    except (OSError, ValueError):
+        return None
+
+
+def pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def clear_pid(root: Path) -> None:
+    try:
+        pid_path(root).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def run_warm(root: Path, dry_run: bool = False) -> int:
+    bin_path = warm_bin(root)
+    if not bin_path.is_file():
+        print(f"cache-keepalive: warn missing {bin_path}", file=sys.stderr)
+        return 0
+    cmd = [sys.executable, str(bin_path)]
+    if dry_run:
+        cmd.append("--dry-run")
+    try:
+        r = subprocess.run(
+            cmd,
+            cwd=str(root),
+            timeout=30,
+            capture_output=True,
+            text=True,
+        )
+        if r.stdout:
+            sys.stdout.write(r.stdout)
+        if r.stderr:
+            sys.stderr.write(r.stderr)
+        return 0  # fail-open regardless of warm exit
+    except Exception as e:  # noqa: BLE001
+        print(f"cache-keepalive: warn warm failed: {e}", file=sys.stderr)
+        return 0
+
+
+def cmd_status(root: Path) -> int:
+    pid = read_pid(root)
+    stamp = state_dir(root) / "warm.mtime"
+    last = None
+    if stamp.is_file():
+        try:
+            last = int(stamp.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            last = None
+    age = f"{int(time.time()) - last}s ago" if last else "never"
+    if pid and pid_alive(pid):
+        print(f"cache-keepalive: running pid={pid} last_warm={age} log={log_path(root)}")
+        return 0
+    if pid:
+        print(f"cache-keepalive: stale pid={pid} (not alive) last_warm={age}")
+        clear_pid(root)
+        return 0
+    print(f"cache-keepalive: stopped last_warm={age}")
+    return 0
+
+
+def cmd_stop(root: Path) -> int:
+    pid = read_pid(root)
+    if not pid:
+        print("cache-keepalive: already stopped")
+        return 0
+    if pid_alive(pid):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError as e:
+            print(f"cache-keepalive: warn kill {pid}: {e}", file=sys.stderr)
+    # brief wait then force
+    for _ in range(20):
+        if not pid_alive(pid):
+            break
+        time.sleep(0.05)
+    if pid_alive(pid):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    clear_pid(root)
+    print(f"cache-keepalive: stopped was_pid={pid}")
+    return 0
+
+
+def daemon_loop(root: Path, interval: int) -> None:
+    """Foreground loop used by the detached child."""
+    logf = open(log_path(root), "a", encoding="utf-8")  # noqa: SIM115
+    def log(msg: str) -> None:
+        line = f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {msg}\n"
+        try:
+            logf.write(line)
+            logf.flush()
+        except OSError:
+            pass
+
+    # Write our pid
+    try:
+        pid_path(root).write_text(str(os.getpid()), encoding="utf-8")
+    except OSError as e:
+        log(f"pid write failed: {e}")
+        return
+
+    log(f"daemon start interval={interval}s pid={os.getpid()}")
+    # Immediate warm on start so idle sessions get a hit without waiting.
+    try:
+        r = subprocess.run(
+            [sys.executable, str(warm_bin(root))],
+            cwd=str(root),
+            timeout=30,
+            capture_output=True,
+            text=True,
+        )
+        log(f"warm: {(r.stdout or r.stderr or '').strip()[:200]}")
+    except Exception as e:  # noqa: BLE001
+        log(f"warm error: {e}")
+
+    while True:
+        time.sleep(max(30, interval))  # never tighter than 30s (self-throttle floor)
+        try:
+            r = subprocess.run(
+                [sys.executable, str(warm_bin(root))],
+                cwd=str(root),
+                timeout=30,
+                capture_output=True,
+                text=True,
+            )
+            log(f"warm: {(r.stdout or r.stderr or '').strip()[:200]}")
+        except Exception as e:  # noqa: BLE001
+            log(f"warm error: {e}")
+
+
+def cmd_start(root: Path, interval: int, dry_run: bool) -> int:
+    if dry_run:
+        print(
+            f"cache-keepalive dry-run would start interval={interval}s "
+            f"pid_file={pid_path(root)} warm={warm_bin(root)}"
+        )
+        return 0
+
+    pid = read_pid(root)
+    if pid and pid_alive(pid):
+        print(f"cache-keepalive: already running pid={pid}")
+        return 0
+
+    # Detach: re-exec ourselves as internal daemon entry.
+    script = str(Path(__file__).resolve())
+    env = os.environ.copy()
+    env["CACHE_KEEPALIVE_ROOT"] = str(root)
+    try:
+        logf = open(log_path(root), "a", encoding="utf-8")
+        proc = subprocess.Popen(
+            [sys.executable, script, "_daemon", "--interval", str(interval)],
+            cwd=str(root),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=logf,
+            stderr=logf,
+            start_new_session=True,
+            close_fds=True,
+        )
+        # Parent records child pid immediately (daemon also rewrites).
+        pid_path(root).write_text(str(proc.pid), encoding="utf-8")
+        print(f"cache-keepalive: started pid={proc.pid} interval={interval}s")
+        return 0
+    except Exception as e:  # noqa: BLE001
+        print(f"cache-keepalive: warn start failed (fail-open): {e}", file=sys.stderr)
+        return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="cache-keepalive",
+        description="Keep prompt cache warm with periodic mini-pings (daemon, fail-open).",
+    )
+    sub = ap.add_subparsers(dest="cmd")
+
+    p_start = sub.add_parser("start", help="Start background keepalive daemon")
+    p_start.add_argument(
+        "--interval",
+        type=int,
+        default=int(os.environ.get("CACHE_KEEPALIVE_INTERVAL", DEFAULT_INTERVAL)),
+        help=f"Seconds between pings (default {DEFAULT_INTERVAL}).",
+    )
+    p_start.add_argument("--dry-run", action="store_true")
+
+    sub.add_parser("stop", help="Stop daemon")
+    sub.add_parser("status", help="Show daemon status")
+
+    p_once = sub.add_parser("once", help="Single warm ping")
+    p_once.add_argument("--dry-run", action="store_true")
+
+    # Internal
+    p_d = sub.add_parser("_daemon", help=argparse.SUPPRESS)
+    p_d.add_argument("--interval", type=int, default=DEFAULT_INTERVAL)
+
+    args = ap.parse_args(argv)
+    if not args.cmd:
+        ap.print_help()
+        return 0
+
+    root_env = os.environ.get("CACHE_KEEPALIVE_ROOT")
+    root = Path(root_env).resolve() if root_env else repo_root()
+
+    if args.cmd == "start":
+        return cmd_start(root, args.interval, args.dry_run)
+    if args.cmd == "stop":
+        return cmd_stop(root)
+    if args.cmd == "status":
+        return cmd_status(root)
+    if args.cmd == "once":
+        return run_warm(root, dry_run=args.dry_run)
+    if args.cmd == "_daemon":
+        daemon_loop(root, args.interval)
+        return 0
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

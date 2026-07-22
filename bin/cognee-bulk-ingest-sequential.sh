@@ -13,7 +13,7 @@ export COGNEE_BASE_URL="${COGNEE_BASE_URL:-http://127.0.0.1:8011}"
 
 if [ "${COGNEE_ALLOW_COSTLY:-0}" != "1" ]; then
   cat >&2 <<'EOF'
-REFUSED: bulk cognify spends BoundlessAPI (gpt-5.6-terra) money.
+REFUSED: bulk cognify spends Qoder (Qwen 3.8) credits.
 
   export COGNEE_ALLOW_COSTLY=1
   # optional safety caps:

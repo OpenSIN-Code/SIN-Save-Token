@@ -4,6 +4,17 @@ CLAUDE.md
 graphify-out/
 .planning/graphs/
 
+# cache-opt sidecar (pid/log/warm stamp — repo-local, never secrets)
+.cache-opt/
+
 # local secrets never commit
 **/.secrets/
 **/gemini_api_key
+
+# local agent/tool state
+.qoder/
+.sin/
+.skillopt-sleep/
+sin_goal_mode.db
+run_gbrain_test.sh
+test-gbrain.sh
