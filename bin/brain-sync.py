@@ -2,26 +2,29 @@
 """Bidirectional sync between gbrain (Global-Brain) and Cognee.
 
 Usage:
-  bin/brain-sync.sh gbrain2cognee   # Push gbrain pages → Cognee
-  bin/brain-sync.sh cognee2gbrain   # Push Cognee items → gbrain
-  bin/brain-sync.sh both            # Bidirectional sync
-  bin/brain-sync.sh status          # Show both systems' state
+  python3 bin/brain-sync.py gbrain2cognee   # Push gbrain pages → Cognee
+  python3 bin/brain-sync.py cognee2gbrain   # Push Cognee items → gbrain
+  python3 bin/brain-sync.py both            # Bidirectional sync
+  python3 bin/brain-sync.py status          # Show both systems' state
 
 Requires:
-  - gbrain CLI on PATH (or ~/.bun/bin/gbrain)
+  - gbrain CLI on PATH (~/.bun/bin/gbrain)
   - Cognee API on :8011 (bin/cognee-fleet-up.sh)
   - NIM embed proxy on :8012
+  - OmniRoute on :20128 (for gbrain expansion model)
 """
 import json
 import hashlib
+import os
 import subprocess
 import sys
 import urllib.request
+import uuid
 from pathlib import Path
 
 COGNEE_BASE = "http://127.0.0.1:8011"
 COGNEE_DATASET = "sin-fleet"
-SYNC_TAG = "brain-sync"
+SYNC_TAG = "[brain-sync]"
 
 
 def get_cognee_api_key():
@@ -36,10 +39,13 @@ def get_cognee_api_key():
     return ""
 
 
-def run(cmd, timeout=30):
+def run(cmd, timeout=30, env=None):
     """Run a shell command and return stdout."""
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(
+            cmd, shell=True, capture_output=True, text=True,
+            timeout=timeout, env={**os.environ, **(env or {})}
+        )
         return r.stdout.strip(), r.returncode
     except subprocess.TimeoutExpired:
         return "", 1
@@ -52,38 +58,32 @@ def content_hash(text):
 
 # ── gbrain → Cognee ──────────────────────────────────────────────────────
 
-def gbrain_list_pages():
-    """List all gbrain pages via CLI."""
-    out, rc = run("gbrain list --json 2>/dev/null")
-    if rc != 0:
-        # Fallback: use gbrain search with broad query
-        out, rc = run('gbrain search "" --json 2>/dev/null || gbrain list 2>/dev/null')
-    if rc != 0:
-        print(f"  ERROR: gbrain list failed", file=sys.stderr)
+def gbrain_search_all():
+    """Get all gbrain pages via gbrain list."""
+    env = {"OPENAI_BASE_URL": "http://127.0.0.1:8012/v1"}
+    out, rc = run('gbrain list -n 100 2>/dev/null', env=env)
+    if rc != 0 or not out:
         return []
-    try:
-        return json.loads(out)
-    except json.JSONDecodeError:
-        # Parse text output
-        pages = []
-        for line in out.split("\n"):
-            if line.strip():
-                pages.append({"slug": line.strip()})
-        return pages
+    pages = []
+    for line in out.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        # Format: slug\ttype\tdate\ttitle (tab-separated)
+        parts = line.split("\t")
+        if parts:
+            slug = parts[0].strip()
+            if slug and not slug.startswith("Pages:") and not slug.startswith("By "):
+                pages.append(slug)
+    return pages
 
 
-def gbrain_get_page(slug):
-    """Get a gbrain page by slug."""
-    out, rc = run(f'gbrain get {slug} 2>/dev/null')
-    if rc != 0:
-        return None
-    return out
-
-
-def cognee_remember(text, tags=None):
+def cognee_remember(text):
     """Ingest text into Cognee via multipart/form-data API."""
-    import uuid
     api_key = get_cognee_api_key()
+    if not api_key:
+        print("  ERROR: no Cognee API key", file=sys.stderr)
+        return None
 
     boundary = f"----sync{uuid.uuid4().hex}"
     parts = []
@@ -96,26 +96,24 @@ def cognee_remember(text, tags=None):
     content = text.encode()
     parts.append(f"--{boundary}\r\n".encode())
     parts.append(
-        f'Content-Disposition: form-data; name="data"; filename="sync-note.txt"\r\n'
-        f"Content-Type: text/plain; charset=utf-8\r\n\r\n".encode()
+        b'Content-Disposition: form-data; name="data"; filename="sync-note.txt"\r\n'
+        b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
     )
     parts.append(content)
     parts.append(b"\r\n")
     parts.append(f"--{boundary}--\r\n".encode())
     body = b"".join(parts)
 
-    headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
-    if api_key:
-        headers["X-Api-Key"] = api_key
-
+    headers = {
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "X-Api-Key": api_key
+    }
     req = urllib.request.Request(
         f"{COGNEE_BASE}/api/v1/remember",
-        data=body,
-        headers=headers,
-        method="POST"
+        data=body, headers=headers, method="POST"
     )
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=300) as resp:
             return json.loads(resp.read())
     except Exception as e:
         print(f"  ERROR cognee_remember: {e}", file=sys.stderr)
@@ -125,25 +123,36 @@ def cognee_remember(text, tags=None):
 def gbrain2cognee():
     """Push gbrain pages to Cognee."""
     print("=== gbrain → Cognee ===")
-    pages = gbrain_list_pages()
+    pages = gbrain_search_all()
     if not pages:
         print("  No pages found in gbrain")
         return 0
 
     synced = 0
-    for page in pages:
-        slug = page.get("slug") or page.get("id") or page
-        if isinstance(slug, dict):
-            slug = slug.get("slug", str(slug))
-        content = gbrain_get_page(slug)
-        if not content:
+    for slug in pages:
+        # Read page content via gbrain get (use subprocess to avoid shell escaping)
+        try:
+            r = subprocess.run(
+                ["gbrain", "get", slug],
+                capture_output=True, text=True, timeout=10,
+                env={**os.environ, "OPENAI_BASE_URL": "http://127.0.0.1:8012/v1"}
+            )
+            out = r.stdout.strip() if r.returncode == 0 else ""
+        except Exception:
+            out = ""
+
+        if not out:
             print(f"  SKIP {slug}: could not read")
             continue
 
-        # Add sync tag to avoid re-syncing
-        tagged = f"[{SYNC_TAG}] {content}"
-        result = cognee_remember(tagged, tags=["gbrain-sync", "rule"])
-        if result:
+        # Skip if already synced
+        if SYNC_TAG in out:
+            print(f"  SKIP {slug}: already synced")
+            continue
+
+        tagged = f"{SYNC_TAG} {out}"
+        result = cognee_remember(tagged)
+        if result and result.get("status") == "completed":
             synced += 1
             print(f"  ✓ {slug}")
         else:
@@ -168,12 +177,10 @@ def cognee_recall(query="*", top_k=100):
         headers["X-Api-Key"] = api_key
     req = urllib.request.Request(
         f"{COGNEE_BASE}/api/v1/recall",
-        data=data,
-        headers=headers,
-        method="POST"
+        data=data, headers=headers, method="POST"
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             return json.loads(resp.read())
     except Exception as e:
         print(f"  ERROR cognee_recall: {e}", file=sys.stderr)
@@ -181,28 +188,37 @@ def cognee_recall(query="*", top_k=100):
 
 
 def gbrain_put_page(slug, content):
-    """Write a page to gbrain via CLI."""
-    out, rc = run(f"echo '{content}' | gbrain put {slug} 2>/dev/null")
-    return rc == 0
+    """Write a page to gbrain via put_page MCP tool."""
+    # Use gbrain call put_page with JSON args
+    args = json.dumps({"slug": slug, "content": content})
+    out, rc = run(
+        f"OPENAI_BASE_URL=http://127.0.0.1:8012/v1 gbrain call put_page '{args}' 2>/dev/null",
+        timeout=30
+    )
+    return rc == 0 and "error" not in (out or "").lower()
 
 
 def cognee2gbrain():
     """Push Cognee items to gbrain."""
     print("=== Cognee → gbrain ===")
     results = cognee_recall()
-    items = results if isinstance(results, list) else results.get("results", [])
+    items = results if isinstance(results, list) else []
     if not items:
         print("  No items found in Cognee")
         return 0
 
     synced = 0
     for item in items:
-        text = item.get("text") or item.get("content") or str(item)
-        if f"[{SYNC_TAG}]" in text:
+        text = item.get("text") or item.get("raw", {}).get("value") or str(item)
+        if SYNC_TAG in text:
             continue  # Skip our own synced items
 
         slug = f"cognee-{content_hash(text)}"
-        frontmatter = f"---\ntitle: \"[cognee] {slug}\"\ntags: [cognee, synced]\ntype: fact\nscope: fleet\n---\n\n"
+        frontmatter = (
+            f"---\ntitle: \"[cognee] {slug}\"\n"
+            f"tags: [cognee, synced]\n"
+            f"type: fact\nscope: fleet\n---\n\n"
+        )
         content = frontmatter + text
 
         if gbrain_put_page(slug, content):
@@ -222,7 +238,7 @@ def show_status():
     print("=== Brain Sync Status ===\n")
 
     # gbrain
-    out, rc = run("OPENAI_BASE_URL=http://127.0.0.1:8012/v1 gbrain stats 2>/dev/null")
+    out, rc = run("OPENAI_BASE_URL=http://127.0.0.1:8012/v1 gbrain stats 2>/dev/null", env={"OPENAI_BASE_URL": "http://127.0.0.1:8012/v1"})
     print(f"gbrain:\n{out}\n" if out else "gbrain: not available\n")
 
     # Cognee

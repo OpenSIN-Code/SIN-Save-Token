@@ -7,7 +7,7 @@
 #                                 fallback: COGNEE_EMBED_BACKEND=gemini|fastembed
 #
 # Cost:
-#   - GLM 5.2 via Vercel AI Gateway (free tier or OmniRoute pool)
+#   - GLM 5.2 via Vercel AI Gateway (requires credit card on file)
 #   - NVIDIA NIM embed: free tier (~40 RPM)
 #   - Bulk: requires COGNEE_ALLOW_COSTLY=1 (see docs/COGNEE-COST-POLICY.md)
 #
@@ -60,7 +60,7 @@ case "$COGNEE_EMBED_BACKEND" in
     export EMBEDDING_MODEL="${EMBEDDING_MODEL:-nvidia/nemotron-3-embed-1b}"
     export EMBEDDING_ENDPOINT="${EMBEDDING_ENDPOINT:-http://127.0.0.1:8012/v1}"
     export EMBEDDING_API_KEY="${EMBEDDING_API_KEY:-local-nim-proxy}"
-    export EMBEDDING_DIMENSIONS="${EMBEDDING_DIMENSIONS:-2048}"
+    export EMBEDDING_DIMENSIONS="${EMBEDDING_DIMENSIONS:-1024}"
     ;;
   gemini|proxy)
     export EMBEDDING_PROVIDER=openai_compatible
