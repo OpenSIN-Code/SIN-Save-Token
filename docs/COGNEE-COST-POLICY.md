@@ -6,8 +6,8 @@
 Any agent / Orca
   → cognee-recall / cognee-remember  (CLI, all harnesses)
   → Cognee API :8011
-       ├─ LLM:   qoder-proxy :8013 → qodercli → Qwen 3.8  (Qoder subscription)
-       └─ Embed: nim-embed-proxy :8012 → NVIDIA NIM nemotron-3-embed-1b @ 2048-dim (free ~40 RPM)
+       ├─ LLM:   OmniRoute :20128 → vag/zai/glm-5.2  (Vercel AI Gateway)
+       └─ Embed: nim-embed-proxy :8012 → NVIDIA NIM nemotron-3-embed-1b @ 1024-dim (free ~40 RPM)
 ```
 
 ## Secrets
@@ -15,7 +15,8 @@ Any agent / Orca
 ```bash
 # NEVER commit. NEVER paste keys into chat/commits.
 # NVIDIA_API_KEY: free from build.nvidia.com (env var, no file needed)
-# Qoder PAT: in ~/dev/qoder-proxy/.env (chmod 600)
+# OMNIROUTE_MASTER_KEY: in ~/.omniroute/.env (chmod 600)
+# Vercel credit card: required for GLM 5.2 via Vercel AI Gateway
 ```
 
 ## Embed backends
