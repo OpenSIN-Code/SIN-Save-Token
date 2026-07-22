@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "providers": {
+    "code-review-graph": {
+      "argv": [
+        "code-review-graph",
+        "detect-changes",
+        "--base",
+        "{base}",
+        "--brief"
+      ],
+      "timeout_seconds": 180,
+      "maximum_output_chars": 24000,
+      "failure_threshold": 3,
+      "cooldown_seconds": 300
+    },
+    "graphify": {
+      "argv": [
+        "graphify",
+        "explain",
+        "{query}"
+      ],
+      "timeout_seconds": 120,
+      "maximum_output_chars": 16000,
+      "failure_threshold": 3,
+      "cooldown_seconds": 300
+    },
+    "verification-oracle": {
+      "argv": [
+        "oracle",
+        "diagnostics"
+      ],
+      "timeout_seconds": 900,
+      "maximum_output_chars": 16000,
+      "failure_threshold": 2,
+      "cooldown_seconds": 300
+    }
+  }
+}
