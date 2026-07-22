@@ -255,17 +255,15 @@ Multi-agent shared graph for Claude / Codex / OpenCode / MiMo / Cline / Orca.
 ```
 Agents → cognee-recall / cognee-remember
        → Cognee :8011
-            ├─ LLM:  qoder-proxy :8013 → qodercli → Qwen 3.8  (Qoder sub)
-            └─ Embed: nim-embed-proxy :8012 → NVIDIA NIM nemotron-3-embed-1b @ 2048 (free)
+            ├─ LLM:  OmniRoute :20128 → vag/zai/glm-5.2  (Vercel AI Gateway)
+            └─ Embed: nim-embed-proxy :8012 → NVIDIA NIM nemotron-3-embed-1b @ 1024 (free)
 ```
 
 ### Bring-up
 
 ```bash
-# NVIDIA_API_KEY env var needed (free from build.nvidia.com)
-# Qoder PAT in ~/dev/qoder-proxy/.env
-
-# full stack (auto-starts qoder-proxy + nim-embed-proxy + cognee)
+# Prerequisites: OmniRoute on :20128, NVIDIA_API_KEY in env (free from build.nvidia.com)
+# Full stack (checks OmniRoute + starts nim-embed-proxy + cognee)
 ./bin/cognee-fleet-up.sh
 ```
 
@@ -275,7 +273,7 @@ Agents → cognee-recall / cognee-remember
 cognee-status
 curl -s http://127.0.0.1:8012/health    # nim ok/error stats
 cognee-recall "What is L2 core MCP?"
-cognee-remember "short durable decision"   # uses Qwen 3.8 for cognify
+cognee-remember "short durable decision"   # uses GLM 5.2 for cognify
 ```
 
 ### Cost & ops
@@ -283,7 +281,7 @@ cognee-remember "short durable decision"   # uses Qwen 3.8 for cognify
 | Path | Cost |
 |------|------|
 | Embed (NVIDIA NIM free tier) | $0, ~40 RPM |
-| `remember` / cognify | **Qoder subscription** — short notes only |
+| `remember` / cognify | **GLM 5.2 via OmniRoute** — requires credit card on Vercel |
 | Bulk re-ingest | `COGNEE_ALLOW_COSTLY=1` required |
 
 Full policy, backends, reindex: **[docs/COGNEE-COST-POLICY.md](docs/COGNEE-COST-POLICY.md)**.
@@ -295,6 +293,35 @@ export COGNEE_EMBED_BACKEND=fastembed
 
 # after switching embed model/dims
 ./bin/cognee-reindex-vectors.sh
+```
+
+---
+
+## gbrain (Global Brain) — shared rules across agents
+
+19+ knowledge rules indexed with NIM embeddings, searchable via hybrid query (vector + keyword).
+Connected to Cognee via `bin/brain-sync.py` for bidirectional sync.
+
+```
+Agents (MCP sin-brain) → gbrain :pglite
+                       → NIM-Proxy :8012 (embeddings)
+                       → OmniRoute :20128 (expansion model)
+```
+
+### Everyday
+
+```bash
+gbrain stats                              # pages, links, tags
+gbrain search "credentials"               # keyword search
+gbrain query "Was ist SIN-Save-Token?"    # hybrid search (vector + LLM expansion)
+python3 bin/brain-sync.py gbrain2cognee   # sync gbrain → Cognee
+python3 bin/brain-sync.py cognee2gbrain   # sync Cognee → gbrain
+```
+
+### E2E Test
+
+```bash
+bin/e2e-memory-test.sh    # 14 checks: services, gbrain, Cognee, sync, agent configs
 ```
 
 ---
