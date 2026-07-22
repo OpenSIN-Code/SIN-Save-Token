@@ -70,10 +70,19 @@ def repository_id(root: Path | None = None) -> str:
     return sha256_json(material)[:24]
 
 
-def state_root(root: Path | None = None) -> Path:
+def state_base() -> Path:
     override = os.environ.get("SIN_ORCA_STATE_ROOT")
-    base = Path(override).expanduser() if override else Path.home() / ".local" / "state" / "sin-orca"
-    result = base / repository_id(root)
+    base = (
+        Path(override).expanduser()
+        if override
+        else Path.home() / ".local" / "state" / "sin-orca"
+    )
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def state_root(root: Path | None = None) -> Path:
+    result = state_base() / repository_id(root)
     result.mkdir(parents=True, exist_ok=True)
     return result
 
@@ -82,9 +91,44 @@ def task_dir(task_id: str, root: Path | None = None) -> Path:
     safe = "".join(c for c in task_id if c.isalnum() or c in "-_")
     if not safe or safe != task_id:
         raise ValueError(f"invalid task id: {task_id!r}")
-    directory = state_root(root) / task_id
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory
+
+    if root is not None:
+        directory = state_root(root) / task_id
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    current = state_root() / task_id
+    if current.exists():
+        return current
+
+    repository_bucket = current.parent.name
+    looks_like_repository_id = (
+        len(repository_bucket) == 24
+        and all(
+            character in "0123456789abcdef"
+            for character in repository_bucket
+        )
+    )
+    search_base = (
+        current.parent.parent
+        if looks_like_repository_id
+        else current.parent
+    )
+    matches = sorted(
+        path.parent
+        for path in search_base.glob(f"*/{task_id}/task.json")
+        if path.parent != current
+    )
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        locations = ", ".join(str(path) for path in matches)
+        raise RuntimeError(
+            f"task id is ambiguous across repositories: {locations}"
+        )
+
+    current.mkdir(parents=True, exist_ok=True)
+    return current
 
 
 def task_path(task_id: str, root: Path | None = None) -> Path:

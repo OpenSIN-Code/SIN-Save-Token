@@ -220,8 +220,16 @@ def dispatch_task(
     allow_edits: bool,
     repository: str | None = None,
     setup: str = "none",
+    simone_task_id: str | None = None,
 ) -> dict[str, Any]:
-    root = repository_root()
+    root = (
+        Path(repository).expanduser().resolve()
+        if repository
+        else repository_root()
+    )
+    if not root.is_dir():
+        raise ValueError(f"repository does not exist: {root}")
+
     base_sha = run_git(root, "rev-parse", "HEAD")
     task_id = make_task_id(role, objective)
 
@@ -260,6 +268,8 @@ def dispatch_task(
         "required_checkpoints": required_checkpoints,
         "allow_edits": allow_edits,
     }
+    if simone_task_id:
+        task["simone_task_id"] = simone_task_id.strip()
 
     hash_material = dict(task)
     task["task_hash"] = (
@@ -267,7 +277,7 @@ def dispatch_task(
         + sha256_json(hash_material)
     )
 
-    save_task(task)
+    save_task(task, root=root)
 
     append_event(
         task_id,
@@ -278,11 +288,12 @@ def dispatch_task(
             "role": role,
         },
         actor="codex",
+        root=root,
     )
 
     prompt = render_worker_prompt(task)
 
-    prompt_file = task_dir(task_id) / "worker-prompt.md"
+    prompt_file = task_dir(task_id, root) / "worker-prompt.md"
     prompt_file.write_text(
         prompt,
         encoding="utf-8",
@@ -301,10 +312,9 @@ def dispatch_task(
         setup,
     ]
 
-    if repository:
-        arguments.extend(
-            ["--repo", repository]
-        )
+    arguments.extend(
+        ["--repo", str(root)]
+    )
 
     try:
         result = run_orca(arguments)
@@ -317,6 +327,7 @@ def dispatch_task(
                 "error": str(error),
             },
             actor="controller",
+            root=root,
         )
         raise
 
@@ -382,6 +393,7 @@ def dispatch_task(
                 "selector": selector,
             },
             actor="controller",
+            root=root,
         )
         raise RuntimeError(
             "worker terminal could not be discovered"
@@ -399,6 +411,7 @@ def dispatch_task(
             "terminal_handle": terminal,
         },
         actor="worker",
+        root=root,
     )
 
     return {
@@ -410,4 +423,5 @@ def dispatch_task(
         "terminal": terminal,
         "worktree_path": worktree_path,
         "status": "awaiting-ack",
+        "simone_task_id": task.get("simone_task_id"),
     }

@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .verification import actual_changed_files, full_worktree_diff
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -101,28 +103,14 @@ def build_manifest(
         "HEAD",
     ).strip()
 
-    diff = run_git(
-        worktree,
-        "diff",
-        "--no-ext-diff",
-        "--no-renames",
-        task["base_sha"],
-        "--",
+    diff = full_worktree_diff(
+        worktree=worktree,
+        base_sha=task["base_sha"],
     )
 
-    changed_files = sorted(
-        {
-            line.strip()
-            for line in run_git(
-                worktree,
-                "diff",
-                "--name-only",
-                "--no-renames",
-                task["base_sha"],
-                "--",
-            ).splitlines()
-            if line.strip()
-        }
+    changed_files = actual_changed_files(
+        worktree=worktree,
+        base_sha=task["base_sha"],
     )
 
     artifact_entries = []

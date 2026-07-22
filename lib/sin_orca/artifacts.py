@@ -9,6 +9,8 @@ import stat
 from pathlib import Path
 from typing import Any
 
+from sin_context.evidence_firewall import wrap_evidence
+
 from .state import (
     append_event,
     load_task,
@@ -179,6 +181,70 @@ def _archive_bytes(
     os.replace(temporary, destination)
 
 
+def _list_count(value: Any) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
+def _bounded_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [
+        item[:500]
+        for item in value[:100]
+        if isinstance(item, str)
+    ]
+
+
+def _artifact_summary(
+    filename: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    if filename == "checkpoint.json":
+        return {
+            "checkpoint": payload.get("checkpoint"),
+            "sequence": payload.get("sequence"),
+            "step_id": payload.get("step_id"),
+            "status": payload.get("status"),
+            "changed_files": _bounded_string_list(
+                payload.get("changed_files")
+            ),
+            "unresolved_count": _list_count(
+                payload.get("unresolved")
+            ),
+        }
+    if filename == "report.json":
+        return {
+            "status": payload.get("status"),
+            "changed_files": _bounded_string_list(
+                payload.get("changed_files")
+            ),
+            "evidence_count": _list_count(payload.get("evidence")),
+            "unresolved_count": _list_count(
+                payload.get("unresolved")
+            ),
+            "scope_compliance": {
+                key: value
+                for key, value in (
+                    payload.get("scope_compliance") or {}
+                ).items()
+                if key in {
+                    "outside_allowlist_touched",
+                    "unrequested_dependencies_added",
+                }
+                and isinstance(value, bool)
+            }
+            if isinstance(payload.get("scope_compliance"), dict)
+            else {},
+        }
+    return {
+        "verdict": payload.get("verdict"),
+        "criteria_count": _list_count(payload.get("criteria")),
+        "scope_violation": payload.get("scope_violation"),
+        "regression_count": _list_count(payload.get("regressions")),
+        "unverified_count": _list_count(payload.get("unverified")),
+    }
+
+
 def ingest_artifact(
     *,
     task_id: str,
@@ -269,6 +335,13 @@ def ingest_artifact(
     if not archive.exists():
         _archive_bytes(archive, raw)
 
+    envelope = wrap_evidence(
+        source=str(archive),
+        source_type=f"{actor}-artifact",
+        content=raw.decode("utf-8"),
+        trust_level="external-untrusted",
+        metadata={"filename": filename, "actor": actor},
+    )
     event_payload = {
         **payload,
         "_artifact": {
@@ -276,6 +349,15 @@ def ingest_artifact(
             "sha256": digest,
             "size_bytes": len(raw),
             "archive_path": str(archive),
+        },
+        "_evidence": {
+            "trust_level": envelope.trust_level,
+            "source_type": envelope.source_type,
+            "sha256": envelope.sha256,
+            "suspicious_instruction_spans": len(envelope.suspicious),
+            "suspicious_lines": sorted(
+                {span.line for span in envelope.suspicious}
+            ),
         },
     }
 
@@ -294,5 +376,7 @@ def ingest_artifact(
         "filename": filename,
         "sha256": digest,
         "archive_path": str(archive),
-        "payload": payload,
+        "trust_level": envelope.trust_level,
+        "suspicious_instruction_spans": len(envelope.suspicious),
+        "payload_summary": _artifact_summary(filename, payload),
     }

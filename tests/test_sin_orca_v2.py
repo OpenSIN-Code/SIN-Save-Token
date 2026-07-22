@@ -166,6 +166,89 @@ class TestLedgerReconstruction(unittest.TestCase):
         self.assertEqual(first, second)
 
 
+class TestCliParsing(unittest.TestCase):
+    def test_verify_command_does_not_replace_subcommand(self):
+        from sin_orca.cli import main
+
+        argv = [
+            "sin-orca",
+            "verify",
+            "task-001",
+            "--command",
+            "pytest -q",
+        ]
+        with patch.object(sys, "argv", argv), patch(
+            "sin_orca.cli._cmd_verify",
+            return_value=0,
+        ) as handler:
+            result = main()
+
+        self.assertEqual(result, 0)
+        parsed = handler.call_args.args[0]
+        self.assertEqual(parsed.command, "verify")
+        self.assertEqual(parsed.verification_command, "pytest -q")
+
+
+class TestCrossRepositoryTaskLookup(unittest.TestCase):
+    def test_task_is_found_outside_dispatch_repository(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary) / "state"
+            repo_a = Path(temporary) / "repo-a"
+            repo_b = Path(temporary) / "repo-b"
+            repo_a.mkdir()
+            repo_b.mkdir()
+
+            with patch.dict(
+                os.environ,
+                {"SIN_ORCA_STATE_ROOT": str(base)},
+            ):
+                save_task(
+                    {
+                        "task_id": "cross-repo-task",
+                        "task_hash": "sha256:cross",
+                        "base_sha": "a" * 40,
+                    },
+                    root=repo_a,
+                )
+                with patch(
+                    "sin_orca.state.repository_root",
+                    return_value=repo_b,
+                ):
+                    loaded = load_task("cross-repo-task")
+
+            self.assertEqual(loaded["task_hash"], "sha256:cross")
+
+    def test_ambiguous_task_id_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary) / "state"
+            repos = [
+                Path(temporary) / name
+                for name in ("repo-a", "repo-b", "repo-c")
+            ]
+            for repository in repos:
+                repository.mkdir()
+
+            with patch.dict(
+                os.environ,
+                {"SIN_ORCA_STATE_ROOT": str(base)},
+            ):
+                for repository in (repos[0], repos[1]):
+                    save_task(
+                        {
+                            "task_id": "ambiguous-task",
+                            "task_hash": "sha256:ambiguous",
+                            "base_sha": "a" * 40,
+                        },
+                        root=repository,
+                    )
+                with patch(
+                    "sin_orca.state.repository_root",
+                    return_value=repos[2],
+                ):
+                    with self.assertRaises(RuntimeError):
+                        load_task("ambiguous-task")
+
+
 class TestScopeCheck(unittest.TestCase):
     """Test 3: Scope validation."""
 

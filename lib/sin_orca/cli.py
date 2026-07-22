@@ -17,13 +17,20 @@ from .artifacts import (
     ArtifactValidationError,
     ingest_artifact,
 )
+from .completion_manifest import (
+    build_manifest,
+    verify_manifest,
+    write_manifest,
+)
 from .dispatch import dispatch_task, run_orca
 from .gates import completion_errors
 from .lease import ControllerLease, LeaseConflictError
 from .review import start_blind_review
+from .simone_bridge import sync_task as sync_task_to_simone
 from .state import (
     append_event,
     atomic_write_json,
+    events_path,
     load_task,
     read_events,
     rebuild_ledger,
@@ -43,8 +50,12 @@ from .verification import (
 READY_PATTERN = re.compile(r"SIN_ARTIFACT_READY\s+(\S+\.json)")
 
 
-def _load_config() -> dict[str, Any]:
-    root = repository_root()
+def _load_config(task_id: str | None = None) -> dict[str, Any]:
+    if task_id is None:
+        root = repository_root()
+    else:
+        task = load_task(task_id)
+        root = Path(task["repository_root"]).expanduser().resolve()
     config_path = root / "config" / "orca-orchestrator.json"
     if config_path.is_file():
         return json.loads(
@@ -254,6 +265,7 @@ def _cmd_dispatch(args: argparse.Namespace) -> int:
         allow_edits=not args.read_only,
         repository=args.repo,
         setup=args.setup,
+        simone_task_id=args.simone_task_id,
     )
 
     print(json.dumps(result, indent=2))
@@ -452,7 +464,7 @@ def _cmd_mailbox(args: argparse.Namespace) -> int:
                 "error": str(error),
             })
 
-    config = _load_config()
+    config = _load_config(args.task_id)
 
     warnings: list[dict[str, Any]] = []
 
@@ -522,8 +534,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
     commands = task.get("verification_commands", [])
 
-    if args.command:
-        commands = [shlex.split(args.command)]
+    if args.verification_command:
+        commands = [shlex.split(args.verification_command)]
 
     verification = run_controller_commands(
         worktree=worktree,
@@ -542,7 +554,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
 
 def _cmd_review(args: argparse.Namespace) -> int:
-    config = _load_config()
+    config = _load_config(args.task_id)
     preferred = (
         config.get("review", {})
         .get("preferred_agents", ["opencode", "mimo-code"])
@@ -555,6 +567,49 @@ def _cmd_review(args: argparse.Namespace) -> int:
 
     print(json.dumps(result, indent=2))
     return 0
+
+
+def _archived_artifacts(task_id: str) -> list[Path]:
+    artifacts: dict[str, Path] = {}
+
+    for event in read_events(task_id):
+        metadata = event.get("payload", {}).get("_artifact", {})
+        if not isinstance(metadata, dict):
+            continue
+
+        raw_path = metadata.get("archive_path") or metadata.get("path")
+        if not isinstance(raw_path, str) or not raw_path:
+            continue
+
+        path = Path(raw_path).expanduser().resolve()
+        artifacts[str(path)] = path
+
+    return [artifacts[key] for key in sorted(artifacts)]
+
+
+def _build_completion_manifest(
+    *,
+    task_id: str,
+    task: dict[str, Any],
+    ledger: dict[str, Any],
+    worktree: Path,
+) -> dict[str, Any]:
+    verification = ledger.get("verification")
+    if not isinstance(verification, dict):
+        raise RuntimeError("controller verification missing")
+
+    review = ledger.get("review")
+    if review is not None and not isinstance(review, dict):
+        raise RuntimeError("invalid review payload")
+
+    return build_manifest(
+        task=task,
+        worktree=worktree,
+        events_file=events_path(task_id),
+        artifacts=_archived_artifacts(task_id),
+        verification=verification,
+        review=review,
+    )
 
 
 def _cmd_complete(args: argparse.Namespace) -> int:
@@ -572,6 +627,24 @@ def _cmd_complete(args: argparse.Namespace) -> int:
         worktree=worktree,
         base_sha=task["base_sha"],
     )
+    manifest_path = task_dir(args.task_id) / "completion-manifest.json"
+
+    if ledger.get("status") == "completed" and manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest_errors = verify_manifest(manifest)
+        if manifest_errors:
+            print(json.dumps({
+                "status": "manifest-invalid",
+                "errors": manifest_errors,
+            }, indent=2))
+            return 1
+
+        print(json.dumps({
+            "status": "completed",
+            "manifest": str(manifest_path),
+            "reused": True,
+        }, indent=2))
+        return 0
 
     errors = completion_errors(
         args.task_id,
@@ -585,12 +658,45 @@ def _cmd_complete(args: argparse.Namespace) -> int:
         }, indent=2))
         return 1
 
-    append_event(
-        args.task_id, "task.completed",
-        {"changed_files": changed},
-        actor="controller",
+    # Validate every manifest input before making task.completed final.
+    _build_completion_manifest(
+        task_id=args.task_id,
+        task=task,
+        ledger=ledger,
+        worktree=worktree,
     )
-    print(json.dumps({"status": "completed"}))
+
+    if ledger.get("status") != "completed":
+        append_event(
+            args.task_id, "task.completed",
+            {"changed_files": changed},
+            actor="controller",
+        )
+        ledger = rebuild_ledger(args.task_id)
+
+    manifest = _build_completion_manifest(
+        task_id=args.task_id,
+        task=task,
+        ledger=ledger,
+        worktree=worktree,
+    )
+    write_manifest(manifest_path, manifest)
+
+    print(json.dumps({
+        "status": "completed",
+        "manifest": str(manifest_path),
+        "integrity": manifest["integrity"],
+        "reused": False,
+    }, indent=2))
+    return 0
+
+
+def _cmd_sync_simone(args: argparse.Namespace) -> int:
+    result = sync_task_to_simone(
+        args.task_id,
+        simone_task_id=args.simone_task_id,
+    )
+    print(json.dumps(result, indent=2))
     return 0
 
 
@@ -626,6 +732,7 @@ def main() -> int:
     p.add_argument("--read-only", action="store_true")
     p.add_argument("--repo")
     p.add_argument("--setup", default="none")
+    p.add_argument("--simone-task-id")
 
     p = sub.add_parser("approve", help="Approve step")
     p.add_argument("task_id")
@@ -663,13 +770,20 @@ def main() -> int:
 
     p = sub.add_parser("verify", help="Run controller verification")
     p.add_argument("task_id")
-    p.add_argument("--command")
+    p.add_argument("--command", dest="verification_command")
 
     p = sub.add_parser("review", help="Start blind reviewer")
     p.add_argument("task_id")
 
     p = sub.add_parser("complete", help="Complete task")
     p.add_argument("task_id")
+
+    p = sub.add_parser(
+        "sync-simone",
+        help="Replay compact execution facts into Simone",
+    )
+    p.add_argument("task_id")
+    p.add_argument("--simone-task-id")
 
     p = sub.add_parser("rebuild", help="Rebuild ledger")
     p.add_argument("task_id")
@@ -694,6 +808,7 @@ def main() -> int:
         "verify": _cmd_verify,
         "review": _cmd_review,
         "complete": _cmd_complete,
+        "sync-simone": _cmd_sync_simone,
         "rebuild": _cmd_rebuild,
     }
 

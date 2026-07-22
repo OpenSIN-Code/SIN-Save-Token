@@ -12,10 +12,12 @@ Git-Diff, Tests, Typecheck, Linter, Blind Reviewer und Codex bleiben maßgeblich
 """
 
 import hashlib
-import json
 import subprocess
 from pathlib import Path
 from typing import Any, Optional
+
+from sin_context.evidence_firewall import render_for_model, wrap_evidence
+from sin_orca.verification import full_worktree_diff
 
 
 def sha256_text(text: str) -> str:
@@ -116,11 +118,10 @@ class ReviewContextBuilder:
         }.get(status[0], "modified")
 
     def _get_diff(self, base_sha: str) -> str:
-        result = run_command(
-            ["git", "diff", "--no-color", base_sha, "--"],
-            cwd=self.worktree,
+        return full_worktree_diff(
+            worktree=self.worktree,
+            base_sha=base_sha,
         )
-        return result.stdout
 
     def _extract_changed_symbols(
         self,
@@ -308,6 +309,20 @@ def build_blind_review_packet(
     
     Enthält NICHT: Worker-Report, Worker-Begründungen, Worker-Selbstbewertung.
     """
+    diff_envelope = wrap_evidence(
+        source=f"git-diff:{review_context.get('base_sha', '')}",
+        source_type="repository-diff",
+        content=diff_content,
+        trust_level="repository-untrusted",
+        metadata={
+            "diff_hash": review_context.get("diff_hash", ""),
+        },
+    )
+    safe_diff = render_for_model(
+        diff_envelope,
+        maximum_chars=60000,
+    )
+
     return {
         "original_task": {
             "objective": task.get("objective", ""),
@@ -320,9 +335,19 @@ def build_blind_review_packet(
         "base_sha": review_context.get("base_sha", ""),
         "changed_files": review_context.get("changed_files", []),
         "changed_symbols": review_context.get("changed_symbols", []),
-        "bounded_diff": diff_content[:60000],
+        "bounded_diff": safe_diff,
+        "diff_evidence": {
+            "trust_level": diff_envelope.trust_level,
+            "sha256": diff_envelope.sha256,
+            "suspicious_instruction_spans": len(
+                diff_envelope.suspicious
+            ),
+        },
         "affected_flows": review_context.get("affected_flows", []),
         "test_gaps": review_context.get("test_gaps", []),
         "risk_signals": review_context.get("risk_signals", []),
-        "acceptance_criteria": task.get("acceptance", []),
+        "acceptance_criteria": task.get(
+            "acceptance_criteria",
+            task.get("acceptance", []),
+        ),
     }

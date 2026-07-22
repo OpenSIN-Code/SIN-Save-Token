@@ -248,6 +248,135 @@ class TestE2EDispatch(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["results"][0]["argv"], ["git", "log", "--oneline", "-1"])
 
+    def test_bounded_diff_includes_untracked_files(self):
+        from sin_orca.verification import bounded_diff
+
+        repo = self.tmpdir / "untracked-diff-repo"
+        repo.mkdir()
+        initialize_repository(repo)
+        base_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+
+        (repo / "new_module.py").write_text(
+            "VALUE = 42\n",
+            encoding="utf-8",
+        )
+
+        result = bounded_diff(worktree=repo, base_sha=base_sha)
+
+        self.assertIn("new_module.py", result["text"])
+        self.assertIn("VALUE = 42", result["text"])
+        self.assertGreater(result["full_chars"], 0)
+
+    def test_complete_writes_reproducible_manifest(self):
+        import argparse
+        import contextlib
+        import io
+        from sin_orca.cli import _cmd_complete
+        from sin_orca.state import append_event, save_task
+        from unittest.mock import patch
+
+        repo = self.tmpdir / "manifest-repo"
+        repo.mkdir()
+        initialize_repository(repo)
+        base_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        (repo / "README.md").write_text("updated\n", encoding="utf-8")
+
+        state = self.tmpdir / "manifest-state"
+        task_id = "manifest-test-001"
+        task = {
+            "task_id": task_id,
+            "task_hash": "sha256:manifest-test",
+            "base_sha": base_sha,
+            "role": "explorer",
+            "objective": "Verify completion manifest",
+            "allowed_paths": ["README.md"],
+            "forbidden_paths": [],
+            "steps": [],
+            "acceptance_criteria": [],
+            "required_checkpoints": [],
+            "allow_edits": True,
+        }
+
+        with patch("sin_orca.state.state_root", lambda *a, **k: state):
+            save_task(task)
+            append_event(
+                task_id,
+                "task.created",
+                {
+                    "task_hash": task["task_hash"],
+                    "base_sha": base_sha,
+                    "role": "explorer",
+                },
+                actor="codex",
+            )
+            append_event(
+                task_id,
+                "worker.spawned",
+                {
+                    "agent": "mimo-code",
+                    "terminal_handle": "terminal-001",
+                    "worktree_path": str(repo),
+                },
+                actor="worker",
+            )
+            append_event(
+                task_id,
+                "worker.report.received",
+                {
+                    "task_id": task_id,
+                    "task_hash": task["task_hash"],
+                    "base_sha": base_sha,
+                    "status": "complete",
+                    "unresolved": [],
+                    "scope_compliance": {
+                        "outside_allowlist_touched": False,
+                        "unrequested_dependencies_added": False,
+                    },
+                },
+                actor="worker",
+            )
+            append_event(
+                task_id,
+                "verification.completed",
+                {
+                    "ok": True,
+                    "results": [{"ok": True, "argv": ["git", "diff", "--check"]}],
+                    "changed_files": ["README.md"],
+                },
+                actor="controller",
+            )
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                result = _cmd_complete(argparse.Namespace(task_id=task_id))
+
+            self.assertEqual(result, 0, output.getvalue())
+            manifest_path = state / task_id / "completion-manifest.json"
+            self.assertTrue(manifest_path.is_file())
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["body"]["changed_files"], ["README.md"])
+            self.assertTrue(manifest["integrity"]["hash"])
+
+            second_output = io.StringIO()
+            with contextlib.redirect_stdout(second_output):
+                second_result = _cmd_complete(
+                    argparse.Namespace(task_id=task_id)
+                )
+            self.assertEqual(second_result, 0, second_output.getvalue())
+            self.assertTrue(json.loads(second_output.getvalue())["reused"])
+
     def test_stall_detection_does_not_refresh_before_check(self):
         from datetime import datetime, timedelta, timezone
         from sin_orca.cli import _check_stalled

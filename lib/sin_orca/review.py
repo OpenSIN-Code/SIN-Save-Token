@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import subprocess
+import time
 from pathlib import Path
 from typing import Any
+
+from sin_context.evidence_firewall import render_for_model, wrap_evidence
 
 from .dispatch import first_string, run_orca
 from .state import (
@@ -31,6 +32,28 @@ def select_reviewer_agent(
     raise RuntimeError(
         "no independent reviewer agent is available"
     )
+
+
+def _compact_test_results(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {
+            key: item[key]
+            for key in (
+                "argv",
+                "exit_code",
+                "ok",
+                "timed_out",
+                "output_sha256",
+                "stdout_sha256",
+                "stderr_sha256",
+            )
+            if key in item
+        }
+        for item in value[:100]
+        if isinstance(item, dict)
+    ]
 
 
 def start_blind_review(
@@ -73,6 +96,21 @@ def start_blind_review(
         base_sha=task["base_sha"],
     )
 
+    diff_envelope = wrap_evidence(
+        source=f"git-diff:{task_id}",
+        source_type="repository-diff",
+        content=diff["text"],
+        trust_level="repository-untrusted",
+        metadata={
+            "base_sha": task["base_sha"],
+            "full_sha256": diff["full_sha256"],
+        },
+    )
+    safe_diff = render_for_model(
+        diff_envelope,
+        maximum_chars=60000,
+    )
+
     packet = {
         "schema_version": 1,
         "task_id": task_id,
@@ -90,11 +128,17 @@ def start_blind_review(
         "changed_files": verification[
             "changed_files"
         ],
-        "bounded_diff": diff["text"],
+        "bounded_diff": safe_diff,
         "diff_sha256": diff["full_sha256"],
-        "controller_test_results": verification[
-            "results"
-        ],
+        "diff_evidence": {
+            "trust_level": diff_envelope.trust_level,
+            "suspicious_instruction_spans": len(
+                diff_envelope.suspicious
+            ),
+        },
+        "controller_test_results": _compact_test_results(
+            verification.get("results")
+        ),
     }
 
     packet_path = (
@@ -152,6 +196,8 @@ Review packet:
             prompt,
             "--setup",
             "none",
+            "--repo",
+            str(task.get("repository_root") or worktree),
         ]
     )
 
@@ -164,29 +210,37 @@ Review packet:
         {"worktreeId", "worktree_id", "id"},
     )
 
-    selector = (
-        f"id:{reviewer_id}"
-        if reviewer_id
-        else f"path:{reviewer_path}"
-    )
+    if reviewer_id:
+        selector = f"id:{reviewer_id}"
+    elif reviewer_path:
+        selector = f"path:{reviewer_path}"
+    else:
+        raise RuntimeError(
+            "Orca did not return a reviewer worktree selector"
+        )
 
-    terminal_result = run_orca(
-        [
-            "terminal",
-            "list",
-            "--worktree",
-            selector,
-        ]
-    )
-
-    terminal = first_string(
-        terminal_result,
-        {
-            "handle",
-            "terminalHandle",
-            "terminal_handle",
-        },
-    )
+    terminal: str | None = None
+    for _ in range(20):
+        terminal_result = run_orca(
+            [
+                "terminal",
+                "list",
+                "--worktree",
+                selector,
+            ],
+            timeout=30,
+        )
+        terminal = first_string(
+            terminal_result,
+            {
+                "handle",
+                "terminalHandle",
+                "terminal_handle",
+            },
+        )
+        if terminal:
+            break
+        time.sleep(0.5)
 
     if not terminal:
         raise RuntimeError(

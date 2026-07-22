@@ -23,6 +23,11 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
+LIB = ROOT / "lib"
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+
+from sin_context.evidence_firewall import render_for_model, wrap_evidence  # noqa: E402
 DEFAULT_POLICY = ROOT / "config" / "context-policy.json"
 DEFAULT_CACHE = Path.home() / ".cache" / "sin-save-token" / "context.sqlite3"
 
@@ -86,13 +91,21 @@ def repository_fingerprint(cwd: str) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
 
 
-def cache_key(route: str, provider: str, query: str, cwd: str) -> str:
+def cache_key(
+    route: str,
+    provider: str,
+    query: str,
+    cwd: str,
+    budget: int | None = None,
+) -> str:
     canonical = {
         "route": route,
         "provider": provider,
         "query": normalize_query(query),
         "repository": os.path.realpath(cwd),
         "repository_fingerprint": repository_fingerprint(cwd),
+        "evidence_firewall_version": 1,
+        "token_budget": budget,
     }
     raw = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -261,6 +274,43 @@ def select_route(query: str, policy: dict[str, Any]) -> dict[str, Any]:
     raise RuntimeError("Policy contains no fallback route")
 
 
+def render_provider_evidence(
+    result: ProviderResult,
+    *,
+    route: str,
+    token_budget: int,
+) -> str:
+    envelope = wrap_evidence(
+        source=result.provider,
+        source_type="provider-output",
+        content=result.text,
+        trust_level="external-untrusted",
+        metadata={"route": route},
+    )
+    maximum_chars = min(
+        len(result.text),
+        max(0, token_budget * 3 - 1200),
+    )
+
+    while True:
+        rendered = render_for_model(
+            envelope,
+            maximum_chars=maximum_chars,
+        )
+        if approximate_tokens(rendered) <= token_budget:
+            return rendered
+        if maximum_chars == 0:
+            return rendered
+        maximum_chars = max(
+            0,
+            maximum_chars
+            - max(
+                256,
+                (approximate_tokens(rendered) - token_budget) * 3,
+            ),
+        )
+
+
 def useful(result: ProviderResult | None) -> bool:
     if result is None:
         return False
@@ -309,7 +359,13 @@ def main() -> int:
         if provider is None:
             continue
 
-        key = cache_key(route["name"], provider_name, query, args.cwd)
+        key = cache_key(
+            route["name"],
+            provider_name,
+            query,
+            args.cwd,
+            budget,
+        )
 
         cached = None
         if not args.no_cache:
@@ -336,7 +392,20 @@ def main() -> int:
             continue
 
         cleaned = deduplicate_sections(result.text)
-        bounded = ProviderResult(provider=result.provider, text=truncate_to_tokens(cleaned, budget), score=result.score)
+        safe_text = render_provider_evidence(
+            ProviderResult(
+                provider=result.provider,
+                text=cleaned,
+                score=result.score,
+            ),
+            route=route["name"],
+            token_budget=budget,
+        )
+        bounded = ProviderResult(
+            provider=result.provider,
+            text=safe_text,
+            score=result.score,
+        )
 
         if not args.no_cache:
             cache.put(key, bounded, provider=provider_name)

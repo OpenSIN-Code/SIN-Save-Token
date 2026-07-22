@@ -28,7 +28,7 @@ def output_hash(process: subprocess.CompletedProcess[str]) -> str:
     return hashlib.sha256(material).hexdigest()
 
 
-def output_tail(process: subprocess.CompletedProcess[str], *, limit: int = 4000) -> str:
+def output_tail(process: subprocess.CompletedProcess[str], *, limit: int = 2000) -> str:
     text = (process.stdout + "\n" + process.stderr).strip()
     if len(text) <= limit:
         return text
@@ -84,11 +84,60 @@ def validate_diff(*, worktree: Path) -> dict[str, Any]:
     return {"ok": result.returncode == 0, "argv": result.args, "exit_code": result.returncode, "output_tail": output_tail(result), "output_sha256": output_hash(result)}
 
 
+def full_worktree_diff(*, worktree: Path, base_sha: str) -> str:
+    """Return a stable Git diff that also includes untracked files."""
+    tracked = run(
+        [
+            "git", "diff", "--no-ext-diff", "--no-renames",
+            "--unified=4", base_sha, "--",
+        ],
+        cwd=worktree,
+        timeout=120,
+    )
+    if tracked.returncode != 0:
+        raise RuntimeError(tracked.stderr.strip() or "git diff failed")
+
+    untracked = run(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+        cwd=worktree,
+        timeout=60,
+    )
+    if untracked.returncode != 0:
+        raise RuntimeError(
+            untracked.stderr.strip() or "git ls-files failed"
+        )
+
+    sections = [tracked.stdout.rstrip("\n")]
+    for relative_path in sorted(
+        item
+        for item in untracked.stdout.split("\0")
+        if item and not item.startswith(".sin-worker/")
+    ):
+        extra = run(
+            [
+                "git", "diff", "--no-index", "--no-ext-diff",
+                "--no-renames", "--unified=4", "--",
+                "/dev/null", relative_path,
+            ],
+            cwd=worktree,
+            timeout=120,
+        )
+        # `git diff --no-index` returns 1 when differences are found.
+        if extra.returncode not in {0, 1}:
+            raise RuntimeError(
+                extra.stderr.strip()
+                or f"git diff failed for untracked file {relative_path}"
+            )
+        if extra.stdout:
+            sections.append(extra.stdout.rstrip("\n"))
+
+    return "\n".join(section for section in sections if section) + (
+        "\n" if any(sections) else ""
+    )
+
+
 def bounded_diff(*, worktree: Path, base_sha: str, maximum_chars: int = 60000) -> dict[str, Any]:
-    result = run(["git", "diff", "--no-ext-diff", "--no-renames", "--unified=4", base_sha, "--"], cwd=worktree, timeout=120)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or "git diff failed")
-    full = result.stdout
+    full = full_worktree_diff(worktree=worktree, base_sha=base_sha)
     clipped = full[:maximum_chars]
     if len(full) > maximum_chars:
         clipped += "\n...[bounded diff truncated]"

@@ -1,16 +1,17 @@
-name: Context Discipline
+name: Integration Verification
 
 on:
   pull_request:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  context-discipline:
+  verification-gates:
     runs-on: ubuntu-latest
 
     steps:
@@ -22,43 +23,66 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate JSON policy
-        run: |
-          python -m json.tool config/context-policy.json >/dev/null
+      - name: Install verification tools
+        run: python -m pip install --disable-pip-version-check pytest ruff jsonschema
 
-      - name: Compile Python entrypoints
+      - name: Validate JSON configuration and schemas
         run: |
-          python -m py_compile \
-            bin/sin-context \
-            bin/sin-memory-write \
-            bin/brain-sync.py
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from jsonschema import Draft202012Validator
 
-      - name: Run context tests
-        run: |
-          python -m unittest discover \
-            -s tests \
-            -p 'test_*.py' \
-            -v
+          paths = sorted(Path("config").glob("*.json"))
+          paths += sorted(Path("shared/contracts").glob("*.json"))
+          assert paths, "no JSON policy files found"
 
-      - name: Check executable declarations
+          for path in paths:
+              document = json.loads(path.read_text(encoding="utf-8"))
+              if path.name.endswith(".schema.json"):
+                  Draft202012Validator.check_schema(document)
+              print(f"validated {path}")
+          PY
+
+      - name: Compile all Python sources
+        run: python -m compileall -q bin lib tests scripts
+
+      - name: Structural audit
+        run: python scripts/audit-python-structure.py .
+
+      - name: Ruff critical rules
+        run: ruff check --select E9,F63,F7,F82 bin lib tests scripts
+
+      - name: Run complete test suite
+        run: python -m pytest -q
+
+      - name: Check executable entrypoints
         run: |
           test -x bin/sin-context
           test -x bin/sin-memory-write
           test -x bin/brain-sync.py
+          test -x bin/sin-orca
 
-      - name: Enforce context budget
+      - name: Enforce orchestration invariants
         run: |
           python - <<'PY'
           import json
 
-          policy = json.load(
-              open("config/context-policy.json", encoding="utf-8")
-          )
+          config = json.load(open("config/orca-orchestrator.json", encoding="utf-8"))
+          worker = config["worker_control"]
+          assert worker["maximum_worker_steps"] is None
+          assert worker["maximum_commands"] is None
+          assert worker["maximum_wall_seconds"] is None
+          assert worker["codex_context_policy"]["allow_raw_terminal_transcript"] is False
 
-          assert policy["budgets"]["maximum_tokens"] <= 2000
-          assert policy["retrieval"]["maximum_provider_attempts"] <= 2
-          assert policy["retrieval"]["maximum_sources"] <= 5
+          providers = json.load(open("config/intelligence-providers.json", encoding="utf-8"))
+          graph = providers["providers"]["general_code_graph"]
+          assert graph["primary"] == "graphify"
+          assert graph["fallback"] == "gitnexus"
+          assert graph["allow_simultaneous_execution"] is False
+          assert providers["rules"]["never_accept_code_without_controller_verification"] is True
 
-          for route in policy["routes"]:
-              assert len(route["providers"]) <= 3
+          capabilities = json.load(open("config/capabilities.json", encoding="utf-8"))
+          for name, capability in capabilities["capabilities"].items():
+              assert capability["max_steps"] is None, name
           PY
