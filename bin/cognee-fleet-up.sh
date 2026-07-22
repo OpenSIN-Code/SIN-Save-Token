@@ -1,21 +1,16 @@
 #!/usr/bin/env bash
 # Everyday multi-agent Cognee stack for Claude / Codex / OpenCode / MiMo / Cline / Orca.
-# LLM: qoder-proxy :8013 → qodercli → Qwen 3.8
+# LLM: OmniRoute :20128 → vag/zai/glm-5.2
 # Embed: NVIDIA NIM nemotron-3-embed-1b @ 2048-dim (free ~40 RPM) via nim-embed-proxy :8012
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-echo "== 1) qoder-proxy (Qwen 3.8 LLM) =="
-if ! curl -sS -m 2 -o /dev/null "http://127.0.0.1:8013/v1/models" 2>/dev/null; then
-  echo "starting qoder-proxy on :8013..."
-  (cd "$HOME/dev/qoder-proxy" && nohup node clean/server.js &>/tmp/qoder-proxy.log &)
-  sleep 2
-  if ! curl -sS -m 2 -o /dev/null "http://127.0.0.1:8013/v1/models" 2>/dev/null; then
-    echo "error: qoder-proxy failed to start — check /tmp/qoder-proxy.log" >&2
-    exit 1
-  fi
+echo "== 1) OmniRoute (GLM 5.2 LLM) =="
+if ! curl -sS -m 2 -o /dev/null "http://127.0.0.1:20128/" 2>/dev/null; then
+  echo "error: OmniRoute not reachable on :20128 — start: omniroute serve" >&2
+  exit 1
 fi
-echo "qoder-proxy OK on :8013"
+echo "OmniRoute OK on :20128"
 
 echo "== 2) NIM embed proxy (nemotron-3-embed-1b @ 2048) =="
 if ! curl -sS -m 2 http://127.0.0.1:8012/health 2>/dev/null | grep -q ok; then
@@ -29,7 +24,7 @@ if ! curl -sS -m 2 http://127.0.0.1:8012/health 2>/dev/null | grep -q ok; then
 fi
 echo "nim-embed-proxy OK on :8012"
 
-echo "== 3) Cognee API with qoder-proxy env =="
+echo "== 3) Cognee API with OmniRoute env =="
 # shellcheck disable=SC1091
 source "$ROOT/bin/cognee-omniroute-env.sh"
 "$ROOT/bin/cognee-start-omniroute.sh"
@@ -65,7 +60,7 @@ Ready — all agents share the same HTTP API + CLI (0 always-on MCP tax):
   cognee-remember --file path/to/note.md
 
 Embed: NVIDIA NIM nemotron-3-embed-1b @ 2048 (free, proxy :8012).
-LLM: Qwen 3.8 via qoder-proxy :8013 (Qoder subscription).
+LLM: GLM 5.2 via OmniRoute :20128 (Vercel AI Gateway).
 
 Claude Code (extra): plugin auto-inject
   export COGNEE_PLUGIN_DATASET=sin-fleet

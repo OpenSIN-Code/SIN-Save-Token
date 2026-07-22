@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Start local Cognee API on :8011.
-# LLM: qoder-proxy :8013 → qodercli → Qwen 3.8
-# Embed: Gemini via :8012 proxy (default) with local mxbai fallback
+# LLM: OmniRoute :20128 → vag/zai/glm-5.2
+# Embed: NVIDIA NIM via :8012 proxy (default) with local mxbai fallback
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT/bin/cognee-omniroute-env.sh"
 
-# Require qoder-proxy
-if ! curl -sS -m 2 -o /dev/null "http://127.0.0.1:8013/v1/models" 2>/dev/null; then
-  echo "error: qoder-proxy not reachable on :8013 — start: cd ~/dev/qoder-proxy && npm start" >&2
+# Require OmniRoute
+if ! curl -sS -m 2 -o /dev/null "http://127.0.0.1:20128/" 2>/dev/null; then
+  echo "error: OmniRoute not reachable on :20128 — start: omniroute serve" >&2
   exit 1
 fi
 
