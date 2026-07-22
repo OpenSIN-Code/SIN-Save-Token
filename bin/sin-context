@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -279,6 +280,7 @@ def main() -> int:
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--packet", action="store_true", help="output structured context packet")
     args = parser.parse_args()
 
     query = " ".join(args.query).strip()
@@ -292,7 +294,15 @@ def main() -> int:
     maximum_attempts = int(policy["retrieval"].get("maximum_provider_attempts", 2))
     cache = ContextCache(args.cache)
 
+    # Load packet builder
+    packet_spec = importlib.util.spec_from_file_location(
+        "sin_context_packet", ROOT / "bin" / "sin-context-packet.py"
+    )
+    packet_mod = importlib.util.module_from_spec(packet_spec)
+    packet_spec.loader.exec_module(packet_mod)
+
     attempted: list[str] = []
+    prior_context = ""
 
     for provider_name in route["providers"][:maximum_attempts]:
         attempted.append(provider_name)
@@ -310,8 +320,14 @@ def main() -> int:
             if cached.is_negative:
                 continue
             text = truncate_to_tokens(cached.text, budget)
-            payload = {"route": route["name"], "provider": provider_name, "cached": True, "approx_tokens": approximate_tokens(text), "context": text}
-            print(json.dumps(payload, ensure_ascii=False) if args.json else text)
+            if args.packet:
+                packet = packet_mod.build_packet(text, provider_name, route["name"], approximate_tokens(text), prior_context)
+                print(packet.to_json())
+            elif args.json:
+                payload = {"route": route["name"], "provider": provider_name, "cached": True, "approx_tokens": approximate_tokens(text), "context": text}
+                print(json.dumps(payload, ensure_ascii=False))
+            else:
+                print(text)
             return 0
 
         result = provider(query, args.cwd)
@@ -326,12 +342,22 @@ def main() -> int:
         if not args.no_cache:
             cache.put(key, bounded, provider=provider_name)
 
-        payload = {"route": route["name"], "provider": bounded.provider, "cached": False, "approx_tokens": approximate_tokens(bounded.text), "context": bounded.text}
-        print(json.dumps(payload, ensure_ascii=False) if args.json else bounded.text)
+        if args.packet:
+            packet = packet_mod.build_packet(bounded.text, bounded.provider, route["name"], approximate_tokens(bounded.text), prior_context)
+            print(packet.to_json())
+        elif args.json:
+            payload = {"route": route["name"], "provider": bounded.provider, "cached": False, "approx_tokens": approximate_tokens(bounded.text), "context": bounded.text}
+            print(json.dumps(payload, ensure_ascii=False))
+        else:
+            print(bounded.text)
         return 0
 
     if args.json:
         print(json.dumps({"route": route["name"], "provider": None, "cached": False, "attempted": attempted, "context": ""}))
+    elif args.packet:
+        packet = packet_mod.build_packet("", "", route["name"], 0)
+        packet.uncertainty = f"No useful context found. Attempted: {', '.join(attempted)}"
+        print(packet.to_json())
     else:
         print(f"# no useful context; attempted: {', '.join(attempted)}", file=sys.stderr)
     return 3
