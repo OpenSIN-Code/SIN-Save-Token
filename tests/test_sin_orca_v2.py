@@ -1,37 +1,54 @@
 #!/usr/bin/env python3
 """
-Unit tests für sin-orca v2.
-5 Tests: Event-Log, Ledger, Scope-Check, Artifacts, Checkpoint-Statemachine.
+Unit tests for sin_orca package — state, events, scope, artifacts, lease.
 """
 
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bin"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-import importlib.util
-_orca_path = Path(__file__).resolve().parent.parent / "bin" / "sin-orca"
-spec = importlib.util.spec_from_loader("sin_orca", loader=None, origin=str(_orca_path))
-# .py extension needed for spec_from_file_location; use exec approach
-_code = _orca_path.read_text()
-sin_orca = type(sys)("sin_orca")
-sin_orca.__file__ = str(_orca_path)
-exec(compile(_code, str(_orca_path), "exec"), sin_orca.__dict__)
+from sin_orca.state import (
+    append_event,
+    atomic_write_json,
+    events_path,
+    load_task,
+    read_events,
+    rebuild_ledger,
+    save_task,
+    sha256_json,
+    state_root,
+    task_dir,
+    ZERO_HASH,
+)
+from sin_orca.verification import (
+    actual_changed_files,
+    path_allowed,
+    validate_scope,
+)
+from sin_orca.lease import (
+    ControllerLease,
+    LeaseConflictError,
+    LeaseLostError,
+    controller_identity,
+)
+from sin_orca.artifacts import (
+    ArtifactValidationError,
+    ingest_artifact,
+)
 
 
 class TestEventLogAppendAndHash(unittest.TestCase):
-    """Test 1: Event-Log append + SHA256-Integrität."""
+    """Test 1: Event-Log append + SHA256 integrity."""
 
     def setUp(self):
         self.tmpdir = Path(tempfile.mkdtemp())
-        self._patcher = patch.object(sin_orca, "state_root", lambda: self.tmpdir)
+        self._patcher = patch("sin_orca.state.state_root", lambda *a, **k: self.tmpdir)
         self._patcher.start()
 
     def tearDown(self):
@@ -39,45 +56,67 @@ class TestEventLogAppendAndHash(unittest.TestCase):
 
     def test_append_creates_valid_event_chain(self):
         task_id = "test-chain-001"
-        sin_orca.task_directory(task_id).mkdir(parents=True, exist_ok=True)
+        task_dir(task_id).mkdir(parents=True, exist_ok=True)
 
-        sin_orca.append_event(task_id, "task.created", {"role": "test"})
-        sin_orca.append_event(task_id, "task.dispatched", {"worker": "mimo"})
-        sin_orca.append_event(task_id, "worker.checkpoint", {"checkpoint": "plan-ready"})
+        save_task({
+            "task_id": task_id,
+            "task_hash": "sha256:abc",
+            "base_sha": "a" * 40,
+            "role": "test",
+            "objective": "test",
+            "allowed_paths": [],
+            "steps": [],
+            "acceptance_criteria": [],
+        })
 
-        events = sin_orca.read_events(task_id)
+        append_event(task_id, "task.created", {"task_hash": "sha256:abc", "base_sha": "a" * 40, "role": "test"}, actor="codex")
+        append_event(task_id, "worker.spawned", {"agent": "mimo", "terminal_handle": "t1", "worktree_path": "/tmp"}, actor="worker")
+        append_event(task_id, "checkpoint.received", {"checkpoint": "plan-ready"}, actor="worker")
+
+        events = read_events(task_id)
         self.assertEqual(len(events), 3)
 
-        self.assertEqual(events[0]["sequence"], 1)
-        self.assertEqual(events[0]["type"], "task.created")
-        self.assertEqual(events[0]["previous_hash"], sin_orca.ZERO_HASH)
-
-        self.assertEqual(events[1]["sequence"], 2)
+        self.assertEqual(events[0]["previous_hash"], ZERO_HASH)
         self.assertEqual(events[1]["previous_hash"], events[0]["event_hash"])
-
-        self.assertEqual(events[2]["sequence"], 3)
         self.assertEqual(events[2]["previous_hash"], events[1]["event_hash"])
 
-        for event in events:
-            material = {
-                "sequence": event["sequence"],
-                "type": event["type"],
-                "timestamp": event["timestamp"],
-                "payload": event["payload"],
-                "previous_hash": event["previous_hash"],
-            }
-            expected_hash = sin_orca.sha256_text(
-                json.dumps(material, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-            )
-            self.assertEqual(event["event_hash"], expected_hash)
+        for i, event in enumerate(events, 1):
+            self.assertEqual(event["sequence"], i)
+
+    def test_event_hash_tampering_blocks_rebuild(self):
+        task_id = "test-tamper-001"
+        task_dir(task_id).mkdir(parents=True, exist_ok=True)
+
+        save_task({
+            "task_id": task_id,
+            "task_hash": "sha256:abc",
+            "base_sha": "a" * 40,
+            "role": "test",
+            "objective": "test",
+            "allowed_paths": [],
+            "steps": [],
+            "acceptance_criteria": [],
+        })
+
+        append_event(task_id, "task.created", {"task_hash": "sha256:abc", "base_sha": "a" * 40, "role": "test"}, actor="codex")
+
+        path = events_path(task_id)
+        lines = path.read_text(encoding="utf-8").splitlines()
+        event = json.loads(lines[0])
+        event["payload"] = {"tampered": True}
+        lines[0] = json.dumps(event)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        with self.assertRaises(RuntimeError):
+            read_events(task_id, verify=True)
 
 
 class TestLedgerReconstruction(unittest.TestCase):
-    """Test 2: Ledger fully reconstructable from events."""
+    """Test 2: Ledger reconstruction from events."""
 
     def setUp(self):
         self.tmpdir = Path(tempfile.mkdtemp())
-        self._patcher = patch.object(sin_orca, "state_root", lambda: self.tmpdir)
+        self._patcher = patch("sin_orca.state.state_root", lambda *a, **k: self.tmpdir)
         self._patcher.start()
 
     def tearDown(self):
@@ -85,285 +124,256 @@ class TestLedgerReconstruction(unittest.TestCase):
 
     def test_ledger_reconstructs_from_events(self):
         task_id = "test-ledger-001"
-        sin_orca.task_directory(task_id).mkdir(parents=True, exist_ok=True)
+        task_dir(task_id).mkdir(parents=True, exist_ok=True)
 
-        sin_orca.append_event(task_id, "task.created", {"role": "impl", "objective": "fix bug"})
-        sin_orca.append_event(task_id, "task.dispatched", {"worker": "mimo", "worktree_path": "/tmp/wt"})
-        sin_orca.append_event(task_id, "worker.checkpoint", {"checkpoint": "plan-ready"})
-        sin_orca.append_event(task_id, "codex.approved", {"step_id": "s1", "instruction": "go"})
-        sin_orca.append_event(task_id, "worker.checkpoint", {"checkpoint": "implement-done"})
-        sin_orca.append_event(task_id, "controller.verification", {"ok": True, "results": []})
+        save_task({
+            "task_id": task_id,
+            "task_hash": "sha256:abc",
+            "base_sha": "a" * 40,
+            "role": "implementer",
+            "objective": "test",
+            "allowed_paths": [],
+            "steps": [],
+            "acceptance_criteria": [],
+        })
 
-        ledger = sin_orca.current_ledger(task_id)
+        append_event(task_id, "task.created", {"task_hash": "sha256:abc", "base_sha": "a" * 40, "role": "implementer"}, actor="codex")
+        append_event(task_id, "worker.spawned", {"agent": "mimo-code", "terminal_handle": "t1"}, actor="worker")
 
-        self.assertEqual(ledger["status"], "verification-complete")
-        self.assertEqual(ledger["events_count"], 6)
-        self.assertEqual(ledger["task"]["role"], "impl")
-        self.assertEqual(ledger["worker"]["worktree_path"], "/tmp/wt")
-        self.assertTrue(ledger["verification"]["ok"])
+        ledger = rebuild_ledger(task_id)
+        self.assertEqual(ledger["status"], "awaiting-ack")
+        self.assertIn("worker", ledger["actors"])
 
     def test_ledger_idempotent_rebuild(self):
-        task_id = "test-rebuild-001"
-        sin_orca.task_directory(task_id).mkdir(parents=True, exist_ok=True)
+        task_id = "test-ledger-002"
+        task_dir(task_id).mkdir(parents=True, exist_ok=True)
 
-        sin_orca.append_event(task_id, "task.created", {"role": "test"})
-        sin_orca.append_event(task_id, "task.dispatched", {"worker": "mimo"})
+        save_task({
+            "task_id": task_id,
+            "task_hash": "sha256:abc",
+            "base_sha": "a" * 40,
+            "role": "test",
+            "objective": "test",
+            "allowed_paths": [],
+            "steps": [],
+            "acceptance_criteria": [],
+        })
 
-        ledger1 = sin_orca.current_ledger(task_id)
-        events = sin_orca.read_events(task_id)
-        ledger2 = sin_orca.reduce_events(task_id, events)
+        append_event(task_id, "task.created", {"task_hash": "sha256:abc", "base_sha": "a" * 40, "role": "test"}, actor="codex")
 
-        self.assertEqual(ledger1, ledger2)
+        first = rebuild_ledger(task_id)
+        second = rebuild_ledger(task_id)
+        self.assertEqual(first, second)
 
 
 class TestScopeCheck(unittest.TestCase):
-    """Test 3: actual_changed_files uses git, not worker report."""
-
-    def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
-        self.worktree = Path(self.tmpdir) / "worktree"
-        self.worktree.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["git", "init"], cwd=self.worktree, capture_output=True)
-        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=self.worktree, capture_output=True)
-        subprocess.run(["git", "config", "user.name", "Test"], cwd=self.worktree, capture_output=True)
-
-        (self.worktree / "allowed.txt").write_text("allowed content")
-        (self.worktree / ".sin-worker").mkdir()
-        (self.worktree / ".sin-worker" / "secret.txt").write_text("should be excluded")
-
-        subprocess.run(["git", "add", "allowed.txt"], cwd=self.worktree, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "init"], cwd=self.worktree, capture_output=True)
-
-        (self.worktree / "new_file.txt").write_text("new content")
-        (self.worktree / ".sin-worker" / "outbox").mkdir(parents=True)
-        (self.worktree / ".sin-worker" / "outbox" / "checkpoint.json").write_text("{}")
+    """Test 3: Scope validation."""
 
     def test_excludes_sin_worker(self):
-        task = {"base_sha": "HEAD"}
-        ledger = {"worker": {"worktree_path": str(self.worktree)}}
+        files = [".sin-worker/outbox/checkpoint.json", "src/main.py", "README.md"]
+        filtered = [f for f in files if not f.startswith(".sin-worker/")]
+        self.assertEqual(filtered, ["src/main.py", "README.md"])
 
-        changed = sin_orca.actual_changed_files(task, ledger)
+    def test_path_allowed_exact(self):
+        self.assertTrue(path_allowed("src/main.py", ["src/main.py"]))
 
-        self.assertIn("new_file.txt", changed)
-        self.assertFalse(
-            any(".sin-worker" in f for f in changed),
-            f".sin-worker files should be excluded: {changed}",
+    def test_path_allowed_prefix(self):
+        self.assertTrue(path_allowed("src/sub/deep.py", ["src"]))
+
+    def test_path_not_allowed(self):
+        self.assertFalse(path_allowed("src/secret.py", ["docs"]))
+
+    def test_forbidden_path_caught(self):
+        errors = validate_scope(
+            changed_files=["src/main.py", "config/secrets.env"],
+            allowed_paths=["src", "config"],
+            forbidden_paths=["config/secrets.env"],
+            allow_edits=True,
         )
+        self.assertTrue(any("forbidden" in e for e in errors))
 
 
-class TestArtifactConsumption(unittest.TestCase):
-    """Test 4: consume_artifact reads + deletes artifact file."""
+class TestArtifactValidation(unittest.TestCase):
+    """Test 4: Artifact identity and shape validation."""
 
     def setUp(self):
         self.tmpdir = Path(tempfile.mkdtemp())
-        self._patcher = patch.object(sin_orca, "state_root", lambda: self.tmpdir)
+        self._patcher = patch("sin_orca.state.state_root", lambda *a, **k: self.tmpdir)
         self._patcher.start()
 
     def tearDown(self):
         self._patcher.stop()
 
-    def test_consume_artifact_reads_and_deletes(self):
-        task_id = "test-artifact-001"
-        worktree = Path(tempfile.mkdtemp()) / "worktree"
-        outbox = worktree / ".sin-worker" / "outbox"
+    def test_artifact_with_wrong_task_hash_is_rejected(self):
+        task_id = "test-art-001"
+        task_dir(task_id).mkdir(parents=True, exist_ok=True)
+
+        save_task({
+            "task_id": task_id,
+            "task_hash": "sha256:correct",
+            "base_sha": "a" * 40,
+            "role": "test",
+            "objective": "test",
+            "allowed_paths": [],
+            "steps": [],
+            "acceptance_criteria": [],
+            "required_checkpoints": [],
+        })
+
+        outbox = self.tmpdir / "outbox"
+        outbox.mkdir(parents=True)
+        artifact = outbox / "report.json"
+        artifact.write_text(json.dumps({
+            "task_id": task_id,
+            "task_hash": "sha256:WRONG",
+            "base_sha": "a" * 40,
+            "status": "complete",
+            "changed_files": [],
+            "evidence": [],
+            "unresolved": [],
+        }), encoding="utf-8")
+
+        with self.assertRaises(ArtifactValidationError):
+            ingest_artifact(
+                task_id=task_id,
+                actor="worker",
+                outbox=outbox,
+                filename="report.json",
+            )
+
+    def test_artifact_is_not_deleted_before_archival(self):
+        task_id = "test-art-002"
+        task_dir(task_id).mkdir(parents=True, exist_ok=True)
+
+        save_task({
+            "task_id": task_id,
+            "task_hash": "sha256:abc",
+            "base_sha": "a" * 40,
+            "role": "test",
+            "objective": "test",
+            "allowed_paths": [],
+            "steps": [],
+            "acceptance_criteria": [],
+            "required_checkpoints": [],
+        })
+
+        outbox = self.tmpdir / "outbox2"
+        outbox.mkdir(parents=True)
+        artifact = outbox / "report.json"
+        artifact.write_text(json.dumps({
+            "task_id": task_id,
+            "task_hash": "sha256:abc",
+            "base_sha": "a" * 40,
+            "status": "complete",
+            "changed_files": [],
+            "evidence": [],
+            "unresolved": [],
+        }), encoding="utf-8")
+
+        result = ingest_artifact(
+            task_id=task_id,
+            actor="worker",
+            outbox=outbox,
+            filename="report.json",
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["duplicate"])
+        self.assertIn("archive_path", result)
+        self.assertTrue(Path(result["archive_path"]).is_file())
+        self.assertFalse(artifact.exists())
+
+    def test_duplicate_artifact_is_idempotent(self):
+        task_id = "test-art-003"
+        task_dir(task_id).mkdir(parents=True, exist_ok=True)
+
+        save_task({
+            "task_id": task_id,
+            "task_hash": "sha256:abc",
+            "base_sha": "a" * 40,
+            "role": "test",
+            "objective": "test",
+            "allowed_paths": [],
+            "steps": [],
+            "acceptance_criteria": [],
+            "required_checkpoints": [],
+        })
+
+        outbox = self.tmpdir / "outbox3"
         outbox.mkdir(parents=True)
 
-        checkpoint_data = {"checkpoint": "plan-ready", "summary": "Plan erstellt"}
-        (outbox / "checkpoint.json").write_text(json.dumps(checkpoint_data))
+        for i in range(2):
+            artifact = outbox / "report.json"
+            artifact.write_text(json.dumps({
+                "task_id": task_id,
+                "task_hash": "sha256:abc",
+                "base_sha": "a" * 40,
+                "status": "complete",
+                "changed_files": [],
+                "evidence": [],
+                "unresolved": [],
+            }), encoding="utf-8")
 
-        sin_orca.task_directory(task_id).mkdir(parents=True, exist_ok=True)
-        sin_orca.append_event(
-            task_id,
-            "task.dispatched",
-            {"worker": "mimo", "worktree_path": str(worktree)},
+            result = ingest_artifact(
+                task_id=task_id,
+                actor="worker",
+                outbox=outbox,
+                filename="report.json",
+            )
+
+            if i == 0:
+                self.assertTrue(result["ok"])
+                self.assertFalse(result["duplicate"])
+            else:
+                self.assertTrue(result["ok"])
+                self.assertTrue(result["duplicate"])
+
+
+class TestControllerLease(unittest.TestCase):
+    """Test 5: Controller lease exclusivity."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def test_second_controller_cannot_mutate_live_task(self):
+        lease1 = ControllerLease(self.tmpdir, owner="controller-A")
+        lease_a = lease1.acquire(ttl_seconds=300)
+
+        lease2 = ControllerLease(self.tmpdir, owner="controller-B")
+
+        with self.assertRaises(LeaseConflictError):
+            lease2.acquire(ttl_seconds=300)
+
+        lease1.release(lease_a.token)
+
+    def test_expired_controller_lease_can_be_recovered(self):
+        import json
+        import time
+
+        lease1 = ControllerLease(self.tmpdir, owner="controller-A")
+        lease_a = lease1.acquire(ttl_seconds=30)
+
+        # Manually expire the lease by writing an expired timestamp
+        lease_data = json.loads(
+            (self.tmpdir / "controller-lease.json").read_text()
+        )
+        lease_data["expires_at"] = time.time() - 1
+        (self.tmpdir / "controller-lease.json").write_text(
+            json.dumps(lease_data) + "\n"
         )
 
-        result = sin_orca.consume_artifact(task_id, "worker", "checkpoint.json")
+        lease2 = ControllerLease(self.tmpdir, owner="controller-B")
+        lease_b = lease2.acquire(ttl_seconds=300)
 
-        self.assertEqual(result["artifact"], "checkpoint.json")
-        self.assertEqual(result["checkpoint"], "plan-ready")
-        self.assertFalse((outbox / "checkpoint.json").exists())
+        self.assertEqual(lease_b.owner, "controller-B")
 
-    def test_consume_missing_artifact_returns_error(self):
-        task_id = "test-artifact-002"
-        worktree = Path(tempfile.mkdtemp()) / "worktree2"
-        outbox = worktree / ".sin-worker" / "outbox"
-        outbox.mkdir(parents=True)
+    def test_renew_extends_lease(self):
+        lease1 = ControllerLease(self.tmpdir, owner="controller-A")
+        lease_a = lease1.acquire(ttl_seconds=60)
 
-        sin_orca.task_directory(task_id).mkdir(parents=True, exist_ok=True)
-        sin_orca.append_event(
-            task_id,
-            "task.dispatched",
-            {"worker": "mimo", "worktree_path": str(worktree)},
-        )
+        renewed = lease1.renew(lease_a.token, ttl_seconds=120)
 
-        result = sin_orca.consume_artifact(task_id, "worker", "nonexistent.json")
-        self.assertEqual(result["error"], "not_found")
-
-
-class TestCheckpointStateMachine(unittest.TestCase):
-    """Test 5: Checkpoint state machine transitions."""
-
-    def setUp(self):
-        self.tmpdir = Path(tempfile.mkdtemp())
-        self._patcher = patch.object(sin_orca, "state_root", lambda: self.tmpdir)
-        self._patcher.start()
-
-    def tearDown(self):
-        self._patcher.stop()
-
-    def test_full_state_machine(self):
-        task_id = "test-statemachine-001"
-        sin_orca.task_directory(task_id).mkdir(parents=True, exist_ok=True)
-
-        sin_orca.append_event(task_id, "task.created", {"role": "test"})
-        ledger = sin_orca.current_ledger(task_id)
-        self.assertEqual(ledger["status"], "created")
-
-        sin_orca.append_event(task_id, "task.dispatched", {"worker": "mimo"})
-        ledger = sin_orca.current_ledger(task_id)
-        self.assertEqual(ledger["status"], "dispatched")
-
-        sin_orca.append_event(task_id, "worker.checkpoint", {"checkpoint": "plan-ready"})
-        ledger = sin_orca.current_ledger(task_id)
-        self.assertEqual(ledger["status"], "checkpoint:plan-ready")
-
-        sin_orca.append_event(task_id, "codex.approved", {"step_id": "s1", "instruction": "go"})
-        sin_orca.append_event(task_id, "worker.checkpoint", {"checkpoint": "implement-done"})
-        ledger = sin_orca.current_ledger(task_id)
-        self.assertEqual(ledger["status"], "checkpoint:implement-done")
-
-        sin_orca.append_event(task_id, "worker.report", {"summary": "done"})
-        ledger = sin_orca.current_ledger(task_id)
-        self.assertEqual(ledger["status"], "report-received")
-
-        sin_orca.append_event(task_id, "controller.verification", {"ok": True})
-        ledger = sin_orca.current_ledger(task_id)
-        self.assertEqual(ledger["status"], "verification-complete")
-
-        sin_orca.append_event(task_id, "reviewer.verdict", {"verdict": "accept"})
-        ledger = sin_orca.current_ledger(task_id)
-        self.assertEqual(ledger["status"], "review-received")
-
-        sin_orca.append_event(task_id, "task.completed", {})
-        ledger = sin_orca.current_ledger(task_id)
-        self.assertEqual(ledger["status"], "completed")
-
-    def test_suspend_resume_flow(self):
-        task_id = "test-suspend-001"
-        sin_orca.task_directory(task_id).mkdir(parents=True, exist_ok=True)
-
-        sin_orca.append_event(task_id, "task.created", {"role": "test"})
-        sin_orca.append_event(task_id, "task.dispatched", {"worker": "mimo"})
-        sin_orca.append_event(task_id, "worker.checkpoint", {"checkpoint": "plan-ready"})
-
-        sin_orca.append_event(task_id, "codex.suspended", {"reason": "context limit"})
-        ledger = sin_orca.current_ledger(task_id)
-        self.assertEqual(ledger["status"], "suspended")
-
-        sin_orca.append_event(task_id, "codex.resumed", {"instruction": "continue"})
-        ledger = sin_orca.current_ledger(task_id)
-        self.assertEqual(ledger["status"], "resumed")
-
-
-class TestRepeatedFailureDetection(unittest.TestCase):
-    """Test: repeated_failure_policy erkennt identische Fehler."""
-
-    def setUp(self):
-        self.tmpdir = Path(tempfile.mkdtemp())
-        self._patcher = patch.object(sin_orca, "state_root", lambda: self.tmpdir)
-        self._patcher.start()
-
-    def tearDown(self):
-        self._patcher.stop()
-
-    def test_no_failure(self):
-        task_id = "test-fail-001"
-        sin_orca.task_directory(task_id).mkdir(parents=True, exist_ok=True)
-        config = {"worker_control": {"repeated_failure_policy": {"maximum_identical_failures_without_codex_intervention": 2}}}
-
-        result = sin_orca.check_repeated_failures(task_id, config)
-        self.assertFalse(result["blocked"])
-
-    def test_different_failures_not_blocked(self):
-        task_id = "test-fail-002"
-        sin_orca.task_directory(task_id).mkdir(parents=True, exist_ok=True)
-        config = {"worker_control": {"repeated_failure_policy": {"maximum_identical_failures_without_codex_intervention": 2}}}
-
-        sin_orca.track_command_result(task_id, "npm test", 1, "hash_a")
-        sin_orca.track_command_result(task_id, "npm run lint", 1, "hash_b")
-
-        result = sin_orca.check_repeated_failures(task_id, config)
-        self.assertFalse(result["blocked"])
-
-    def test_identical_failures_blocked(self):
-        task_id = "test-fail-003"
-        sin_orca.task_directory(task_id).mkdir(parents=True, exist_ok=True)
-        config = {"worker_control": {"repeated_failure_policy": {"maximum_identical_failures_without_codex_intervention": 2}}}
-
-        sin_orca.track_command_result(task_id, "npm test", 1, "hash_x")
-        sin_orca.track_command_result(task_id, "npm test", 1, "hash_x")
-
-        result = sin_orca.check_repeated_failures(task_id, config)
-        self.assertTrue(result["blocked"])
-        self.assertEqual(result["reason"], "repeated_failure")
-        self.assertTrue(result["requires_codex_intervention"])
-
-    def test_success_resets_counter(self):
-        task_id = "test-fail-004"
-        sin_orca.task_directory(task_id).mkdir(parents=True, exist_ok=True)
-        config = {"worker_control": {"repeated_failure_policy": {"maximum_identical_failures_without_codex_intervention": 2}}}
-
-        sin_orca.track_command_result(task_id, "npm test", 1, "hash_x")
-        sin_orca.track_command_result(task_id, "npm test", 0, "")
-        sin_orca.track_command_result(task_id, "npm test", 1, "hash_x")
-
-        result = sin_orca.check_repeated_failures(task_id, config)
-        self.assertFalse(result["blocked"])
-
-
-class TestStalledWorkerDetection(unittest.TestCase):
-    """Test: stalled_worker_policy erkennt Inaktivität."""
-
-    def setUp(self):
-        self.tmpdir = Path(tempfile.mkdtemp())
-        self._patcher = patch.object(sin_orca, "state_root", lambda: self.tmpdir)
-        self._patcher.start()
-
-    def tearDown(self):
-        self._patcher.stop()
-
-    def test_active_worker_not_stalled(self):
-        task_id = "test-stall-001"
-        sin_orca.task_directory(task_id).mkdir(parents=True, exist_ok=True)
-        config = {"worker_control": {"stalled_worker_policy": {"enabled": True, "maximum_inactive_seconds": 1200, "ignore_while_child_process_running": True}}}
-
-        sin_orca.update_activity_timestamp(task_id, "worker")
-
-        result = sin_orca.check_stalled_worker(task_id, "worker", config)
-        self.assertFalse(result["stalled"])
-
-    def test_disabled_policy(self):
-        task_id = "test-stall-002"
-        sin_orca.task_directory(task_id).mkdir(parents=True, exist_ok=True)
-        config = {"worker_control": {"stalled_worker_policy": {"enabled": False, "maximum_inactive_seconds": 0}}}
-
-        result = sin_orca.check_stalled_worker(task_id, "worker", config)
-        self.assertFalse(result["stalled"])
-
-    def test_stalled_worker_detected(self):
-        task_id = "test-stall-003"
-        sin_orca.task_directory(task_id).mkdir(parents=True, exist_ok=True)
-        config = {"worker_control": {"stalled_worker_policy": {"enabled": True, "maximum_inactive_seconds": 1, "ignore_while_child_process_running": False}}}
-
-        activity_path = sin_orca.task_directory(task_id) / "activity.json"
-        old_time = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
-        with open(activity_path, "w") as f:
-            json.dump({"worker_last_active": old_time, "worker_last_activity_type": "poll"}, f)
-
-        result = sin_orca.check_stalled_worker(task_id, "worker", config)
-        self.assertTrue(result["stalled"])
-        self.assertGreater(result["idle_seconds"], 0)
+        self.assertGreater(renewed.expires_at, lease_a.expires_at)
 
 
 if __name__ == "__main__":

@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS cache_blobs (
 CREATE TABLE IF NOT EXISTS cache_entries (
     cache_key TEXT PRIMARY KEY,
     repository_id TEXT NOT NULL,
+    repository_path TEXT NOT NULL DEFAULT '.',
     route TEXT NOT NULL,
     provider TEXT NOT NULL,
     normalized_query TEXT NOT NULL,
@@ -202,6 +203,7 @@ class SinCache:
         self.db_path = db_path
 
         self.conn = sqlite3.connect(str(db_path))
+        self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.executescript(SCHEMA_SQL)
@@ -218,12 +220,17 @@ class SinCache:
         provider: str,
         query: str,
         repository_id: str,
+        *,
+        policy_hash: str = "",
+        provider_version: str = "",
     ) -> str:
         material = {
             "route": route,
             "provider": provider,
             "normalized_query": canonical_query(query),
             "repository_id": repository_id,
+            "policy_hash": policy_hash,
+            "provider_version": provider_version,
             "schema_version": SCHEMA_VERSION,
         }
         return sha256_json(material)
@@ -234,8 +241,16 @@ class SinCache:
         provider: str,
         query: str,
         repository_id: str,
+        *,
+        repository_path: Path | str | None = None,
+        policy_hash: str = "",
+        provider_version: str = "",
     ) -> Optional[dict[str, Any]]:
-        key = self._exact_key(route, provider, query, repository_id)
+        key = self._exact_key(
+            route, provider, query, repository_id,
+            policy_hash=policy_hash,
+            provider_version=provider_version,
+        )
 
         row = self.conn.execute(
             "SELECT ce.*, cb.content, cb.content_type "
@@ -253,7 +268,7 @@ class SinCache:
         evidence = json.loads(entry.get("evidence_json", "[]"))
 
         if evidence:
-            repo_path = Path(entry.get("repository_path", "."))
+            repo_path = Path(repository_path or entry.get("repository_path") or ".")
             if not evidence_is_current(repo_path, evidence):
                 self.invalidate_by_key(key)
                 self._record_stat(route, "invalidated")
@@ -282,7 +297,11 @@ class SinCache:
         provider_version: str = "",
         repository_path: str = ".",
     ) -> str:
-        key = self._exact_key(route, provider, query, repository_id)
+        key = self._exact_key(
+            route, provider, query, repository_id,
+            policy_hash=policy_hash,
+            provider_version=provider_version,
+        )
         blob_hash = sha256_text(content)
 
         self.conn.execute(
@@ -295,12 +314,12 @@ class SinCache:
 
         self.conn.execute(
             "INSERT OR REPLACE INTO cache_entries "
-            "(cache_key, repository_id, route, provider, normalized_query, "
+            "(cache_key, repository_id, repository_path, route, provider, normalized_query, "
             "semantic_signature, blob_hash, evidence_json, policy_hash, "
             "provider_version, created_at, last_accessed_at, hit_count) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
             (
-                key, repository_id, route, provider, canonical_query(query),
+                key, repository_id, str(repository_path), route, provider, canonical_query(query),
                 canonical_query(query), blob_hash, evidence_json,
                 policy_hash, provider_version, utc_now(), utc_now(),
             ),
@@ -346,7 +365,7 @@ class SinCache:
 
         evidence = json.loads(best_match.get("evidence_json", "[]"))
         if evidence:
-            repo_path = Path(best_match.get("repository_path", "."))
+            repo_path = Path(best_match.get("repository_path") or ".")
             if not evidence_is_current(repo_path, evidence):
                 self._record_stat(route, "semantic_invalidated")
                 return None
@@ -364,12 +383,35 @@ class SinCache:
         repository_id: str,
         content: str,
         evidence: list[dict[str, Any]],
+        *,
+        repository_path: Path | str | None = None,
         **kwargs: Any,
     ) -> str:
+        root = Path(repository_path or ".").resolve()
+        normalized_evidence: list[dict[str, Any]] = []
+
         for item in evidence:
-            file_path = Path(item.get("path", ""))
-            if file_path.is_file():
-                item["content_sha256"] = file_content_hash(file_path) or ""
+            relative = str(item.get("path", "")).strip()
+            if not relative:
+                continue
+
+            file_path = (root / relative).resolve()
+
+            try:
+                file_path.relative_to(root)
+            except ValueError:
+                continue
+
+            if not file_path.is_file():
+                continue
+
+            normalized_evidence.append(
+                {
+                    **item,
+                    "path": str(file_path.relative_to(root)),
+                    "content_sha256": file_content_hash(file_path) or "",
+                }
+            )
 
         return self.put(
             route=route,
@@ -377,7 +419,8 @@ class SinCache:
             query=query,
             repository_id=repository_id,
             content=content,
-            evidence=evidence,
+            evidence=normalized_evidence,
+            repository_path=str(root),
             **kwargs,
         )
 
@@ -404,12 +447,24 @@ class SinCache:
             "SELECT blob_hash FROM cache_entries WHERE cache_key = ?", (key,)
         ).fetchone()
 
-        if row:
-            blob_hash = row[0]
+        if row is None:
+            return
+
+        blob_hash = row[0]
+
+        self.conn.execute(
+            "DELETE FROM cache_entries WHERE cache_key = ?", (key,)
+        )
+
+        remaining = self.conn.execute(
+            "SELECT COUNT(*) FROM cache_entries WHERE blob_hash = ?", (blob_hash,)
+        ).fetchone()[0]
+
+        if remaining == 0:
             self.conn.execute("DELETE FROM cache_views WHERE blob_hash = ?", (blob_hash,))
             self.conn.execute("DELETE FROM cache_blobs WHERE content_hash = ?", (blob_hash,))
-            self.conn.execute("DELETE FROM cache_entries WHERE cache_key = ?", (key,))
-            self.conn.commit()
+
+        self.conn.commit()
 
     # ─── L4: Worker Artifact Cache ───────────────────────────────────────
 
@@ -606,23 +661,14 @@ class SinCache:
     # ─── Helper ──────────────────────────────────────────────────────────
 
     def _row_to_entry(self, row: sqlite3.Row) -> dict[str, Any]:
-        return {
-            "cache_key": row[0],
-            "repository_id": row[1],
-            "route": row[2],
-            "provider": row[3],
-            "normalized_query": row[4],
-            "semantic_signature": row[5],
-            "blob_hash": row[6],
-            "evidence_json": row[7],
-            "policy_hash": row[8],
-            "provider_version": row[9],
-            "created_at": row[10],
-            "last_accessed_at": row[11],
-            "hit_count": row[12],
-            "content": row[13].decode("utf-8") if isinstance(row[13], bytes) else row[13],
-            "content_type": row[14],
-        }
+        keys = row.keys()
+        result = {}
+        for key in keys:
+            value = row[key]
+            if isinstance(value, bytes):
+                value = value.decode("utf-8")
+            result[key] = value
+        return result
 
 
 def _jaccard_similarity(a: str, b: str) -> float:
