@@ -36,13 +36,13 @@ python3 bin/nim-embed-proxy.py &
 bin/cognee-start-omniroute.sh
 ```
 
-## Cost (Qoder subscription only on LLM)
+## Cost (OmniRoute subscription on LLM)
 
 | Action | Costs? | Gate |
 |--------|--------|------|
 | fleet-up / nim-embed-proxy | no | — |
 | NVIDIA NIM embed | no (free tier ~40 RPM) | — |
-| `cognee-remember` | **yes** (Qwen 3.8 cognify) | soft warn |
+| `cognee-remember` | **yes** (GLM 5.2 cognify) | soft warn |
 | bulk re-ingest | **yes expensive** | `COGNEE_ALLOW_COSTLY=1` |
 
 ## Everyday

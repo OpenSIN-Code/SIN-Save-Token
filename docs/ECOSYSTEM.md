@@ -83,8 +83,8 @@ Core allowlist (current): `context7`, `serena`, `tavily`.
 code structure     graphify (CLI, 0 LLM)
 session observations  claude-mem (shared DB)
 domain graph memory   Cognee fleet (CLI HTTP :8011)
-                        embed: Gemini free → mxbai local fallback (:8012)
-                        LLM cognify: OmniRoute → Boundless terra
+                        embed: NVIDIA NIM free → mxbai local fallback (:8012)
+                        LLM cognify: OmniRoute → GLM 5.2 (Vercel AI Gateway)
                       see docs/COGNEE-COST-POLICY.md + README "Cognee fleet"
 code AST/LSP          simone (fix health)
 resume / lessons      session-digest, dream (SST CLIs)

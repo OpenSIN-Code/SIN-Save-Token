@@ -4,7 +4,7 @@
 # Why: Lance tables are fixed_size_list[N]. Switching
 #   NIM (1024) ↔ fastembed (384) without wipe → broken search / embed errors.
 #
-# Does NOT call Boundless. Does NOT delete API keys or dataset registry rows.
+# Does NOT call LLM. Does NOT delete API keys or dataset registry rows.
 # After wipe: restart Cognee, then re-remember short notes you care about.
 #
 # Usage:

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sequential fleet-doc ingest. **COSTS Boundless credit** (Terra cognify per doc).
+# Sequential fleet-doc ingest. **COSTS OmniRoute credits** (GLM 5.2 cognify per doc).
 #
 # Refuses to run unless:
 #   COGNEE_ALLOW_COSTLY=1
@@ -13,7 +13,7 @@ export COGNEE_BASE_URL="${COGNEE_BASE_URL:-http://127.0.0.1:8011}"
 
 if [ "${COGNEE_ALLOW_COSTLY:-0}" != "1" ]; then
   cat >&2 <<'EOF'
-REFUSED: bulk cognify spends Qoder (Qwen 3.8) credits.
+REFUSED: bulk cognify spends OmniRoute (GLM 5.2) credits.
 
   export COGNEE_ALLOW_COSTLY=1
   # optional safety caps:
@@ -76,8 +76,8 @@ Path(r'''$tmp''').write_text('# Source: '+str(src)+'\n\n'+src.read_text(errors='
   sleep 2
 done
 
-echo "BULK done ok=$ok fail=$fail (Boundless credit used for cognify)"
-# Recall only if already have data — still may use Terra for graph_completion
+echo "BULK done ok=$ok fail=$fail (OmniRoute credit used for cognify)"
+# Recall only if already have data — still may use GLM 5.2 for graph_completion
 if [ "${COGNEE_SKIP_RECALL_AFTER_BULK:-0}" = "1" ]; then
   echo "skip post-bulk recall"
 else
