@@ -59,16 +59,14 @@ class ContextBrokerTests(unittest.TestCase):
     def test_cache_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
             cache = MODULE.ContextCache(Path(directory) / "cache.sqlite3")
-            result = MODULE.ProviderResult(
-                provider="graphify",
-                text="compact result",
-            )
-            cache.put("key", result)
+            result = MODULE.ProviderResult(provider="graphify", text="compact result")
+            cache.put("key", result, provider="graphify")
 
-            restored = cache.get("key", ttl=100)
+            restored = cache.get("key", ttl=100, negative_ttl=30)
             self.assertIsNotNone(restored)
             self.assertEqual(restored.provider, "graphify")
             self.assertEqual(restored.text, "compact result")
+            self.assertFalse(restored.is_negative)
 
 
 if __name__ == "__main__":

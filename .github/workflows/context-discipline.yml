@@ -1,0 +1,64 @@
+name: Context Discipline
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  context-discipline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate JSON policy
+        run: |
+          python -m json.tool config/context-policy.json >/dev/null
+
+      - name: Compile Python entrypoints
+        run: |
+          python -m py_compile \
+            bin/sin-context \
+            bin/sin-memory-write \
+            bin/brain-sync.py
+
+      - name: Run context tests
+        run: |
+          python -m unittest discover \
+            -s tests \
+            -p 'test_*.py' \
+            -v
+
+      - name: Check executable declarations
+        run: |
+          test -x bin/sin-context
+          test -x bin/sin-memory-write
+          test -x bin/brain-sync.py
+
+      - name: Enforce context budget
+        run: |
+          python - <<'PY'
+          import json
+
+          policy = json.load(
+              open("config/context-policy.json", encoding="utf-8")
+          )
+
+          assert policy["budgets"]["maximum_tokens"] <= 2000
+          assert policy["retrieval"]["maximum_provider_attempts"] <= 2
+          assert policy["retrieval"]["maximum_sources"] <= 5
+
+          for route in policy["routes"]:
+              assert len(route["providers"]) <= 3
+          PY

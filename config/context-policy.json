@@ -14,7 +14,9 @@
     "minimum_score": 0.18,
     "minimum_novelty": 0.12,
     "maximum_chars_per_source": 2400,
-    "cache_ttl_seconds": 1800
+    "cache_ttl_seconds": 1800,
+    "negative_cache_ttl_seconds": 300,
+    "maximum_provider_attempts": 2
   },
   "routes": [
     {
