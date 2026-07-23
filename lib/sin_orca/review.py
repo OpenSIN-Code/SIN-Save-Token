@@ -1,4 +1,4 @@
-"""Blind review that spawns a separate reviewer worker."""
+"""Blind review — new terminal in the implementer's worktree, not a fresh checkout."""
 
 from __future__ import annotations
 
@@ -81,15 +81,18 @@ def start_blind_review(
         raise RuntimeError("worker actor is missing")
 
     implementer_agent = str(worker["agent"])
+    worktree_selector = str(worker.get("worktree_selector", ""))
+    worktree_path = str(worker.get("worktree_path", ""))
+
+    if not worktree_selector or not worktree_path:
+        raise RuntimeError("worker worktree selector/path missing")
 
     reviewer_agent = select_reviewer_agent(
         preferred_agents=preferred_agents,
         implementer_agent=implementer_agent,
     )
 
-    worktree = Path(
-        worker["worktree_path"]
-    ).resolve()
+    worktree = Path(worktree_path).resolve()
 
     diff = bounded_diff(
         worktree=worktree,
@@ -118,54 +121,41 @@ def start_blind_review(
         "base_sha": task["base_sha"],
         "objective": task["objective"],
         "allowed_paths": task["allowed_paths"],
-        "forbidden_paths": task.get(
-            "forbidden_paths",
-            [],
-        ),
-        "acceptance_criteria": task[
-            "acceptance_criteria"
-        ],
-        "changed_files": verification[
-            "changed_files"
-        ],
+        "forbidden_paths": task.get("forbidden_paths", []),
+        "acceptance_criteria": task["acceptance_criteria"],
+        "changed_files": verification["changed_files"],
         "bounded_diff": safe_diff,
         "diff_sha256": diff["full_sha256"],
         "diff_evidence": {
             "trust_level": diff_envelope.trust_level,
-            "suspicious_instruction_spans": len(
-                diff_envelope.suspicious
-            ),
+            "suspicious_instruction_spans": len(diff_envelope.suspicious),
         },
         "controller_test_results": _compact_test_results(
             verification.get("results")
         ),
     }
 
-    packet_path = (
-        task_dir(task_id)
-        / "review-packet.json"
-    )
-
-    atomic_write_json(
-        packet_path,
-        packet,
-    )
+    packet_path = task_dir(task_id) / "review-packet.json"
+    atomic_write_json(packet_path, packet)
 
     prompt = f"""You are an independent blind reviewer.
 
 You did not implement this change.
 
 Do not trust implementer statements.
-Use only the supplied task, actual Git diff and controller test results.
+Use only the supplied task, the actual Git diff in this worktree, and controller test results.
+
+You are running in the SAME worktree as the implementer.
+You can verify changes directly: `git diff`, `git log`, `cat <file>`, `grep`, test commands.
 
 Every acceptance criterion must be marked:
-- proven
-- failed
-- unverified
+- proven (you independently verified it)
+- failed (you independently disproved it)
+- unverified (you could not verify it)
 
 Any unverified criterion requires verdict=reject.
 
-Write exactly:
+Write your review to:
 
 .sin-worker/outbox/review.json
 
@@ -173,90 +163,92 @@ Include:
 - task_id
 - task_hash
 - base_sha
-- verdict
-- criteria
-- scope_violation
-- regressions
-- unverified
+- verdict (accept or reject)
+- criteria (array with id, status, evidence)
+- scope_violation (boolean)
+- regressions (array)
+- unverified (array)
 
 Review packet:
 
 {json.dumps(packet, ensure_ascii=False, indent=2)}
 """
 
+    # Create a NEW TERMINAL in the IMPLEMENTER's worktree — not a new worktree.
+    # This way the reviewer can independently verify the actual changes.
     result = run_orca(
         [
-            "worktree",
+            "terminal",
             "create",
-            "--name",
-            f"{task_id}-review",
-            "--agent",
+            "--worktree",
+            worktree_selector,
+            "--command",
             reviewer_agent,
-            "--prompt",
-            prompt,
-            "--setup",
-            "skip",
-            "--repo",
-            str(task.get("repository_root") or worktree),
+            "--title",
+            f"review-{task_id}",
         ]
     )
 
     rv_data = result.get("result", result)
-    reviewer_path = first_string(
+
+    terminal = first_string(
         rv_data,
-        {"worktreePath", "worktree_path", "path"},
-    )
-    reviewer_id = first_string(
-        rv_data,
-        {"worktreeId", "worktree_id", "id"},
+        {
+            "handle",
+            "terminalHandle",
+            "terminal_handle",
+        },
     )
 
-    if reviewer_id:
-        selector = f"id:{reviewer_id}"
-    elif reviewer_path:
-        selector = f"path:{reviewer_path}"
-    else:
-        raise RuntimeError(
-            "Orca did not return a reviewer worktree selector"
-        )
-
-    terminal: str | None = None
-    for _ in range(20):
-        terminal_result = run_orca(
-            [
-                "terminal",
-                "list",
-                "--worktree",
-                selector,
-            ],
-            timeout=30,
-        )
-        terminal = first_string(
-            terminal_result.get("result", terminal_result),
-            {
-                "handle",
-                "terminalHandle",
-                "terminal_handle",
-            },
-        )
-        if terminal:
-            break
-        time.sleep(0.5)
+    if not terminal:
+        # Terminal create might not return the handle directly.
+        # Fall back to listing terminals in the worktree and picking the newest.
+        for _ in range(10):
+            term_result = run_orca(
+                [
+                    "terminal",
+                    "list",
+                    "--worktree",
+                    worktree_selector,
+                ],
+                timeout=30,
+            )
+            terminals = term_result.get("result", {}).get("terminals", [])
+            if terminals:
+                # Pick the last one (newest)
+                terminal = terminals[-1].get("handle")
+                if terminal:
+                    break
+            time.sleep(0.5)
 
     if not terminal:
         raise RuntimeError(
-            "reviewer terminal was not created"
+            "reviewer terminal could not be created in implementer worktree"
         )
+
+    # Send the review prompt to the reviewer terminal
+    run_orca(
+        [
+            "terminal",
+            "send",
+            "--terminal",
+            terminal,
+            "--text",
+            prompt,
+            "--enter",
+        ]
+    )
 
     append_event(
         task_id,
         "reviewer.spawned",
         {
             "agent": reviewer_agent,
-            "worktree_path": reviewer_path,
-            "worktree_selector": selector,
+            "worktree_path": worktree_path,
+            "worktree_selector": worktree_selector,
             "terminal_handle": terminal,
             "review_packet": str(packet_path),
+            "same_worktree": True,
         },
         actor="reviewer",
     )
@@ -264,7 +256,9 @@ Review packet:
     return {
         "task_id": task_id,
         "reviewer_agent": reviewer_agent,
-        "selector": selector,
+        "selector": worktree_selector,
         "terminal": terminal,
+        "worktree_path": worktree_path,
+        "same_worktree": True,
         "status": "review-running",
     }

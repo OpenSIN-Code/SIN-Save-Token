@@ -402,6 +402,24 @@ def dispatch_task(
             "worker terminal could not be discovered"
         )
 
+    # Auto-dismiss the Orca trust dialog that blocks all agents.
+    # The trust prompt appears on first workspace access and requires Enter.
+    time.sleep(3)
+    try:
+        run_orca(
+            [
+                "terminal",
+                "send",
+                "--terminal",
+                terminal,
+                "--text",
+                "\n",
+            ],
+            timeout=10,
+        )
+    except Exception:
+        pass  # Non-fatal — terminal might already be past the prompt
+
     append_event(
         task_id,
         "worker.spawned",
