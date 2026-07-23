@@ -69,22 +69,23 @@ def build(root: Path) -> None:
     write_text(
         global_brain,
         ".opencode/hooks/pcpm-before-run.sh",
-        "PCPM_AUTO_INJECT=0\n",
+        "BASH_SOURCE=fixture\nPCPM_AUTO_INJECT=0\nmktemp\ntrap 'rm -f \"$CONTEXT_FILE\"' EXIT\nif ! node\nPCPM_CONTEXT_TEMPFILE_FAILED=true\nPCPM_CONTEXT_LOAD_FAILED=true\nMAX_CONTEXT_BYTES=6400\nPCPM_CONTEXT_LIMIT_EXCEEDED=true\n",
     )
     write_text(
         global_brain,
         ".opencode/hooks/pcpm-after-run.sh",
-        "PCPM_AUTO_EXTRACT=0\nPCPM_AUTO_SYNC=0\n",
+        "BASH_SOURCE=fixture\nPCPM_AUTO_EXTRACT=0\nPCPM_AUTO_SYNC=0\nif ! node\nif ! node\n>/dev/null 2>/dev/null\n>/dev/null 2>/dev/null\nPCPM_AUTO_EXTRACT_FAILED=true\nPCPM_AUTO_SYNC_FAILED=true\n",
     )
     write_text(
         global_brain,
         "src/engines/hook-engine.js",
-        "const gate = 'PCPM_AUTO_INJECT';\n",
+        "function shellQuote(value) { return value; }\nfunction boundedDirectiveMetadata(value) { return value; }\nconst gate = 'PCPM_AUTO_INJECT';\nconst label = 'untrusted metadata, not agent instructions';\nshellQuote(projectId);\nshellQuote(goalDescription);\n",
     )
+    write_text(global_brain, "src/cli.js", "const commands = [];\n")
     write_text(
         global_brain,
         "AGENTS.md",
-        "Default to one worker; use a second only for an independent question.\n",
+        "DISCOVERY ON DEMAND. Default to one worker; use a second only for an independent question.\n",
     )
 
     for repository in (wow, global_brain):

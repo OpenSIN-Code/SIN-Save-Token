@@ -17,7 +17,7 @@ LIB = ROOT / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from sin_context.provider_runtime import ProviderRuntime, ProviderSpec
+from sin_context.provider_runtime import ProviderRuntime, ProviderSpec  # noqa: E402
 
 
 def load_context_cli():

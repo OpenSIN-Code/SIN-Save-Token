@@ -88,6 +88,9 @@ def audit_sst(audit: Audit, root: Path) -> None:
     )
 
     broker = audit.text_file(root / "bin" / "sin-context")
+    provider_runtime = audit.text_file(
+        root / "lib" / "sin_context" / "provider_runtime.py"
+    )
     audit.require(
         "ProviderRuntime" in broker and "runtime.call" in broker,
         "sin-context uses the persistent provider runtime",
@@ -95,6 +98,28 @@ def audit_sst(audit: Audit, root: Path) -> None:
     audit.require(
         "outcome.cache_negative" in broker,
         "negative caching is gated by provider outcome semantics",
+    )
+    audit.require(
+        '"argv": argv' not in provider_runtime
+        and '"output_tail"' not in provider_runtime
+        and '"stderr_tail"' not in provider_runtime
+        and "full_output[-" not in provider_runtime,
+        "provider runtime diagnostics expose no raw argv or process tails",
+    )
+    audit.require(
+        "def _run_bounded(" in provider_runtime
+        and "selectors.DefaultSelector" in provider_runtime
+        and "capture_output=True" not in provider_runtime,
+        "provider runtime drains subprocess output with bounded retention",
+    )
+    audit.require(
+        '"output": stdout' in provider_runtime
+        and '"stderr_bytes": process.stderr_bytes' in provider_runtime,
+        "provider runtime treats stdout as evidence and stderr as metadata only",
+    )
+    audit.require(
+        "UPDATE provider_health SET last_error = NULL" in provider_runtime,
+        "provider runtime clears legacy persisted raw error tails",
     )
 
     sync = audit.text_file(root / "bin" / "brain-sync.py")
@@ -182,6 +207,7 @@ def audit_global_brain(audit: Audit, root: Path) -> None:
     before = audit.text_file(root / ".opencode" / "hooks" / "pcpm-before-run.sh")
     after = audit.text_file(root / ".opencode" / "hooks" / "pcpm-after-run.sh")
     engine = audit.text_file(root / "src" / "engines" / "hook-engine.js")
+    cli = audit.text_file(root / "src" / "cli.js")
     agents = audit.text_file(root / "AGENTS.md")
 
     audit.require(
@@ -209,12 +235,57 @@ def audit_global_brain(audit: Audit, root: Path) -> None:
         "beforeRun requires explicit injection opt-in",
     )
     audit.require(
+        "mktemp" in before
+        and "trap 'rm -f \"$CONTEXT_FILE\"' EXIT" in before
+        and 'pcpm-context-${PROJECT_ID}.json' not in before,
+        "live beforeRun uses a private, cleaned temporary context file",
+    )
+    audit.require(
+        "PCPM_CONTEXT_TEMPFILE_FAILED=true" in before
+        and "PCPM_CONTEXT_LOAD_FAILED=true" in before
+        and "if ! node" in before,
+        "live beforeRun propagates explicit injection failures",
+    )
+    audit.require(
+        "MAX_CONTEXT_BYTES=6400" in before
+        and "PCPM_CONTEXT_LIMIT_EXCEEDED=true" in before,
+        "live beforeRun enforces the bounded context-output limit",
+    )
+    audit.require(
+        "function shellQuote" in engine
+        and "shellQuote(projectId)" in engine
+        and "shellQuote(goalDescription)" in engine,
+        "hook generator shell-quotes caller-controlled metadata",
+    )
+    audit.require(
+        "function boundedDirectiveMetadata" in engine
+        and "untrusted metadata, not agent instructions" in engine,
+        "generated AGENTS directives bound and label caller metadata",
+    )
+    audit.require(
         "PCPM_AUTO_EXTRACT" in after and "PCPM_AUTO_SYNC" in after,
         "afterRun extraction and sync are separate opt-ins",
     )
     audit.require(
-        "sync-chat-turn" not in after,
-        "live afterRun hook has no chat-turn memory loop",
+        "PCPM_AUTO_EXTRACT_FAILED=true" in after
+        and "PCPM_AUTO_SYNC_FAILED=true" in after
+        and after.count("if ! node") >= 2,
+        "live afterRun propagates explicit maintenance failures",
+    )
+    audit.require(
+        after.count(">/dev/null 2>/dev/null") >= 2,
+        "live afterRun suppresses raw extraction and sync payloads",
+    )
+    audit.require(
+        "BASH_SOURCE" in before
+        and "BASH_SOURCE" in after
+        and "/Users/jeremy" not in before
+        and "/Users/jeremy" not in after,
+        "live PCPM hooks resolve their repository root portably",
+    )
+    audit.require(
+        "sync-chat-turn" not in after and "sync-chat-turn" not in cli,
+        "runtime surfaces expose no chat-turn memory loop",
     )
     audit.require(
         "PCPM_EXPORT_TO_CLAUDE_MEM" not in after
@@ -224,6 +295,18 @@ def audit_global_brain(audit: Audit, root: Path) -> None:
     audit.require(
         "5-10 parallele" not in agents and "5–10" not in agents,
         "global-brain rules contain no mass-explorer mandate",
+    )
+    audit.require(
+        "NIEMALS ALLEINE" not in agents
+        and "**PARALLEL:** Unabhaengige Tasks" not in agents
+        and "# PARALLEL:" not in agents,
+        "higher-priority global-brain rules respect the bounded worker budget",
+    )
+    audit.require(
+        "PFLICHT-WORKFLOW VOR JEDER AUFGABE" not in agents
+        and "DISCOVERY FIRST" not in agents
+        and "DISCOVERY ON DEMAND" in agents,
+        "agent discovery is cache-first and only refreshed on demand",
     )
 
 

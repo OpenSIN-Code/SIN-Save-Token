@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
+import selectors
 import shutil
+import signal
 import sqlite3
 import subprocess
 import time
@@ -22,6 +23,15 @@ class ProviderSpec:
     maximum_output_chars: int = 16000
     failure_threshold: int = 3
     cooldown_seconds: int = 300
+
+
+@dataclass(frozen=True)
+class BoundedProcessResult:
+    returncode: int
+    stdout: str
+    stdout_bytes: int
+    stderr_bytes: int
+    stdout_truncated: bool
 
 
 class ProviderRuntime:
@@ -76,6 +86,12 @@ class ProviderRuntime:
                     last_failure_at INTEGER
                 )
                 """
+            )
+            # Older builds persisted raw provider tails in last_error. Clear
+            # those legacy values before exposing health snapshots again.
+            connection.execute(
+                "UPDATE provider_health SET last_error = NULL "
+                "WHERE last_error IS NOT NULL"
             )
             connection.commit()
         finally:
@@ -211,7 +227,7 @@ class ProviderRuntime:
     ) -> list[str]:
         rendered: list[str] = []
 
-        for item in argv:
+        for index, item in enumerate(argv):
             value = item
 
             for key, replacement in variables.items():
@@ -222,12 +238,115 @@ class ProviderRuntime:
 
             if "{" in value or "}" in value:
                 raise ValueError(
-                    f"unresolved provider argument: {value}"
+                    f"unresolved provider argument at index {index}"
                 )
 
             rendered.append(value)
 
         return rendered
+
+    @staticmethod
+    def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
+        if process.poll() is not None:
+            return
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=1)
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+
+    @classmethod
+    def _run_bounded(
+        cls,
+        argv: list[str],
+        *,
+        cwd: Path,
+        timeout_seconds: int,
+        maximum_output_chars: int,
+    ) -> BoundedProcessResult:
+        process = subprocess.Popen(
+            argv,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=os.environ.copy(),
+            start_new_session=True,
+        )
+        if process.stdout is None or process.stderr is None:
+            cls._terminate_process_group(process)
+            raise OSError("provider pipes unavailable")
+
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+        selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+        retained_stdout = bytearray()
+        stdout_bytes = 0
+        stderr_bytes = 0
+        maximum_stdout_bytes = max(1, maximum_output_chars * 4)
+        deadline = time.monotonic() + timeout_seconds
+
+        try:
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    cls._terminate_process_group(process)
+                    raise subprocess.TimeoutExpired(argv[0], timeout_seconds)
+
+                events = selector.select(timeout=min(0.2, remaining))
+                if not events and process.poll() is not None:
+                    events = [
+                        (key, selectors.EVENT_READ)
+                        for key in list(selector.get_map().values())
+                    ]
+
+                for key, _ in events:
+                    chunk = os.read(key.fileobj.fileno(), 65536)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    if key.data == "stdout":
+                        stdout_bytes += len(chunk)
+                        remaining_capacity = (
+                            maximum_stdout_bytes - len(retained_stdout)
+                        )
+                        if remaining_capacity > 0:
+                            retained_stdout.extend(chunk[:remaining_capacity])
+                    else:
+                        stderr_bytes += len(chunk)
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                cls._terminate_process_group(process)
+                raise subprocess.TimeoutExpired(argv[0], timeout_seconds)
+            try:
+                returncode = process.wait(timeout=remaining)
+            except subprocess.TimeoutExpired:
+                cls._terminate_process_group(process)
+                raise subprocess.TimeoutExpired(argv[0], timeout_seconds) from None
+        except BaseException:
+            cls._terminate_process_group(process)
+            raise
+        finally:
+            selector.close()
+            process.stdout.close()
+            process.stderr.close()
+
+        decoded = retained_stdout.decode("utf-8", errors="replace")
+        bounded_stdout = decoded[:maximum_output_chars]
+        return BoundedProcessResult(
+            returncode=returncode,
+            stdout=bounded_stdout,
+            stdout_bytes=stdout_bytes,
+            stderr_bytes=stderr_bytes,
+            stdout_truncated=(
+                stdout_bytes > len(retained_stdout)
+                or len(decoded) > maximum_output_chars
+            ),
+        )
 
     def call(
         self,
@@ -248,7 +367,6 @@ class ProviderRuntime:
                 "provider": spec.name,
                 "status": "circuit-open",
                 "retry_after_seconds": opened_until - now,
-                "error": health.get("last_error"),
             }
 
         argv = self._render_argv(
@@ -269,28 +387,25 @@ class ProviderRuntime:
         if not available:
             state = self._record_failure(
                 spec,
-                f"executable unavailable: {executable}",
+                "provider executable unavailable",
             )
 
             return {
                 "ok": False,
                 "provider": spec.name,
                 "status": "unavailable",
-                "error": f"executable unavailable: {executable}",
+                "error": "provider executable unavailable",
                 **state,
             }
 
         started = time.monotonic()
 
         try:
-            process = subprocess.run(
+            process = self._run_bounded(
                 argv,
                 cwd=cwd,
-                text=True,
-                capture_output=True,
-                check=False,
-                timeout=spec.timeout_seconds,
-                env=os.environ.copy(),
+                timeout_seconds=spec.timeout_seconds,
+                maximum_output_chars=spec.maximum_output_chars,
             )
         except subprocess.TimeoutExpired:
             state = self._record_failure(
@@ -306,16 +421,17 @@ class ProviderRuntime:
                 **state,
             }
         except OSError as error:
+            diagnostic = f"provider execution error: {type(error).__name__}"
             state = self._record_failure(
                 spec,
-                str(error),
+                diagnostic,
             )
 
             return {
                 "ok": False,
                 "provider": spec.name,
                 "status": "execution-error",
-                "error": str(error),
+                "error": diagnostic,
                 **state,
             }
 
@@ -324,58 +440,38 @@ class ProviderRuntime:
         )
 
         stdout = process.stdout.strip()
-        stderr = process.stderr.strip()
-        full_output = "\n".join(
-            part for part in (stdout, stderr) if part
-        )
-        successful_output = stdout or stderr
-
-        output_sha256 = hashlib.sha256(
-            full_output.encode("utf-8")
-        ).hexdigest()
 
         if process.returncode != 0:
+            diagnostic = f"provider exited with code {process.returncode}"
             state = self._record_failure(
                 spec,
-                full_output[-2000:]
-                or f"exit code {process.returncode}",
+                diagnostic,
             )
 
             return {
                 "ok": False,
                 "provider": spec.name,
                 "status": "failed",
-                "argv": argv,
                 "exit_code": process.returncode,
                 "duration_ms": duration_ms,
-                "output_tail": full_output[
-                    -spec.maximum_output_chars:
-                ],
-                "output_sha256": output_sha256,
+                "stdout_bytes": process.stdout_bytes,
+                "stderr_bytes": process.stderr_bytes,
                 **state,
             }
 
         self._record_success(spec.name)
 
-        truncated = (
-            len(successful_output)
-            > spec.maximum_output_chars
-        )
-
         return {
             "ok": True,
             "provider": spec.name,
             "status": "completed",
-            "argv": argv,
             "exit_code": 0,
             "duration_ms": duration_ms,
-            "output": successful_output[
-                :spec.maximum_output_chars
-            ],
-            "output_sha256": output_sha256,
-            "output_chars": len(successful_output),
-            "truncated": truncated,
-            "stderr_tail": stderr[-2000:] if stderr else "",
+            "output": stdout,
+            "output_chars": len(stdout),
+            "stdout_bytes": process.stdout_bytes,
+            "stderr_bytes": process.stderr_bytes,
+            "truncated": process.stdout_truncated,
         }
 
     def call_first_available(

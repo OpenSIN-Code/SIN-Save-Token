@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shlex
 import subprocess
 import sys
@@ -26,6 +27,46 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TASKS = ROOT / "config" / "benchmark-tasks.json"
 DEFAULT_OUTPUT_DIR = ROOT / ".sin" / "audit"
 SIN_CONTEXT = ROOT / "bin" / "sin-context"
+SENSITIVE_NAME = re.compile(
+    r"(?i)(token|secret|password|passwd|api[_-]?key|authorization|cookie)"
+)
+SENSITIVE_ASSIGNMENT = re.compile(
+    r"(?i)\b(token|secret|password|passwd|api[_-]?key|authorization|cookie)\b"
+    r"(\s*[:=]\s*)([^\s,;]+)"
+)
+URL_CREDENTIALS = re.compile(r"(https?://[^:/\s]+:)[^@/\s]+@", re.IGNORECASE)
+
+
+def redact_sensitive_text(text: str) -> str:
+    redacted = SENSITIVE_ASSIGNMENT.sub(r"\1\2<redacted>", text)
+    return URL_CREDENTIALS.sub(r"\1<redacted>@", redacted)
+
+
+def redact_argv(argv: list[str]) -> list[str]:
+    redacted: list[str] = []
+    hide_next = False
+    for item in argv:
+        if hide_next:
+            redacted.append("<redacted>")
+            hide_next = False
+            continue
+        if item.startswith("-") and SENSITIVE_NAME.search(item):
+            if "=" in item:
+                name, _ = item.split("=", 1)
+                redacted.append(f"{name}=<redacted>")
+            else:
+                redacted.append(item)
+                hide_next = True
+            continue
+        redacted.append(redact_sensitive_text(item))
+    return redacted
+
+
+def persisted_command_summary(argv: list[str]) -> list[str]:
+    if not argv:
+        return []
+    executable = redact_sensitive_text(argv[0])
+    return [executable, f"<{max(0, len(argv) - 1)} arguments omitted>"]
 
 
 @dataclass
@@ -44,8 +85,12 @@ class RunResult:
     provider: str | None = None
     cached: bool | None = None
     reported_approx_tokens: int | None = None
-    stdout_sha256: str = ""
-    stderr_tail: str = ""
+    input_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    reported_output_tokens: int | None = None
+    provider_attempts: int | None = None
+    telemetry_cache_hit: bool | None = None
 
 
 def approximate_tokens(text: str) -> int:
@@ -114,19 +159,51 @@ def sin_context_command(
     return argv
 
 
-def parse_sin_context_metadata(stdout: str) -> tuple[str | None, bool | None, int | None]:
+def parse_json_payload(stdout: str) -> dict[str, Any]:
     try:
         payload = json.loads(stdout)
     except json.JSONDecodeError:
-        return None, None, None
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def parse_sin_context_metadata(
+    stdout: str,
+) -> tuple[str | None, bool | None, int | None, int | None]:
+    payload = parse_json_payload(stdout)
     provider = payload.get("provider")
     cached = payload.get("cached")
     approx = payload.get("approx_tokens")
+    attempts = payload.get("attempts")
     return (
         str(provider) if provider else None,
         bool(cached) if isinstance(cached, bool) else None,
         int(approx) if isinstance(approx, int) else None,
+        len(attempts) if isinstance(attempts, list) else None,
     )
+
+
+def parse_benchmark_telemetry(stdout: str) -> dict[str, Any]:
+    payload = parse_json_payload(stdout)
+    metrics = payload.get("benchmark_metrics")
+    if not isinstance(metrics, dict):
+        return {}
+
+    result: dict[str, Any] = {}
+    for name in (
+        "input_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "output_tokens",
+        "provider_attempts",
+    ):
+        value = metrics.get(name)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            result[name] = value
+    cache_hit = metrics.get("cache_hit")
+    if isinstance(cache_hit, bool):
+        result["cache_hit"] = cache_hit
+    return result
 
 
 def evaluate_success(
@@ -183,15 +260,16 @@ def execute(
         stdout=stdout,
         expected_any=task["expected_any"],
     )
-    provider = cached = reported = None
+    provider = cached = reported = attempts = None
     if mode.startswith("sst-"):
-        provider, cached, reported = parse_sin_context_metadata(stdout)
+        provider, cached, reported, attempts = parse_sin_context_metadata(stdout)
+    telemetry = parse_benchmark_telemetry(stdout)
 
     return RunResult(
         task_id=task["id"],
         mode=mode,
         repetition=repetition,
-        command=argv,
+        command=persisted_command_summary(argv),
         exit_code=exit_code,
         duration_ms=duration_ms,
         success=success,
@@ -202,8 +280,20 @@ def execute(
         provider=provider,
         cached=cached,
         reported_approx_tokens=reported,
-        stdout_sha256=hashlib.sha256(stdout.encode("utf-8")).hexdigest(),
-        stderr_tail=stderr.strip()[-1000:],
+        input_tokens=telemetry.get("input_tokens"),
+        cache_read_tokens=telemetry.get("cache_read_tokens"),
+        cache_write_tokens=telemetry.get("cache_write_tokens"),
+        reported_output_tokens=telemetry.get("output_tokens"),
+        provider_attempts=(
+            telemetry.get("provider_attempts")
+            if telemetry.get("provider_attempts") is not None
+            else attempts
+        ),
+        telemetry_cache_hit=(
+            telemetry.get("cache_hit")
+            if telemetry.get("cache_hit") is not None
+            else cached
+        ),
     )
 
 
@@ -226,6 +316,179 @@ def summarize(results: list[RunResult]) -> dict[str, Any]:
             "approx_output_tokens_median": tokens[middle] if tokens else None,
         }
     return summary
+
+
+VARIANT_MODES = {
+    "baseline": "baseline",
+    "sst": "sst-cold",
+    "full_stack": "full-stack",
+}
+
+
+def benchmark_task_set_hash(tasks: list[dict[str, Any]]) -> str:
+    canonical = json.dumps(
+        tasks,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def comparable_task_id(result: RunResult) -> str:
+    return f"{result.task_id}#r{result.repetition}"
+
+
+def contract_metrics(result: RunResult) -> dict[str, Any]:
+    if result.reported_output_tokens is not None:
+        output_tokens = result.reported_output_tokens
+        output_source = "reported"
+    elif result.reported_approx_tokens is not None:
+        output_tokens = result.reported_approx_tokens
+        output_source = "sin-context-approximation"
+    else:
+        output_tokens = result.approx_output_tokens
+        output_source = "character-approximation"
+
+    return {
+        "input_tokens": result.input_tokens,
+        "cache_read_tokens": result.cache_read_tokens,
+        "cache_write_tokens": result.cache_write_tokens,
+        "output_tokens": output_tokens,
+        "duration_ms": result.duration_ms,
+        "success": result.success,
+        "provider_attempts": result.provider_attempts,
+        "cache_hit": result.telemetry_cache_hit,
+        "output_tokens_source": output_source,
+    }
+
+
+def contract_run(result: RunResult, variant: str) -> dict[str, Any]:
+    return {
+        "task_id": comparable_task_id(result),
+        "variant": variant,
+        "metrics": contract_metrics(result),
+        "evidence": {
+            "mode": result.mode,
+            "repetition": result.repetition,
+            "exit_code": result.exit_code,
+            "expected_match": result.expected_match,
+            "provider": result.provider,
+            "stdout_chars": result.stdout_chars,
+            "stderr_chars": result.stderr_chars,
+            "command": result.command,
+        },
+    }
+
+
+def exact_metric_telemetry_complete(result: RunResult) -> bool:
+    numeric = (
+        result.input_tokens,
+        result.cache_read_tokens,
+        result.cache_write_tokens,
+        result.reported_output_tokens,
+        result.provider_attempts,
+    )
+    return all(
+        isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        for value in numeric
+    ) and isinstance(result.telemetry_cache_hit, bool)
+
+
+def build_report(
+    *,
+    results: list[RunResult],
+    tasks: list[dict[str, Any]],
+    cwd: Path,
+    tasks_path: Path,
+    repetitions: int,
+    missing_modes: list[str],
+) -> dict[str, Any]:
+    selected: dict[str, list[RunResult]] = {
+        variant: [result for result in results if result.mode == mode]
+        for variant, mode in VARIANT_MODES.items()
+    }
+    variants = {
+        variant: {
+            "runs": [contract_run(result, variant) for result in runs]
+        }
+        for variant, runs in selected.items()
+    }
+
+    errors: list[str] = []
+    if missing_modes:
+        errors.append(
+            "missing comparable variants: "
+            + ", ".join(sorted(missing_modes))
+        )
+
+    task_sets: list[set[str]] = []
+    for variant, runs in selected.items():
+        task_ids = [comparable_task_id(result) for result in runs]
+        if not task_ids:
+            errors.append(f"variant {variant} has no comparable runs")
+        if len(task_ids) != len(set(task_ids)):
+            errors.append(f"variant {variant} contains duplicate task IDs")
+        task_sets.append(set(task_ids))
+
+    if task_sets and any(task_set != task_sets[0] for task_set in task_sets[1:]):
+        errors.append("comparable variants do not contain identical task sets")
+
+    failed = [
+        f"{variant}:{comparable_task_id(result)}"
+        for variant, runs in selected.items()
+        for result in runs
+        if not result.success
+    ]
+    if failed:
+        errors.append(
+            "unsuccessful comparable runs: "
+            + ", ".join(failed[:10])
+            + (" …" if len(failed) > 10 else "")
+        )
+
+    incomplete = [
+        f"{variant}:{comparable_task_id(result)}"
+        for variant, runs in selected.items()
+        for result in runs
+        if not exact_metric_telemetry_complete(result)
+    ]
+    if incomplete:
+        errors.append(
+            "exact token/cache telemetry missing: "
+            + ", ".join(incomplete[:10])
+            + (" …" if len(incomplete) > 10 else "")
+        )
+
+    return {
+        "schema_version": 1,
+        "generated_at": time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ",
+            time.gmtime(),
+        ),
+        "claimable_abc_comparison": not errors,
+        "task_set_hash": benchmark_task_set_hash(tasks),
+        "variants": variants,
+        "errors": errors,
+        "environment": {
+            "python": sys.version,
+            "platform": platform.platform(),
+        },
+        "repository": str(cwd),
+        "tasks_file": str(tasks_path),
+        "repetitions": repetitions,
+        "summary": summarize(results),
+        "supplemental": {
+            "sst_warm": {
+                "runs": [
+                    contract_run(result, "sst")
+                    for result in results
+                    if result.mode == "sst-warm"
+                ]
+            }
+        },
+        "legacy_runs": [asdict(result) for result in results],
+    }
 
 
 def main() -> int:
@@ -363,21 +626,14 @@ def main() -> int:
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    report = {
-        "schema_version": 1,
-        "generated_at_unix": int(time.time()),
-        "claimable_abc_comparison": not missing_modes,
-        "missing_modes": missing_modes,
-        "repository": str(cwd),
-        "tasks_file": str(args.tasks.resolve()),
-        "repetitions": args.repetitions,
-        "environment": {
-            "python": sys.version,
-            "platform": platform.platform(),
-        },
-        "summary": summarize(results),
-        "runs": [asdict(result) for result in results],
-    }
+    report = build_report(
+        results=results,
+        tasks=tasks,
+        cwd=cwd,
+        tasks_path=args.tasks.resolve(),
+        repetitions=args.repetitions,
+        missing_modes=missing_modes,
+    )
     output.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",

@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -36,8 +38,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile $(find lib tests -type f -name '*.py' -print)
-          python3 -m py_compile bin/sin-context bin/sin-orca bin/audit-token-architecture.py
+          while IFS= read -r -d '' file; do
+            python3 -m py_compile "$file"
+          done < <(find lib tests -type f -name '*.py' -print0)
+          python3 -m py_compile bin/sin-context bin/sin-orca bin/benchmark-context bin/audit-token-architecture.py
 
       - name: Run unit and contract tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
@@ -53,5 +57,12 @@ jobs:
             --wow "$fixture_root/wow-my-zsh" \
             --global-brain "$fixture_root/global-brain"
 
-      - name: Check whitespace
-        run: git diff --check
+      - name: Check changed whitespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git diff --check "origin/${{ github.base_ref }}...HEAD"
+          else
+            git show --check --oneline --no-renames HEAD
+          fi

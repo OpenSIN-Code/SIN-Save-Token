@@ -88,14 +88,17 @@
         "cache_hit"
       ],
       "properties": {
-        "input_tokens": {"type": "integer", "minimum": 0},
-        "cache_read_tokens": {"type": "integer", "minimum": 0},
-        "cache_write_tokens": {"type": "integer", "minimum": 0},
+        "input_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "cache_read_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "cache_write_tokens": {"type": ["integer", "null"], "minimum": 0},
         "output_tokens": {"type": "integer", "minimum": 0},
         "duration_ms": {"type": "integer", "minimum": 0},
         "success": {"type": "boolean"},
-        "provider_attempts": {"type": "integer", "minimum": 0},
-        "cache_hit": {"type": "boolean"}
+        "provider_attempts": {"type": ["integer", "null"], "minimum": 0},
+        "cache_hit": {"type": ["boolean", "null"]},
+        "output_tokens_source": {
+          "enum": ["reported", "sin-context-approximation", "character-approximation"]
+        }
       },
       "additionalProperties": true
     }

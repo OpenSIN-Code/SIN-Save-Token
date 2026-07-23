@@ -85,6 +85,22 @@ class CacheKeyContractTests(unittest.TestCase):
     def test_token_budget_changes_cache_key(self) -> None:
         self.assertNotEqual(self.key(budget=350), self.key(budget=650))
 
+    def test_repository_path_separates_identical_git_state(self) -> None:
+        sibling = self.repo.parent / f"{self.repo.name}-copy"
+        shutil.copytree(self.repo, sibling)
+        try:
+            original = self.key()
+            copied = CONTEXT.cache_key(
+                "code_symbol",
+                "simone",
+                "Find Symbol",
+                str(sibling),
+                650,
+            )
+            self.assertNotEqual(original, copied)
+        finally:
+            shutil.rmtree(sibling, ignore_errors=True)
+
     def test_equivalent_whitespace_and_case_share_key(self) -> None:
         self.assertEqual(
             self.key(query="  Find   Symbol  "),
