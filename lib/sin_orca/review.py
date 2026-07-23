@@ -195,18 +195,19 @@ Review packet:
             "--prompt",
             prompt,
             "--setup",
-            "none",
+            "skip",
             "--repo",
             str(task.get("repository_root") or worktree),
         ]
     )
 
+    rv_data = result.get("result", result)
     reviewer_path = first_string(
-        result,
+        rv_data,
         {"worktreePath", "worktree_path", "path"},
     )
     reviewer_id = first_string(
-        result,
+        rv_data,
         {"worktreeId", "worktree_id", "id"},
     )
 
@@ -231,7 +232,7 @@ Review packet:
             timeout=30,
         )
         terminal = first_string(
-            terminal_result,
+            terminal_result.get("result", terminal_result),
             {
                 "handle",
                 "terminalHandle",

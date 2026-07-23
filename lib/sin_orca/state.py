@@ -207,6 +207,9 @@ def reduce_events(task_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
         elif etype == "worker.spawned":
             ledger["actors"][actor] = dict(payload)
             ledger["status"] = "awaiting-ack"
+        elif etype == "reviewer.spawned":
+            ledger["actors"][actor] = dict(payload)
+            ledger["status"] = "review-running"
         elif etype == "checkpoint.received":
             ledger["checkpoints"].append({"actor": actor, **payload})
             ledger["status"] = f"checkpoint:{payload['checkpoint']}"

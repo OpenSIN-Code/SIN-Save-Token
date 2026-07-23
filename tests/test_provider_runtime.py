@@ -30,7 +30,7 @@ class ProviderRuntimeTests(unittest.TestCase):
 
             self.assertTrue(result["ok"])
             self.assertEqual(result["output"], "bounded context")
-            self.assertEqual(result["stderr_bytes"], len("warning"))
+            self.assertEqual(result["stderr_bytes"], len("warning\n"))
             self.assertNotIn("stderr_tail", result)
             self.assertNotIn("argv", result)
             self.assertNotIn("output_sha256", result)

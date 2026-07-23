@@ -309,7 +309,7 @@ def dispatch_task(
         "--prompt",
         prompt,
         "--setup",
-        setup,
+        setup if setup in ("run", "skip", "inherit") else "skip",
     ]
 
     arguments.extend(
@@ -331,16 +331,19 @@ def dispatch_task(
         )
         raise
 
+    # Orca wraps results in {"ok": true, "result": {...}}
+    wt_data = result.get("result", result)
+
     worktree_id = first_string(
-        result,
+        wt_data,
         {"worktreeId", "worktree_id", "id"},
     )
     worktree_path = first_string(
-        result,
+        wt_data,
         {"worktreePath", "worktree_path", "path"},
     )
     branch = first_string(
-        result,
+        wt_data,
         {"branch", "branchName", "branch_name"},
     )
 
@@ -369,7 +372,7 @@ def dispatch_task(
         )
 
         terminal = first_string(
-            terminal_result,
+            terminal_result.get("result", terminal_result),
             {
                 "handle",
                 "terminalHandle",

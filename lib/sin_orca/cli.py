@@ -731,7 +731,7 @@ def main() -> int:
     p.add_argument("--checkpoint", action="append")
     p.add_argument("--read-only", action="store_true")
     p.add_argument("--repo")
-    p.add_argument("--setup", default="none")
+    p.add_argument("--setup", default="skip")
     p.add_argument("--simone-task-id")
 
     p = sub.add_parser("approve", help="Approve step")

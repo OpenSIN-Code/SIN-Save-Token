@@ -31,6 +31,6 @@
     "blind": true,
     "maximum_diff_chars": 60000,
     "require_all_criteria_proven": true,
-    "preferred_agents": ["kilo-code", "opencode", "mimo-code"]
+    "preferred_agents": ["opencode", "mimo-code"]
   }
 }
