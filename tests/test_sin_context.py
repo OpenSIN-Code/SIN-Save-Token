@@ -35,6 +35,14 @@ class ContextBrokerTests(unittest.TestCase):
         self.assertEqual(route["name"], "code_symbol")
         self.assertEqual(route["providers"], ["simone", "graphify"])
 
+    def test_routes_architecture_to_graphify_then_gitnexus(self):
+        route = MODULE.select_route(
+            "Explain the architecture and module data flow",
+            self.policy,
+        )
+        self.assertEqual(route["name"], "code_architecture")
+        self.assertEqual(route["providers"], ["graphify", "sin-code"])
+
     def test_routes_decision_to_cognee(self):
         route = MODULE.select_route(
             "Warum haben wir Cognee statt einer zweiten SQLite-Datei gewählt?",
@@ -67,6 +75,47 @@ class ContextBrokerTests(unittest.TestCase):
             self.assertEqual(restored.provider, "graphify")
             self.assertEqual(restored.text, "compact result")
             self.assertFalse(restored.is_negative)
+            cache.close()
+
+    def test_cache_key_changes_with_config_fingerprints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = MODULE.cache_key(
+                "code_symbol",
+                "simone",
+                "find symbol",
+                str(root),
+                650,
+                policy_fingerprint="policy-a",
+                provider_fingerprint="provider-a",
+            )
+            changed_policy = MODULE.cache_key(
+                "code_symbol",
+                "simone",
+                "find symbol",
+                str(root),
+                650,
+                policy_fingerprint="policy-b",
+                provider_fingerprint="provider-a",
+            )
+            changed_provider = MODULE.cache_key(
+                "code_symbol",
+                "simone",
+                "find symbol",
+                str(root),
+                650,
+                policy_fingerprint="policy-a",
+                provider_fingerprint="provider-b",
+            )
+
+        self.assertNotEqual(first, changed_policy)
+        self.assertNotEqual(first, changed_provider)
+
+    def test_invalid_provider_attempt_limit_is_rejected(self):
+        invalid = json.loads(json.dumps(self.policy))
+        invalid["retrieval"]["maximum_provider_attempts"] = 0
+        with self.assertRaises(ValueError):
+            MODULE.validate_policy(invalid)
 
     def test_every_routed_provider_has_runtime_config(self):
         specs = MODULE.load_provider_specs(

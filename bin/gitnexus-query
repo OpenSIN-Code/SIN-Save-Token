@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""Fail-closed GitNexus query adapter for sin-context.
+
+The adapter never installs GitNexus and never analyzes a repository implicitly.
+It resolves the indexed repository deterministically from the global registry,
+rejects stale/dirty indexes, and executes exactly one serialized query.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+REGISTRY = Path.home() / ".gitnexus" / "registry.json"
+MAX_OUTPUT_CHARS = 16_000
+
+
+def safe_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.pop("SIN_MANIFEST_HMAC_KEY", None)
+    return environment
+
+
+def run_git(root: Path, *arguments: str) -> str:
+    process = subprocess.run(
+        ["git", *arguments],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+        env=safe_environment(),
+    )
+    if process.returncode != 0:
+        raise RuntimeError(process.stderr.strip() or process.stdout.strip())
+    return process.stdout.strip()
+
+
+def canonical_remote(value: str) -> str:
+    value = value.strip()
+    if value.startswith("git@") and ":" in value:
+        host_path = value.split("@", 1)[1]
+        host, path = host_path.split(":", 1)
+        value = f"https://{host}/{path}"
+    value = re.sub(r"^ssh://git@", "https://", value)
+    return value.removesuffix(".git").rstrip("/").lower()
+
+
+def load_registry(path: Path = REGISTRY) -> list[dict[str, Any]]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise RuntimeError(
+            "GitNexus registry is missing; index the repository explicitly"
+        ) from error
+    except json.JSONDecodeError as error:
+        raise RuntimeError("GitNexus registry is invalid JSON") from error
+    if not isinstance(value, list):
+        raise RuntimeError("GitNexus registry root must be an array")
+    return [entry for entry in value if isinstance(entry, dict)]
+
+
+def repository_root(cwd: Path) -> Path:
+    return Path(run_git(cwd, "rev-parse", "--show-toplevel")).resolve()
+
+
+def match_registry_entry(
+    root: Path,
+    entries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    exact = [
+        entry
+        for entry in entries
+        if isinstance(entry.get("path"), str)
+        and Path(entry["path"]).expanduser().resolve() == root
+    ]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        raise RuntimeError("GitNexus registry contains duplicate repository paths")
+
+    remote = canonical_remote(
+        run_git(root, "config", "--get", "remote.origin.url")
+    )
+    remote_matches = [
+        entry
+        for entry in entries
+        if isinstance(entry.get("remoteUrl"), str)
+        and canonical_remote(entry["remoteUrl"]) == remote
+    ]
+    if len(remote_matches) == 1:
+        return remote_matches[0]
+    if len(remote_matches) > 1:
+        names = ", ".join(
+            sorted(str(entry.get("name", "<unnamed>")) for entry in remote_matches)
+        )
+        raise RuntimeError(
+            "multiple GitNexus indexes match this remote: " + names
+        )
+    raise RuntimeError(
+        "repository is not indexed by GitNexus; run `gitnexus analyze` "
+        f"explicitly in {root}"
+    )
+
+
+def validate_fresh_index(root: Path, entry: dict[str, Any]) -> None:
+    name = entry.get("name")
+    last_commit = entry.get("lastCommit")
+    if not isinstance(name, str) or not name:
+        raise RuntimeError("GitNexus registry entry has no repository name")
+    if not isinstance(last_commit, str) or not last_commit:
+        raise RuntimeError("GitNexus registry entry has no indexed commit")
+
+    head = run_git(root, "rev-parse", "HEAD")
+    if head != last_commit:
+        raise RuntimeError(
+            "GitNexus index is stale; run `gitnexus analyze` explicitly "
+            f"in {root} before querying"
+        )
+
+    status = run_git(
+        root,
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=normal",
+    )
+    ignored_prefixes = ("?? .gitnexus/", " M .gitnexus/", "M  .gitnexus/")
+    meaningful = [
+        line for line in status.splitlines()
+        if line and not line.startswith(ignored_prefixes)
+    ]
+    if meaningful:
+        raise RuntimeError(
+            "working tree has unindexed changes; GitNexus fallback is disabled "
+            "to avoid returning stale graph evidence"
+        )
+
+
+def query_gitnexus(
+    executable: str,
+    query: str,
+    repository_name: str,
+    root: Path,
+) -> str:
+    process = subprocess.run(
+        [executable, "query", query, "--repo", repository_name],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=120,
+        env=safe_environment(),
+    )
+    if process.returncode != 0:
+        raise RuntimeError(
+            process.stderr.strip()
+            or process.stdout.strip()
+            or "GitNexus query failed"
+        )
+    output = process.stdout.strip()
+    if not output:
+        raise RuntimeError("GitNexus returned empty output")
+    if len(output) > MAX_OUTPUT_CHARS:
+        output = output[:MAX_OUTPUT_CHARS] + "\n[… GitNexus output truncated]"
+    return output
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("query", nargs="+")
+    parser.add_argument("--cwd", type=Path, default=Path.cwd())
+    args = parser.parse_args()
+
+    executable = shutil.which("gitnexus")
+    if executable is None:
+        print(
+            "gitnexus is not installed on PATH; automatic installation is disabled",
+            file=sys.stderr,
+        )
+        return 127
+
+    try:
+        root = repository_root(args.cwd.expanduser().resolve())
+        entry = match_registry_entry(root, load_registry())
+        validate_fresh_index(root, entry)
+        output = query_gitnexus(
+            executable,
+            " ".join(args.query).strip(),
+            str(entry["name"]),
+            root,
+        )
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+
+    print(output)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

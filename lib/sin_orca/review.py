@@ -8,8 +8,16 @@ from pathlib import Path
 from typing import Any
 
 from sin_context.evidence_firewall import render_for_model, wrap_evidence
+from sin_review_context import ReviewContextBuilder
 
-from .dispatch import first_string, run_orca
+from .dispatch import (
+    baseline_ref_is_valid,
+    first_string,
+    run_git,
+    run_orca,
+    terminal_handles,
+)
+from .gates import execution_protocol_errors
 from .state import (
     append_event,
     atomic_write_json,
@@ -17,7 +25,8 @@ from .state import (
     rebuild_ledger,
     task_dir,
 )
-from .verification import bounded_diff
+from .verification import actual_changed_files, bounded_diff
+from .writer_reservation import reservation_status
 
 
 def select_reviewer_agent(
@@ -66,6 +75,15 @@ def start_blind_review(
 
     verification = ledger.get("verification")
 
+    protocol_errors = execution_protocol_errors(task_id)
+    if not isinstance(ledger.get("report"), dict):
+        protocol_errors.append("worker report missing")
+    if protocol_errors:
+        raise RuntimeError(
+            "worker protocol is incomplete before review: "
+            + "; ".join(protocol_errors)
+        )
+
     if (
         not isinstance(verification, dict)
         or verification.get("ok") is not True
@@ -86,6 +104,11 @@ def start_blind_review(
 
     if not worktree_selector or not worktree_path:
         raise RuntimeError("worker worktree selector/path missing")
+    if worker.get("same_worktree") is not True:
+        raise RuntimeError("worker was not dispatched in same-worktree mode")
+    expected_selector = f"path:{Path(task['repository_root']).resolve()}"
+    if worktree_selector != expected_selector:
+        raise RuntimeError("worker selector does not match task repository")
 
     reviewer_agent = select_reviewer_agent(
         preferred_agents=preferred_agents,
@@ -93,11 +116,65 @@ def start_blind_review(
     )
 
     worktree = Path(worktree_path).resolve()
+    if worktree != Path(task["repository_root"]).resolve():
+        raise RuntimeError("worker worktree path does not match task repository")
+    if task.get("allow_edits") is True:
+        writer = reservation_status(worktree)
+        if not isinstance(writer, dict) or writer.get("task_id") != task_id:
+            raise RuntimeError("task does not own repository writer before review")
+    current_head = run_git(worktree, "rev-parse", "HEAD")
+    if current_head != task.get("repository_head_sha"):
+        raise RuntimeError("worker changed repository HEAD before review")
+    if not baseline_ref_is_valid(
+        worktree,
+        task.get("baseline_ref"),
+        task["base_sha"],
+    ):
+        raise RuntimeError("task baseline reference is missing or changed")
+
+    current_changed = actual_changed_files(
+        worktree=worktree,
+        base_sha=task["base_sha"],
+    )
+    verified_changed = verification.get("changed_files")
+    if not isinstance(verified_changed, list) or sorted(
+        str(path) for path in verified_changed
+    ) != current_changed:
+        raise RuntimeError(
+            "worktree changed after controller verification; verify again"
+        )
 
     diff = bounded_diff(
         worktree=worktree,
         base_sha=task["base_sha"],
     )
+    if verification.get("diff_sha256") != diff["full_sha256"]:
+        raise RuntimeError(
+            "controller verification does not cover the current diff"
+        )
+
+    existing_reviewer = ledger.get("actors", {}).get("reviewer")
+    if (
+        isinstance(existing_reviewer, dict)
+        and existing_reviewer.get("same_worktree") is True
+        and existing_reviewer.get("diff_sha256") == diff["full_sha256"]
+        and existing_reviewer.get("terminal_handle")
+    ):
+        return {
+            "task_id": task_id,
+            "reviewer_agent": existing_reviewer.get("agent"),
+            "selector": worktree_selector,
+            "terminal": existing_reviewer.get("terminal_handle"),
+            "worktree_path": worktree_path,
+            "same_worktree": True,
+            "diff_sha256": diff["full_sha256"],
+            "status": (
+                "review-complete"
+                if isinstance(ledger.get("review"), dict)
+                else "review-running"
+            ),
+            "reused": True,
+        }
 
     diff_envelope = wrap_evidence(
         source=f"git-diff:{task_id}",
@@ -113,6 +190,41 @@ def start_blind_review(
         diff_envelope,
         maximum_chars=60000,
     )
+
+    try:
+        advisory_context = ReviewContextBuilder(worktree).build_review_context(
+            task["base_sha"]
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        advisory_context = {
+            "schema_version": 1,
+            "base_sha": task["base_sha"],
+            "worktree": str(worktree),
+            "changed_files": [
+                {"path": path, "change_type": "unknown"}
+                for path in current_changed
+            ],
+            "changed_symbols": [],
+            "affected_flows": [],
+            "test_gaps": [],
+            "risk_signals": [],
+            "crg_advisory": {
+                "ok": False,
+                "provider": "code-review-graph",
+                "status": "context-build-error",
+                "error_type": type(error).__name__,
+                "authoritative": False,
+            },
+            "crg_authoritative": False,
+            "graphify_paths": [],
+            "uncertainties": [
+                "review-context construction failed; inspect Git diff directly"
+            ],
+            "recommended_review_order": [],
+            "total_risk_score": 0.0,
+            "diff_hash": diff["full_sha256"],
+            "diff_length": len(diff["text"]),
+        }
 
     packet = {
         "schema_version": 1,
@@ -133,6 +245,8 @@ def start_blind_review(
         "controller_test_results": _compact_test_results(
             verification.get("results")
         ),
+        "review_context": advisory_context,
+        "crg_authoritative": False,
     }
 
     packet_path = task_dir(task_id) / "review-packet.json"
@@ -157,7 +271,7 @@ Any unverified criterion requires verdict=reject.
 
 Write your review to:
 
-.sin-worker/outbox/review.json
+{task["artifact_outbox"]}/review.json
 
 Include:
 - task_id
@@ -165,14 +279,41 @@ Include:
 - base_sha
 - verdict (accept or reject)
 - criteria (array with id, status, evidence)
+- diff_sha256 (must exactly equal `{diff["full_sha256"]}`)
 - scope_violation (boolean)
 - regressions (array)
 - unverified (array)
+
+Reject if the live `git diff` hash does not match the supplied diff_sha256.
+After atomically writing the review, send a direct callback with:
+
+sin-orca notify {task_id} --actor reviewer --type done --summary "blind review complete" --verify "<exact verdict: accept or reject>" --action "parent should run completion gate"
 
 Review packet:
 
 {json.dumps(packet, ensure_ascii=False, indent=2)}
 """
+
+    # Snapshot existing terminals first so fallback discovery cannot select the
+    # implementer's terminal or an older reviewer terminal.
+    existing_handles = {
+        str(worker.get("terminal_handle") or ""),
+        str(task.get("parent_terminal_handle") or ""),
+    }
+    try:
+        before = run_orca(
+            [
+                "terminal",
+                "list",
+                "--worktree",
+                worktree_selector,
+            ],
+            timeout=30,
+        )
+        existing_handles.update(terminal_handles(before))
+    except RuntimeError:
+        pass
+    existing_handles.discard("")
 
     # Create a NEW TERMINAL in the IMPLEMENTER's worktree — not a new worktree.
     # This way the reviewer can independently verify the actual changes.
@@ -200,10 +341,13 @@ Review packet:
         },
     )
 
+    if terminal in existing_handles:
+        terminal = None
+
     if not terminal:
-        # Terminal create might not return the handle directly.
-        # Fall back to listing terminals in the worktree and picking the newest.
-        for _ in range(10):
+        # Terminal create might not return the handle directly. Poll until a
+        # genuinely new handle appears; never reuse the implementer's terminal.
+        for _ in range(20):
             term_result = run_orca(
                 [
                     "terminal",
@@ -213,12 +357,13 @@ Review packet:
                 ],
                 timeout=30,
             )
-            terminals = term_result.get("result", {}).get("terminals", [])
-            if terminals:
-                # Pick the last one (newest)
-                terminal = terminals[-1].get("handle")
-                if terminal:
-                    break
+            candidates = [
+                handle for handle in terminal_handles(term_result)
+                if handle not in existing_handles
+            ]
+            if candidates:
+                terminal = candidates[-1]
+                break
             time.sleep(0.5)
 
     if not terminal:
@@ -247,8 +392,14 @@ Review packet:
             "worktree_path": worktree_path,
             "worktree_selector": worktree_selector,
             "terminal_handle": terminal,
+            "parent_terminal_handle": task.get("parent_terminal_handle"),
+            "outbox_path": str(
+                Path(task["repository_root"])
+                / task["artifact_outbox"]
+            ),
             "review_packet": str(packet_path),
             "same_worktree": True,
+            "diff_sha256": diff["full_sha256"],
         },
         actor="reviewer",
     )
@@ -260,5 +411,7 @@ Review packet:
         "terminal": terminal,
         "worktree_path": worktree_path,
         "same_worktree": True,
+        "diff_sha256": diff["full_sha256"],
         "status": "review-running",
+        "reused": False,
     }

@@ -17,7 +17,7 @@ import re
 import sqlite3
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -62,15 +62,24 @@ def utc_iso() -> str:
 
 # ─── Repository Identity (über alle Worktrees geteilt) ──────────────────────
 
+def safe_subprocess_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.pop("SIN_MANIFEST_HMAC_KEY", None)
+    return environment
+
+
 def repository_identity(cwd: str) -> str:
+    environment = safe_subprocess_environment()
     common_dir_result = subprocess.run(
         ["git", "rev-parse", "--git-common-dir"],
         cwd=cwd, text=True, capture_output=True, check=False, timeout=3,
+        env=environment,
     )
 
     remote_result = subprocess.run(
         ["git", "config", "--get", "remote.origin.url"],
         cwd=cwd, text=True, capture_output=True, check=False, timeout=3,
+        env=environment,
     )
 
     material = {
@@ -120,7 +129,16 @@ def evidence_is_current(
     repo_resolved = repository.resolve()
 
     for item in evidence:
-        file_path = (repository / item["path"]).resolve()
+        if not isinstance(item, dict):
+            return False
+        relative = item.get("path")
+        expected_hash = item.get("content_sha256")
+        if not isinstance(relative, str) or not relative.strip():
+            return False
+        if not isinstance(expected_hash, str) or not expected_hash:
+            return False
+
+        file_path = (repository / relative).resolve()
 
         try:
             file_path.relative_to(repo_resolved)
@@ -131,7 +149,7 @@ def evidence_is_current(
             return False
 
         actual_hash = file_content_hash(file_path)
-        if actual_hash is None or actual_hash != item["content_sha256"]:
+        if actual_hash is None or actual_hash != expected_hash:
             return False
 
     return True
@@ -199,18 +217,40 @@ class SinCache:
         if db_path is None:
             db_path = Path.home() / ".local" / "state" / "sin-cache" / "cache.db"
 
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+        db_path = db_path.expanduser().resolve()
+        db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            db_path.parent.chmod(0o700)
+        except OSError:
+            pass
         self.db_path = db_path
 
-        self.conn = sqlite3.connect(str(db_path))
+        self.conn: sqlite3.Connection = sqlite3.connect(
+            str(db_path),
+            timeout=10,
+        )
+        self._closed = False
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute("PRAGMA synchronous=FULL")
+        self.conn.execute("PRAGMA busy_timeout=10000")
+        self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.executescript(SCHEMA_SQL)
         self.conn.commit()
+        try:
+            db_path.chmod(0o600)
+        except OSError:
+            pass
+
+    def _connection(self) -> sqlite3.Connection:
+        if self._closed:
+            raise RuntimeError("cache is closed")
+        return self.conn
 
     def close(self) -> None:
-        self.conn.close()
+        if not self._closed:
+            self.conn.close()
+            self._closed = True
 
     # ─── L1: Exact Query Cache ───────────────────────────────────────────
 
@@ -265,10 +305,21 @@ class SinCache:
             return None
 
         entry = self._row_to_entry(row)
-        evidence = json.loads(entry.get("evidence_json", "[]"))
+        try:
+            evidence = json.loads(entry.get("evidence_json", "[]"))
+        except json.JSONDecodeError:
+            evidence = None
 
+        if evidence is None or not isinstance(evidence, list):
+            self.invalidate_by_key(key)
+            self._record_stat(route, "invalidated")
+            return None
         if evidence:
-            repo_path = Path(repository_path or entry.get("repository_path") or ".")
+            repo_path = Path(
+                repository_path
+                or entry.get("repository_path")
+                or "."
+            )
             if not evidence_is_current(repo_path, evidence):
                 self.invalidate_by_key(key)
                 self._record_stat(route, "invalidated")
@@ -303,9 +354,15 @@ class SinCache:
             provider_version=provider_version,
         )
         blob_hash = sha256_text(content)
+        previous = self.conn.execute(
+            "SELECT blob_hash FROM cache_entries WHERE cache_key = ?",
+            (key,),
+        ).fetchone()
+        previous_blob = str(previous[0]) if previous is not None else None
 
         self.conn.execute(
-            "INSERT OR REPLACE INTO cache_blobs (content_hash, content, content_type, created_at) "
+            "INSERT OR IGNORE INTO cache_blobs "
+            "(content_hash, content, content_type, created_at) "
             "VALUES (?, ?, ?, ?)",
             (blob_hash, content.encode("utf-8"), content_type, utc_now()),
         )
@@ -324,6 +381,22 @@ class SinCache:
                 policy_hash, provider_version, utc_now(), utc_now(),
             ),
         )
+
+        if previous_blob and previous_blob != blob_hash:
+            remaining = self.conn.execute(
+                "SELECT COUNT(*) FROM cache_entries WHERE blob_hash = ?",
+                (previous_blob,),
+            ).fetchone()[0]
+            if remaining == 0:
+                self.conn.execute(
+                    "DELETE FROM cache_views WHERE blob_hash = ?",
+                    (previous_blob,),
+                )
+                self.conn.execute(
+                    "DELETE FROM cache_blobs WHERE content_hash = ?",
+                    (previous_blob,),
+                )
+
         self.conn.commit()
         return key
 
@@ -336,15 +409,34 @@ class SinCache:
         query: str,
         repository_id: str,
         threshold: float = 0.7,
+        *,
+        repository_path: Path | str | None = None,
+        policy_hash: str = "",
+        provider_version: str = "",
+        require_evidence: bool = True,
     ) -> Optional[dict[str, Any]]:
+        if (
+            not isinstance(threshold, (int, float))
+            or isinstance(threshold, bool)
+            or not 0.0 <= float(threshold) <= 1.0
+        ):
+            raise ValueError("semantic threshold must be between 0 and 1")
+
         canonical = canonical_query(query)
 
         rows = self.conn.execute(
             "SELECT ce.*, cb.content, cb.content_type "
             "FROM cache_entries ce "
             "JOIN cache_blobs cb ON ce.blob_hash = cb.content_hash "
-            "WHERE ce.route = ? AND ce.provider = ? AND ce.repository_id = ?",
-            (route, provider, repository_id),
+            "WHERE ce.route = ? AND ce.provider = ? AND ce.repository_id = ? "
+            "AND ce.policy_hash = ? AND COALESCE(ce.provider_version, '') = ?",
+            (
+                route,
+                provider,
+                repository_id,
+                policy_hash,
+                provider_version,
+            ),
         ).fetchall()
 
         best_match = None
@@ -363,13 +455,34 @@ class SinCache:
             self._record_stat(route, "semantic_miss")
             return None
 
-        evidence = json.loads(best_match.get("evidence_json", "[]"))
+        try:
+            evidence = json.loads(best_match.get("evidence_json", "[]"))
+        except json.JSONDecodeError:
+            evidence = None
+        if evidence is None or not isinstance(evidence, list):
+            self.invalidate_by_key(str(best_match["cache_key"]))
+            self._record_stat(route, "semantic_invalidated")
+            return None
+        if require_evidence and not evidence:
+            self._record_stat(route, "semantic_unverified")
+            return None
         if evidence:
-            repo_path = Path(best_match.get("repository_path") or ".")
+            repo_path = Path(
+                repository_path
+                or best_match.get("repository_path")
+                or "."
+            )
             if not evidence_is_current(repo_path, evidence):
+                self.invalidate_by_key(str(best_match["cache_key"]))
                 self._record_stat(route, "semantic_invalidated")
                 return None
 
+        self.conn.execute(
+            "UPDATE cache_entries SET last_accessed_at = ?, "
+            "hit_count = hit_count + 1 WHERE cache_key = ?",
+            (utc_now(), best_match["cache_key"]),
+        )
+        self.conn.commit()
         self._record_stat(route, "semantic_hit")
         return best_match
 
@@ -391,19 +504,26 @@ class SinCache:
         normalized_evidence: list[dict[str, Any]] = []
 
         for item in evidence:
-            relative = str(item.get("path", "")).strip()
-            if not relative:
-                continue
+            if not isinstance(item, dict):
+                raise ValueError("evidence entries must be objects")
+            relative_value = item.get("path")
+            if not isinstance(relative_value, str) or not relative_value.strip():
+                raise ValueError("evidence entries require a non-empty path")
+            relative = relative_value.strip()
 
             file_path = (root / relative).resolve()
 
             try:
                 file_path.relative_to(root)
-            except ValueError:
-                continue
+            except ValueError as error:
+                raise ValueError(
+                    f"evidence path escapes repository: {relative}"
+                ) from error
 
             if not file_path.is_file():
-                continue
+                raise ValueError(
+                    f"evidence file does not exist: {relative}"
+                )
 
             normalized_evidence.append(
                 {
@@ -430,10 +550,22 @@ class SinCache:
         ).fetchall()
 
         to_invalidate = []
+        normalized_changed = str(Path(changed_path))
         for key, evidence_json in rows:
-            evidence = json.loads(evidence_json)
+            try:
+                evidence = json.loads(evidence_json)
+            except json.JSONDecodeError:
+                to_invalidate.append(key)
+                continue
+            if not isinstance(evidence, list):
+                to_invalidate.append(key)
+                continue
             for item in evidence:
-                if item.get("path") == changed_path:
+                if not isinstance(item, dict):
+                    to_invalidate.append(key)
+                    break
+                item_path = item.get("path")
+                if isinstance(item_path, str) and str(Path(item_path)) == normalized_changed:
                     to_invalidate.append(key)
                     break
 
@@ -600,7 +732,16 @@ class SinCache:
         self.conn.commit()
 
     def stats(self, days: int = 1) -> dict[str, Any]:
-        cutoff = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if (
+            not isinstance(days, int)
+            or isinstance(days, bool)
+            or days < 1
+            or days > 3650
+        ):
+            raise ValueError("days must be an integer from 1 to 3650")
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=days - 1)
+        ).strftime("%Y-%m-%d")
         rows = self.conn.execute(
             "SELECT route, hit_type, SUM(count) as total "
             "FROM cache_stats WHERE date >= ? "
@@ -644,6 +785,12 @@ class SinCache:
     # ─── GC ──────────────────────────────────────────────────────────────
 
     def gc(self, max_age_seconds: int = 86400 * 30) -> int:
+        if (
+            not isinstance(max_age_seconds, int)
+            or isinstance(max_age_seconds, bool)
+            or max_age_seconds < 0
+        ):
+            raise ValueError("max_age_seconds must be a non-negative integer")
         cutoff = utc_now() - max_age_seconds
 
         stale = self.conn.execute(

@@ -8,46 +8,195 @@ Verwendet keinen Shell-String mit shell=True.
 import fnmatch
 import hashlib
 import os
+import re
 import subprocess
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
-def run(argv: list[str], *, cwd: Path, timeout: int = 600) -> subprocess.CompletedProcess[str]:
+SECRET_FLAG = re.compile(
+    r"(?i)^--?(?:api[-_]?key|token|secret|password|passwd|authorization|cookie)$"
+)
+SECRET_INLINE = re.compile(
+    r"(?i)^(--?(?:api[-_]?key|token|secret|password|passwd|authorization|cookie))=(.+)$"
+)
+SECRET_OUTPUT = re.compile(
+    r"(?i)\b(token|secret|password|passwd|api[-_]?key|authorization|cookie)"
+    r"\s*[:=]\s*([^\s,;]+)"
+)
+AUTHORIZATION_HEADER = re.compile(
+    r"(?im)\bAuthorization\s*:\s*[^\r\n]+"
+)
+BEARER_OUTPUT = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
+URL_CREDENTIALS = re.compile(r"(https?://[^:/\s]+:)[^@/\s]+(@)")
+
+
+def controller_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.pop("SIN_MANIFEST_HMAC_KEY", None)
+    return environment
+
+
+def redact_text(value: str) -> str:
+    value = AUTHORIZATION_HEADER.sub("Authorization: <redacted>", value)
+    value = BEARER_OUTPUT.sub("Bearer <redacted>", value)
+    value = SECRET_OUTPUT.sub(r"\1=<redacted>", value)
+    return URL_CREDENTIALS.sub(r"\1<redacted>\2", value)
+
+
+def redact_argv(argv: list[str]) -> list[str]:
+    redacted: list[str] = []
+    hide_next = False
+    for item in argv:
+        if hide_next:
+            redacted.append("<redacted>")
+            hide_next = False
+            continue
+        inline = SECRET_INLINE.match(item)
+        if inline:
+            redacted.append(f"{inline.group(1)}=<redacted>")
+            continue
+        redacted.append(redact_text(item))
+        if SECRET_FLAG.match(item):
+            hide_next = True
+    return redacted
+
+
+def ensure_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def run(
+    argv: list[str],
+    *,
+    cwd: Path,
+    timeout: int = 600,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
             argv, cwd=cwd, text=True, capture_output=True, check=False,
-            timeout=timeout, env=os.environ.copy(),
+            timeout=timeout, env=env or controller_environment(),
         )
     except subprocess.TimeoutExpired as error:
-        return subprocess.CompletedProcess(argv, 124, stdout=error.stdout or "", stderr=error.stderr or "command timed out")
+        return subprocess.CompletedProcess(
+            argv,
+            124,
+            stdout=ensure_text(error.stdout),
+            stderr=ensure_text(error.stderr) or "command timed out",
+        )
 
 
 def output_hash(process: subprocess.CompletedProcess[str]) -> str:
-    material = f"{process.stdout}\n{process.stderr}".encode("utf-8")
+    material = (
+        ensure_text(process.stdout)
+        + "\n"
+        + ensure_text(process.stderr)
+    ).encode("utf-8")
     return hashlib.sha256(material).hexdigest()
 
 
 def output_tail(process: subprocess.CompletedProcess[str], *, limit: int = 2000) -> str:
-    text = (process.stdout + "\n" + process.stderr).strip()
+    text = redact_text(
+        (
+            ensure_text(process.stdout)
+            + "\n"
+            + ensure_text(process.stderr)
+        ).strip()
+    )
     if len(text) <= limit:
         return text
     return "...[truncated]\n" + text[-limit:]
 
 
+@contextmanager
+def snapshot_index(
+    *,
+    worktree: Path,
+    base_sha: str,
+) -> Iterator[dict[str, str]]:
+    """Expose the current worktree as a temporary Git index.
+
+    This compares against the synthetic dispatch baseline while leaving the
+    repository's real index and HEAD untouched. Pre-existing staged, unstaged,
+    and untracked files captured by the baseline therefore do not become worker
+    changes later.
+    """
+    descriptor, raw_path = tempfile.mkstemp(prefix="sin-orca-index-")
+    os.close(descriptor)
+    index_path = Path(raw_path)
+    index_path.unlink(missing_ok=True)
+    environment = controller_environment()
+    environment["GIT_INDEX_FILE"] = str(index_path)
+    try:
+        read_tree = run(
+            ["git", "read-tree", base_sha],
+            cwd=worktree,
+            timeout=60,
+            env=environment,
+        )
+        if read_tree.returncode != 0:
+            raise RuntimeError(
+                read_tree.stderr.strip() or "git read-tree baseline failed"
+            )
+
+        snapshot = run(
+            ["git", "add", "-A", "--", "."],
+            cwd=worktree,
+            timeout=180,
+            env=environment,
+        )
+        if snapshot.returncode != 0:
+            raise RuntimeError(
+                snapshot.stderr.strip() or "git worktree snapshot failed"
+            )
+
+        # Runtime coordination files are never task output. Restore their
+        # baseline state inside the temporary index only.
+        reset_runtime = run(
+            [
+                "git", "rm", "-r", "-q", "--cached", "--ignore-unmatch",
+                "--", ".sin-worker",
+            ],
+            cwd=worktree,
+            timeout=60,
+            env=environment,
+        )
+        if reset_runtime.returncode != 0:
+            raise RuntimeError(
+                reset_runtime.stderr.strip()
+                or "failed to exclude .sin-worker from snapshot"
+            )
+        yield environment
+    finally:
+        index_path.unlink(missing_ok=True)
+        index_path.with_suffix(index_path.suffix + ".lock").unlink(missing_ok=True)
+
+
 def actual_changed_files(*, worktree: Path, base_sha: str) -> list[str]:
-    tracked = run(["git", "diff", "--name-only", "--no-renames", base_sha, "--"], cwd=worktree, timeout=60)
-    if tracked.returncode != 0:
-        raise RuntimeError(tracked.stderr.strip() or "git diff failed")
-    untracked = run(["git", "ls-files", "--others", "--exclude-standard"], cwd=worktree, timeout=60)
-    if untracked.returncode != 0:
-        raise RuntimeError(untracked.stderr.strip() or "git ls-files failed")
-    files = {
+    with snapshot_index(worktree=worktree, base_sha=base_sha) as environment:
+        changed = run(
+            [
+                "git", "diff", "--cached", "--name-only", "--no-renames",
+                base_sha, "--",
+            ],
+            cwd=worktree,
+            timeout=60,
+            env=environment,
+        )
+    if changed.returncode != 0:
+        raise RuntimeError(changed.stderr.strip() or "git snapshot diff failed")
+    return sorted({
         line.strip()
-        for line in f"{tracked.stdout}\n{untracked.stdout}".splitlines()
+        for line in changed.stdout.splitlines()
         if line.strip() and not line.strip().startswith(".sin-worker/")
-    }
-    return sorted(files)
+    })
 
 
 def path_allowed(path: str, allowed_patterns: list[str]) -> bool:
@@ -79,61 +228,45 @@ def validate_scope(
     return errors
 
 
-def validate_diff(*, worktree: Path) -> dict[str, Any]:
-    result = run(["git", "diff", "--check"], cwd=worktree, timeout=60)
-    return {"ok": result.returncode == 0, "argv": result.args, "exit_code": result.returncode, "output_tail": output_tail(result), "output_sha256": output_hash(result)}
+def validate_diff(
+    *,
+    worktree: Path,
+    base_sha: str | None = None,
+) -> dict[str, Any]:
+    if base_sha is None:
+        result = run(["git", "diff", "--check"], cwd=worktree, timeout=60)
+    else:
+        with snapshot_index(worktree=worktree, base_sha=base_sha) as environment:
+            result = run(
+                ["git", "diff", "--cached", "--check", base_sha, "--"],
+                cwd=worktree,
+                timeout=60,
+                env=environment,
+            )
+    return {
+        "ok": result.returncode == 0,
+        "argv": redact_argv(list(result.args)),
+        "exit_code": result.returncode,
+        "output_tail": output_tail(result),
+        "output_sha256": output_hash(result),
+    }
 
 
 def full_worktree_diff(*, worktree: Path, base_sha: str) -> str:
-    """Return a stable Git diff that also includes untracked files."""
-    tracked = run(
-        [
-            "git", "diff", "--no-ext-diff", "--no-renames",
-            "--unified=4", base_sha, "--",
-        ],
-        cwd=worktree,
-        timeout=120,
-    )
-    if tracked.returncode != 0:
-        raise RuntimeError(tracked.stderr.strip() or "git diff failed")
-
-    untracked = run(
-        ["git", "ls-files", "--others", "--exclude-standard", "-z"],
-        cwd=worktree,
-        timeout=60,
-    )
-    if untracked.returncode != 0:
-        raise RuntimeError(
-            untracked.stderr.strip() or "git ls-files failed"
-        )
-
-    sections = [tracked.stdout.rstrip("\n")]
-    for relative_path in sorted(
-        item
-        for item in untracked.stdout.split("\0")
-        if item and not item.startswith(".sin-worker/")
-    ):
-        extra = run(
+    """Return a stable baseline-to-current diff without touching the real index."""
+    with snapshot_index(worktree=worktree, base_sha=base_sha) as environment:
+        diff = run(
             [
-                "git", "diff", "--no-index", "--no-ext-diff",
-                "--no-renames", "--unified=4", "--",
-                "/dev/null", relative_path,
+                "git", "diff", "--cached", "--no-ext-diff", "--no-renames",
+                "--binary", "--unified=4", base_sha, "--",
             ],
             cwd=worktree,
-            timeout=120,
+            timeout=180,
+            env=environment,
         )
-        # `git diff --no-index` returns 1 when differences are found.
-        if extra.returncode not in {0, 1}:
-            raise RuntimeError(
-                extra.stderr.strip()
-                or f"git diff failed for untracked file {relative_path}"
-            )
-        if extra.stdout:
-            sections.append(extra.stdout.rstrip("\n"))
-
-    return "\n".join(section for section in sections if section) + (
-        "\n" if any(sections) else ""
-    )
+    if diff.returncode != 0:
+        raise RuntimeError(diff.stderr.strip() or "git snapshot diff failed")
+    return diff.stdout
 
 
 def bounded_diff(*, worktree: Path, base_sha: str, maximum_chars: int = 60000) -> dict[str, Any]:
@@ -150,7 +283,7 @@ def run_controller_commands(*, worktree: Path, commands: list[list[str]], timeou
         if not argv or not all(isinstance(item, str) for item in argv):
             raise ValueError(f"invalid verification command: {argv!r}")
         process = run(argv, cwd=worktree, timeout=timeout)
-        result = {"argv": argv, "exit_code": process.returncode, "ok": process.returncode == 0, "output_tail": output_tail(process), "output_sha256": output_hash(process)}
+        result = {"argv": redact_argv(argv), "exit_code": process.returncode, "ok": process.returncode == 0, "output_tail": output_tail(process), "output_sha256": output_hash(process)}
         results.append(result)
         if process.returncode != 0:
             break

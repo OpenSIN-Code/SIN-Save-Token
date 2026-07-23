@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opensin.local/schemas/sin-save-token-orca-orchestrator.schema.json",
+  "title": "SIN-Save-Token Orca Same-Worktree Policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "team_runtime",
+    "worker_contract",
+    "worker_control",
+    "verification",
+    "review"
+  ],
+  "properties": {
+    "$schema": {"type": "string"},
+    "version": {"const": 3},
+    "team_runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace_mode",
+        "spawn_primitive",
+        "forbid_worker_worktrees",
+        "callback_transport",
+        "require_parent_terminal_handle",
+        "forbid_sleep_wait",
+        "allow_recursive_delegation",
+        "artifact_root",
+        "parallel_write_policy",
+        "maximum_parallel_editors",
+        "baseline_ref_root"
+      ],
+      "properties": {
+        "workspace_mode": {"const": "same-worktree"},
+        "spawn_primitive": {"const": "orca-terminal-create"},
+        "forbid_worker_worktrees": {"const": true},
+        "callback_transport": {"const": "parent-terminal"},
+        "require_parent_terminal_handle": {"const": true},
+        "forbid_sleep_wait": {"const": true},
+        "allow_recursive_delegation": {"const": true},
+        "artifact_root": {"const": ".sin-worker/tasks/{task_id}/outbox"},
+        "parallel_write_policy": {"const": "exclusive-repository-writer"},
+        "maximum_parallel_editors": {"const": 1},
+        "baseline_ref_root": {"const": "refs/sin-orca/baselines/{task_id}"}
+      }
+    },
+    "worker_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approval_mode",
+        "checkpoint_policy",
+        "require_exactly_one_checkpoint_per_step",
+        "require_direct_ack_callback",
+        "require_direct_checkpoint_callbacks",
+        "require_direct_done_callback",
+        "require_task_namespaced_artifacts",
+        "require_non_empty_implementer_evidence",
+        "forbid_new_worktrees",
+        "forbid_commits",
+        "forbid_pushes",
+        "forbid_sleep_polling",
+        "forbid_architecture_decisions",
+        "allow_bounded_child_delegation"
+      ],
+      "properties": {
+        "approval_mode": {"const": "stepwise"},
+        "checkpoint_policy": {"const": "callback-stop-for-explicit-approval"},
+        "require_exactly_one_checkpoint_per_step": {"const": true},
+        "require_direct_ack_callback": {"const": true},
+        "require_direct_checkpoint_callbacks": {"const": true},
+        "require_direct_done_callback": {"const": true},
+        "require_task_namespaced_artifacts": {"const": true},
+        "require_non_empty_implementer_evidence": {"const": true},
+        "forbid_new_worktrees": {"const": true},
+        "forbid_commits": {"const": true},
+        "forbid_pushes": {"const": true},
+        "forbid_sleep_polling": {"const": true},
+        "forbid_architecture_decisions": {"const": true},
+        "allow_bounded_child_delegation": {"const": true}
+      }
+    },
+    "worker_control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maximum_worker_steps",
+        "maximum_commands",
+        "maximum_wall_seconds",
+        "repeated_failure_policy",
+        "stalled_worker_policy",
+        "codex_context_policy"
+      ],
+      "properties": {
+        "maximum_worker_steps": {"type": "null"},
+        "maximum_commands": {"type": "null"},
+        "maximum_wall_seconds": {"type": "null"},
+        "repeated_failure_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maximum_identical_failures_without_codex_intervention",
+            "compare_by",
+            "action"
+          ],
+          "properties": {
+            "maximum_identical_failures_without_codex_intervention": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            },
+            "compare_by": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"type": "string", "minLength": 1},
+              "uniqueItems": true
+            },
+            "action": {"const": "pause_for_codex"}
+          }
+        },
+        "stalled_worker_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "maximum_inactive_seconds",
+            "ignore_while_child_process_running",
+            "action"
+          ],
+          "properties": {
+            "enabled": {"const": true},
+            "maximum_inactive_seconds": {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 86400
+            },
+            "ignore_while_child_process_running": {"const": true},
+            "action": {"const": "notify_codex"}
+          }
+        },
+        "codex_context_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maximum_checkpoint_chars",
+            "maximum_summary_chars",
+            "maximum_error_chars",
+            "allow_raw_terminal_transcript"
+          ],
+          "properties": {
+            "maximum_checkpoint_chars": {"type": "integer", "minimum": 1},
+            "maximum_summary_chars": {"type": "integer", "minimum": 1},
+            "maximum_error_chars": {"type": "integer", "minimum": 1},
+            "allow_raw_terminal_transcript": {"const": false}
+          }
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command_timeout_seconds",
+        "maximum_output_chars",
+        "required_for_roles",
+        "require_repository_head_unchanged",
+        "require_baseline_ref_unchanged",
+        "require_snapshot_diff_check"
+      ],
+      "properties": {
+        "command_timeout_seconds": {"type": "integer", "minimum": 1},
+        "maximum_output_chars": {"type": "integer", "minimum": 1},
+        "required_for_roles": {
+          "type": "array",
+          "const": ["implementer"]
+        },
+        "require_repository_head_unchanged": {"const": true},
+        "require_baseline_ref_unchanged": {"const": true},
+        "require_snapshot_diff_check": {"const": true}
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required_for_roles",
+        "blind",
+        "same_worktree",
+        "new_terminal",
+        "different_agent",
+        "maximum_diff_chars",
+        "require_all_criteria_proven",
+        "require_diff_hash_match",
+        "preferred_agents"
+      ],
+      "properties": {
+        "required_for_roles": {"type": "array", "const": ["implementer"]},
+        "blind": {"const": true},
+        "same_worktree": {"const": true},
+        "new_terminal": {"const": true},
+        "different_agent": {"const": true},
+        "maximum_diff_chars": {"type": "integer", "minimum": 1},
+        "require_all_criteria_proven": {"const": true},
+        "require_diff_hash_match": {"const": true},
+        "preferred_agents": {
+          "type": "array",
+          "minItems": 2,
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

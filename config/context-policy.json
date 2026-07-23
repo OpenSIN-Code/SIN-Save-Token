@@ -24,7 +24,10 @@
       "patterns": [
         "\\b(symbol|function|class|method|definition|reference|references|caller|callers|calls|implementiert|definiert|aufrufer|referenzen)\\b"
       ],
-      "providers": ["simone", "graphify"],
+      "providers": [
+        "simone",
+        "graphify"
+      ],
       "budget": "code_navigation_tokens"
     },
     {
@@ -32,29 +35,40 @@
       "patterns": [
         "\\b(architecture|architektur|dependency|dependencies|blast radius|data flow|datenfluss|module|modules|component|komponente)\\b"
       ],
-      "providers": ["graphify", "sin-code"],
+      "providers": [
+        "graphify",
+        "sin-code"
+      ],
       "budget": "architecture_tokens"
     },
     {
       "name": "domain_memory",
       "patterns": [
-        "\\b(decision|decided|rationale|policy|convention|why did we|entscheidung|entschieden|begründung|richtlinie|warum haben wir)\\b"
+        "\\b(decision|decided|rationale|policy|convention|why did we|entscheidung|entschieden|begr\u00fcndung|richtlinie|warum haben wir)\\b"
       ],
-      "providers": ["cognee"],
+      "providers": [
+        "cognee"
+      ],
       "budget": "memory_tokens"
     },
     {
       "name": "session_resume",
       "patterns": [
-        "\\b(resume|continue|where did we stop|last session|fortsetzen|weitermachen|wo aufgehört|letzte session)\\b"
+        "\\b(resume|continue|where did we stop|last session|fortsetzen|weitermachen|wo aufgeh\u00f6rt|letzte session)\\b"
       ],
-      "providers": ["session-digest"],
+      "providers": [
+        "session-digest"
+      ],
       "budget": "session_resume_tokens"
     },
     {
       "name": "text_search",
-      "patterns": [".*"],
-      "providers": ["agent-grep"],
+      "patterns": [
+        ".*"
+      ],
+      "providers": [
+        "agent-grep"
+      ],
       "budget": "default_tokens"
     }
   ],

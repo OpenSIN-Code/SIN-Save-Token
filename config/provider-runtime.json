@@ -22,6 +22,16 @@
       "failure_threshold": 3,
       "cooldown_seconds": 300
     },
+    "gitnexus": {
+      "argv": [
+        "gitnexus-query",
+        "{query}"
+      ],
+      "timeout_seconds": 120,
+      "maximum_output_chars": 16000,
+      "failure_threshold": 2,
+      "cooldown_seconds": 300
+    },
     "sin-code": {
       "argv": [
         "sin",

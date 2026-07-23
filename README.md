@@ -30,6 +30,95 @@ Prüfen:
 
 ---
 
+## Kanonische Orca-Delegation: gleicher Worktree, direkter Rückkanal
+
+`sin-orca` ist die kanonische Runtime für delegierte Agentenarbeit. Worker und
+Reviewer laufen in **neuen Orca-Terminal-Tabs des bereits aktuellen
+Repository-Worktrees**. Die Runtime verwendet niemals `orca worktree create`.
+
+Ein Implementer erhält eine synthetische, interne Baseline unter
+`refs/sin-orca/baselines/<task-id>`. Dadurch bleibt der echte Branch, `HEAD` und
+Git-Index unverändert, während selbst ein bereits schmutziger Arbeitsbaum exakt
+gegen den Zustand bei Dispatch verglichen werden kann.
+
+Nur ein editierender Task darf gleichzeitig die externe Repository-Writer-
+Reservation besitzen. Parallel laufende Explorer, Reviewer und delegierte
+Kinder bleiben read-only. Jeder Schritt ist explizit freigabepflichtig:
+
+```text
+ack callback
+→ checkpoint artifact + checkpoint callback
+→ explizite Freigabe für genau einen Step
+→ Ausführung dieses Steps
+→ nächster Checkpoint und Stop
+→ finaler Report + done callback
+→ Controller-Verifikation
+→ unabhängiger Reviewer in neuem Terminal desselben Worktrees
+→ Completion Manifest
+```
+
+Beispiel:
+
+```bash
+REPO="$(git rev-parse --show-toplevel)"
+PARENT_TERMINAL="<aktueller-orca-terminal-handle>"
+
+sin-orca dispatch \
+  --repo "$REPO" \
+  --parent-terminal "$PARENT_TERMINAL" \
+  --role implementer \
+  --agent mimo-code \
+  --objective "Implementiere die exakt beschriebene Änderung" \
+  --step "Ändere ausschließlich src/example.py" \
+  --checkpoint "implementation-ready" \
+  --allowed-path "src/example.py" \
+  --acceptance "Der neue Vertrag ist durch einen Test bewiesen" \
+  --verify-command "python3 -m pytest -q tests/test_example.py"
+```
+
+Der Worker meldet sich direkt im Parent-Terminal und gleichzeitig im
+manipulationssicheren Event-Log:
+
+```bash
+sin-orca notify <task-id> \
+  --type checkpoint \
+  --step S01 \
+  --summary "Plan und Scope geprüft" \
+  --changed none \
+  --verify not-run \
+  --action "S01 freigeben"
+```
+
+Controller-Befehle:
+
+```bash
+sin-orca status <task-id>
+sin-orca approve <task-id> --step S01 --instruction "Nur S01 ausführen"
+sin-orca mailbox <task-id> --actor worker
+sin-orca verify <task-id>
+sin-orca review <task-id>
+sin-orca complete <task-id>
+sin-orca cancel <task-id> --reason "Task wird nicht fortgesetzt"
+```
+
+Artefakte liegen ausschließlich unter
+`.sin-worker/tasks/<task-id>/outbox/`. Erfolgreiche Completion oder explizites
+Cancel gibt die Repository-Writer-Reservation wieder frei. `sleep`, blindes
+Terminal-Polling, Commits, Branches und zusätzliche Git-Worktrees sind für
+Worker verboten.
+
+Lokale statische Gates und der echte Live-Smoke:
+
+```bash
+python3 scripts/verify-local-integration.py --allow-dirty
+python3 scripts/verify-local-integration.py --live --allow-dirty
+```
+
+Ohne `--allow-dirty` ist ein schmutziger Repository-Stand absichtlich ein
+Release-Blocker. Ohne `--live` werden keine echten Orca-Agenten gestartet.
+
+---
+
 ## Die 4 Layer
 
 | Layer | Was | Mechanismus | Ersparnis |
@@ -118,8 +207,9 @@ Dieses Repo installiert diese Tools **nicht** — es setzt sie voraus und verwei
 | CLI | Rolle | Bezug |
 |---|---|---|
 | `rtk` | L1 — komprimiert Shell-Output (Pflicht für den Installer) | `cargo install rtk` / `brew install rtk` |
-| `graphify` | LLM-freier Code-Graph statt grep (Struktur/Blast-Radius, 0 Tokens) | separat installiert |
-| `orca` | Delegation teurer Exploration an billige Modelle (opencode/mimo) | separat installiert |
+| `graphify` | Primärer Architektur-/Dependency-Graph; seriell, niemals parallel zum Fallback | separat installiert |
+| `gitnexus` | Fail-closed Architektur-Fallback; Repository muss explizit und aktuell indexiert sein | separat installiert, danach `gitnexus analyze` pro Repository |
+| `orca` | Same-worktree Terminal-Delegation an billige Modelle (opencode/mimo) | separat installiert |
 | `sin` | SIN-Code-Hub (`sin verify`/`review`/`debt`) | separat installiert |
 | `sin-sync` | verteilt den Standard + fährt `verify-tokens` als Deploy-Gate | `~/.local/bin/sin-sync` |
 | `skillopt` | Session-Review + Skill-Selbstoptimierung | separat installiert |
@@ -203,10 +293,16 @@ SIN-Save-Token/
 │   ├── verify-tokens         ← 4-Layer Compliance-Checker (prüft rtk-Hook/Plugin,
 │   │                            MCP-Server-Zahl, Modell-Routing, always-loaded-Fläche;
 │   │                            exit 1 bei Regress)
+│   ├── sin-orca              ← Same-worktree Orchestrator, Callbacks, Gates, Review, Manifest
+│   ├── gitnexus-query        ← fail-closed GitNexus-Fallback für das exakte Repository
 │   ├── agent-grep            ← struktur-augmentierte, selbst-kürzende Code-Suche
 │   ├── memory-scope          ← jcode ② — Memory-Ranking (BM25-lite) + ehrliches ROI-Gate
 │   ├── session-digest        ← jcode ③ — Transcript → kompakter Resume-Digest (~99%)
 │   └── dream                 ← mimo /dream — dauerhafte Lehren → geteiltes Memory
+├── lib/sin_orca/             ← kanonische Runtime (State, Lease, Writer, Verify, Review)
+├── scripts/
+│   ├── verify-local-integration.py ← lokale Fleet-/CI-Gates mit externem Report
+│   └── live-orca-smoke.py    ← echter Worker→Callback→Review→Manifest-Smoke
 ├── hooks/                    ← agent-agnostische PreToolUse-Hooks (siehe hooks/README.md)
 │   ├── rtk-auto-rewrite.js   ← rewrite `git/cargo/...` → `rtk <cmd>`
 │   ├── orca-delegation-guard.js ← Nudge: teure Exploration an orca delegieren

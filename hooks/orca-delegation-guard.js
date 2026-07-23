@@ -3,8 +3,8 @@
 //
 // Purpose: NUDGE (never block) the main agent to delegate expensive exploration
 // — web lookups and BROAD, repo-wide code searches — to the `mimo-code`
-// subagent via `orca`, per the delegation doctrine (skill `orca-sin-team`).
-// Delegating keeps the token-heavy scan out of the main context window.
+// subagent via a new Orca terminal in the CURRENT worktree, per the canonical
+// `orca-sin-team` skill in wow-my-zsh. Never create a worker worktree.
 //
 // Mechanism (PreToolUse, verified against current Claude Code docs):
 //   To surface a non-blocking note to the agent, emit on stdout:
@@ -87,9 +87,10 @@ process.stdin.on('end', () => {
     }
 
     const reason =
-      'Delegations-Doktrin: teure Exploration (Web/Broad-Grep) an mimo-code via ' +
-      '`orca` delegieren statt im Hauptkontext — Skill `orca-sin-team`. ' +
-      '(Dieser Hinweis erscheint gedrosselt.)';
+      'Delegations-Doktrin: teure Exploration an mimo-code via ' +
+      '`orca terminal create --worktree path:<repo> --command mimo-code` im selben Worktree. ' +
+      'Parent-Terminal-Handle für direkte Callbacks mitgeben; kein `orca worktree create`, kein Sleep-Polling. ' +
+      'Skill: wow-my-zsh/orca-sin-team. (Gedrosselter Hinweis.)';
 
     const output = {
       hookSpecificOutput: {

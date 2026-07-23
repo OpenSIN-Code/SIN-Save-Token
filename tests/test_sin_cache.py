@@ -94,6 +94,14 @@ class TestEvidenceValidation(unittest.TestCase):
         }]
         self.assertFalse(evidence_is_current(self.repo, evidence))
 
+    def test_malformed_or_escaping_evidence_is_invalid(self):
+        self.assertFalse(evidence_is_current(self.repo, [{}]))
+        self.assertFalse(evidence_is_current(self.repo, ["not-an-object"]))
+        self.assertFalse(evidence_is_current(
+            self.repo,
+            [{"path": "../outside", "content_sha256": "abc"}],
+        ))
+
 
 class TestCacheL1Exact(unittest.TestCase):
     def setUp(self):
@@ -140,6 +148,48 @@ class TestCacheL1Exact(unittest.TestCase):
         result = self.cache.get("code_symbol", "graphify", "query", "repo1")
         self.assertIsNotNone(result)
 
+    def test_shared_blob_survives_single_entry_invalidation(self):
+        first = self.cache.put(
+            "code_symbol", "graphify", "query one", "repo1",
+            "shared answer",
+        )
+        second = self.cache.put(
+            "code_symbol", "graphify", "query two", "repo1",
+            "shared answer",
+        )
+        self.assertNotEqual(first, second)
+        self.assertEqual(
+            self.cache.conn.execute(
+                "SELECT COUNT(*) FROM cache_blobs"
+            ).fetchone()[0],
+            1,
+        )
+
+        self.cache.invalidate_by_key(first)
+        self.assertIsNotNone(
+            self.cache.get(
+                "code_symbol", "graphify", "query two", "repo1"
+            )
+        )
+        self.assertEqual(
+            self.cache.conn.execute(
+                "SELECT COUNT(*) FROM cache_blobs"
+            ).fetchone()[0],
+            1,
+        )
+
+        self.cache.invalidate_by_key(second)
+        self.assertEqual(
+            self.cache.conn.execute(
+                "SELECT COUNT(*) FROM cache_blobs"
+            ).fetchone()[0],
+            0,
+        )
+
+    def test_close_is_idempotent(self):
+        self.cache.close()
+        self.cache.close()
+
 
 class TestCacheL2Semantic(unittest.TestCase):
     def setUp(self):
@@ -162,6 +212,7 @@ class TestCacheL2Semantic(unittest.TestCase):
             "refresh token validation function",
             "repo1",
             threshold=0.3,
+            require_evidence=False,
         )
         self.assertIsNotNone(result)
         self.assertEqual(result["content"], "In src/auth.ts Zeile 71")
@@ -177,8 +228,141 @@ class TestCacheL2Semantic(unittest.TestCase):
             "how to deploy to kubernetes",
             "repo1",
             threshold=0.7,
+            require_evidence=False,
         )
         self.assertIsNone(result)
+
+    def test_semantic_cache_is_scoped_to_policy_and_provider_version(self):
+        self.cache.put(
+            "code_symbol",
+            "graphify",
+            "refresh token validation code",
+            "repo1",
+            "In src/auth.ts",
+            policy_hash="policy-v1",
+            provider_version="graphify-v8",
+        )
+
+        self.assertIsNotNone(self.cache.get_semantic(
+            "code_symbol",
+            "graphify",
+            "refresh token validation function",
+            "repo1",
+            threshold=0.3,
+            policy_hash="policy-v1",
+            provider_version="graphify-v8",
+            require_evidence=False,
+        ))
+        self.assertIsNone(self.cache.get_semantic(
+            "code_symbol",
+            "graphify",
+            "refresh token validation function",
+            "repo1",
+            threshold=0.3,
+            policy_hash="policy-v2",
+            provider_version="graphify-v8",
+            require_evidence=False,
+        ))
+        self.assertIsNone(self.cache.get_semantic(
+            "code_symbol",
+            "graphify",
+            "refresh token validation function",
+            "repo1",
+            threshold=0.3,
+            policy_hash="policy-v1",
+            provider_version="graphify-v9",
+            require_evidence=False,
+        ))
+
+    def test_semantic_cache_requires_evidence_by_default(self):
+        self.cache.put(
+            "code_symbol", "graphify", "refresh token validation", "repo1",
+            "answer without evidence",
+        )
+        self.assertIsNone(self.cache.get_semantic(
+            "code_symbol",
+            "graphify",
+            "refresh token validation",
+            "repo1",
+            threshold=1.0,
+        ))
+        self.assertIsNotNone(self.cache.get_semantic(
+            "code_symbol",
+            "graphify",
+            "refresh token validation",
+            "repo1",
+            threshold=1.0,
+            require_evidence=False,
+        ))
+
+    def test_semantic_cache_invalidates_changed_evidence(self):
+        repository = self.tmpdir / "repository"
+        repository.mkdir()
+        evidence_file = repository / "evidence.txt"
+        evidence_file.write_text("first", encoding="utf-8")
+
+        self.cache.put_evidence(
+            "code_symbol",
+            "graphify",
+            "evidence lookup",
+            "repo-evidence",
+            "answer",
+            [{"path": "evidence.txt"}],
+            repository_path=repository,
+            policy_hash="policy",
+            provider_version="provider",
+        )
+        self.assertIsNotNone(self.cache.get_semantic(
+            "code_symbol",
+            "graphify",
+            "evidence lookup",
+            "repo-evidence",
+            threshold=1.0,
+            repository_path=repository,
+            policy_hash="policy",
+            provider_version="provider",
+        ))
+
+        evidence_file.write_text("changed", encoding="utf-8")
+        self.assertIsNone(self.cache.get_semantic(
+            "code_symbol",
+            "graphify",
+            "evidence lookup",
+            "repo-evidence",
+            threshold=1.0,
+            repository_path=repository,
+            policy_hash="policy",
+            provider_version="provider",
+        ))
+        self.assertEqual(
+            self.cache.conn.execute(
+                "SELECT COUNT(*) FROM cache_entries"
+            ).fetchone()[0],
+            0,
+        )
+
+    def test_invalid_semantic_threshold_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.cache.get_semantic(
+                "code_symbol", "graphify", "query", "repo1",
+                threshold=1.1,
+            )
+
+    def test_put_evidence_rejects_missing_or_escaping_paths(self):
+        repository = self.tmpdir / "repository"
+        repository.mkdir()
+        with self.assertRaises(ValueError):
+            self.cache.put_evidence(
+                "code_symbol", "graphify", "query", "repo1", "answer",
+                [{"path": "missing.txt"}],
+                repository_path=repository,
+            )
+        with self.assertRaises(ValueError):
+            self.cache.put_evidence(
+                "code_symbol", "graphify", "query", "repo1", "answer",
+                [{"path": "../outside.txt"}],
+                repository_path=repository,
+            )
 
 
 class TestCacheL4WorkerArtifacts(unittest.TestCase):

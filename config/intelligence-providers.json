@@ -3,11 +3,11 @@
   "providers": {
     "symbol_navigation": {
       "primary": "simone",
-      "fallback": "agent-grep"
+      "fallback": "graphify"
     },
     "general_code_graph": {
       "primary": "graphify",
-      "fallback": "gitnexus",
+      "fallback": "sin-code",
       "allow_simultaneous_execution": false
     },
     "change_review": {

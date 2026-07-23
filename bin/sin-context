@@ -8,6 +8,7 @@ The broker prevents agents from querying every memory and code system in sequenc
 from __future__ import annotations
 
 import argparse
+import atexit
 import hashlib
 import importlib.util
 import json
@@ -64,9 +65,90 @@ class ProviderOutcome:
     duration_ms: int | None = None
 
 
+def safe_subprocess_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.pop("SIN_MANIFEST_HMAC_KEY", None)
+    return environment
+
+
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def load_policy(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+        policy = json.load(handle)
+    validate_policy(policy)
+    return policy
+
+
+def validate_policy(policy: dict[str, Any]) -> None:
+    if not isinstance(policy, dict):
+        raise ValueError("context policy must be an object")
+    budgets = policy.get("budgets")
+    retrieval = policy.get("retrieval")
+    routes = policy.get("routes")
+    if not isinstance(budgets, dict) or not isinstance(retrieval, dict):
+        raise ValueError("context policy requires budgets and retrieval objects")
+    if not isinstance(routes, list) or not routes:
+        raise ValueError("context policy requires non-empty routes")
+
+    maximum_tokens = budgets.get("maximum_tokens")
+    if (
+        not isinstance(maximum_tokens, int)
+        or isinstance(maximum_tokens, bool)
+        or not 1 <= maximum_tokens <= 100_000
+    ):
+        raise ValueError("maximum_tokens is invalid")
+    for name, value in budgets.items():
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or not 1 <= value <= maximum_tokens
+        ):
+            raise ValueError(f"budget {name!r} is invalid")
+
+    maximum_attempts = retrieval.get("maximum_provider_attempts")
+    if (
+        not isinstance(maximum_attempts, int)
+        or isinstance(maximum_attempts, bool)
+        or not 1 <= maximum_attempts <= 5
+    ):
+        raise ValueError("maximum_provider_attempts is invalid")
+    for field in ("cache_ttl_seconds", "negative_cache_ttl_seconds"):
+        value = retrieval.get(field)
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or not 0 <= value <= 7 * 24 * 60 * 60
+        ):
+            raise ValueError(f"{field} is invalid")
+
+    names: set[str] = set()
+    for route in routes:
+        if not isinstance(route, dict):
+            raise ValueError("route entries must be objects")
+        name = route.get("name")
+        patterns = route.get("patterns")
+        providers = route.get("providers")
+        budget = route.get("budget")
+        if not isinstance(name, str) or not name or name in names:
+            raise ValueError("route names must be unique non-empty strings")
+        names.add(name)
+        if not isinstance(patterns, list) or not patterns or not all(
+            isinstance(pattern, str) and pattern for pattern in patterns
+        ):
+            raise ValueError(f"route {name!r} has invalid patterns")
+        for pattern in patterns:
+            re.compile(pattern)
+        if not isinstance(providers, list) or not providers or not all(
+            isinstance(provider, str) and provider for provider in providers
+        ):
+            raise ValueError(f"route {name!r} has invalid providers")
+        if len(providers) != len(set(providers)):
+            raise ValueError(f"route {name!r} repeats a provider")
+        if budget not in budgets:
+            raise ValueError(f"route {name!r} references unknown budget")
 
 
 def approximate_tokens(text: str) -> int:
@@ -91,13 +173,16 @@ def normalize_query(query: str) -> str:
 def repository_fingerprint(cwd: str) -> str:
     """Return a cheap repository-state fingerprint."""
     try:
+        environment = safe_subprocess_environment()
         head = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=cwd, text=True, capture_output=True, timeout=3, check=False,
+            env=environment,
         )
         status = subprocess.run(
             ["git", "status", "--porcelain=v1", "--untracked-files=normal"],
             cwd=cwd, text=True, capture_output=True, timeout=3, check=False,
+            env=environment,
         )
     except (OSError, subprocess.TimeoutExpired):
         return "not-a-git-repository"
@@ -113,6 +198,9 @@ def cache_key(
     query: str,
     cwd: str,
     budget: int | None = None,
+    *,
+    policy_fingerprint: str = "legacy-policy",
+    provider_fingerprint: str = "legacy-provider",
 ) -> str:
     canonical = {
         "route": route,
@@ -120,8 +208,10 @@ def cache_key(
         "query": normalize_query(query),
         "repository": os.path.realpath(cwd),
         "repository_fingerprint": repository_fingerprint(cwd),
-        "evidence_firewall_version": 1,
+        "evidence_firewall_version": 2,
         "token_budget": budget,
+        "policy_fingerprint": policy_fingerprint,
+        "provider_fingerprint": provider_fingerprint,
     }
     raw = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -154,8 +244,17 @@ def deduplicate_sections(text: str, *, similarity_threshold: float = 0.82) -> st
 
 class ContextCache:
     def __init__(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(path)
+        path = path.expanduser().resolve()
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            path.parent.chmod(0o700)
+        except OSError:
+            pass
+        self.path = path
+        self.connection = sqlite3.connect(path, timeout=10)
+        self.connection.execute("PRAGMA journal_mode=WAL")
+        self.connection.execute("PRAGMA synchronous=FULL")
+        self.connection.execute("PRAGMA busy_timeout=10000")
         self.connection.execute("""
             CREATE TABLE IF NOT EXISTS context_cache (
                 cache_key TEXT PRIMARY KEY,
@@ -166,6 +265,16 @@ class ContextCache:
             )
         """)
         self.connection.commit()
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+
+    def close(self) -> None:
+        connection = getattr(self, "connection", None)
+        if connection is not None:
+            connection.close()
+            self.connection = None
 
     def get(self, key: str, ttl: int, negative_ttl: int) -> CachedResult | None:
         row = self.connection.execute(
@@ -299,6 +408,28 @@ def provider_simone(
     )
 
 
+def provider_gitnexus(
+    query: str,
+    cwd: str,
+    runtime: ProviderRuntime,
+    specs: dict[str, ProviderSpec],
+) -> ProviderOutcome:
+    local_adapter = ROOT / "bin" / "gitnexus-query"
+    argv_override = (
+        [sys.executable, str(local_adapter), "{query}"]
+        if local_adapter.is_file()
+        else None
+    )
+    return call_runtime_provider(
+        "gitnexus",
+        cwd=cwd,
+        variables={"query": query},
+        runtime=runtime,
+        specs=specs,
+        argv_override=argv_override,
+    )
+
+
 def provider_sin_code(
     query: str,
     cwd: str,
@@ -379,6 +510,7 @@ def provider_agent_grep(
 
 PROVIDERS = {
     "graphify": provider_graphify,
+    "gitnexus": provider_gitnexus,
     "simone": provider_simone,
     "sin-code": provider_sin_code,
     "cognee": provider_cognee,
@@ -465,7 +597,15 @@ def main() -> int:
     args = parser.parse_args()
 
     query = " ".join(args.query).strip()
-    policy = load_policy(args.policy)
+    policy_path = args.policy.expanduser().resolve()
+    provider_config_path = args.provider_config.expanduser().resolve()
+    try:
+        policy = load_policy(policy_path)
+        policy_fingerprint = file_sha256(policy_path)
+        provider_fingerprint = file_sha256(provider_config_path)
+    except (OSError, ValueError, json.JSONDecodeError, re.error) as error:
+        print(f"invalid context policy/config: {error}", file=sys.stderr)
+        return 2
     route = select_route(query, policy)
 
     budget_name = route["budget"]
@@ -474,9 +614,10 @@ def main() -> int:
     negative_ttl = int(policy["retrieval"].get("negative_cache_ttl_seconds", 300))
     maximum_attempts = int(policy["retrieval"].get("maximum_provider_attempts", 2))
     cache = ContextCache(args.cache)
+    atexit.register(cache.close)
 
     try:
-        provider_specs = load_provider_specs(args.provider_config)
+        provider_specs = load_provider_specs(provider_config_path)
     except (OSError, ValueError, json.JSONDecodeError) as error:
         print(f"invalid provider runtime config: {error}", file=sys.stderr)
         return 2
@@ -508,6 +649,8 @@ def main() -> int:
             query,
             args.cwd,
             budget,
+            policy_fingerprint=policy_fingerprint,
+            provider_fingerprint=provider_fingerprint,
         )
 
         cached = None

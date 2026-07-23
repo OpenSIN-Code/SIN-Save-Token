@@ -19,6 +19,12 @@ from typing import Any
 ZERO_HASH = "0" * 64
 
 
+def safe_subprocess_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.pop("SIN_MANIFEST_HMAC_KEY", None)
+    return environment
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -37,6 +43,7 @@ def run_git(root: Path, *args: str) -> str:
     process = subprocess.run(
         ["git", *args],
         cwd=root, text=True, capture_output=True, check=False, timeout=15,
+        env=safe_subprocess_environment(),
     )
     if process.returncode != 0:
         raise RuntimeError(process.stderr.strip() or process.stdout.strip())
@@ -47,6 +54,7 @@ def repository_root() -> Path:
     process = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         text=True, capture_output=True, check=False, timeout=5,
+        env=safe_subprocess_environment(),
     )
     if process.returncode == 0 and process.stdout.strip():
         return Path(process.stdout.strip()).resolve()
@@ -63,6 +71,7 @@ def repository_id(root: Path | None = None) -> str:
         remote = subprocess.run(
             ["git", "config", "--get", "remote.origin.url"],
             cwd=root, text=True, capture_output=True, check=False, timeout=5,
+            env=safe_subprocess_environment(),
         ).stdout.strip()
         material = {"git_common_dir": str(common_dir), "remote": remote}
     except RuntimeError:
@@ -77,13 +86,21 @@ def state_base() -> Path:
         if override
         else Path.home() / ".local" / "state" / "sin-orca"
     )
-    base.mkdir(parents=True, exist_ok=True)
+    base.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        base.chmod(0o700)
+    except OSError:
+        pass
     return base
 
 
 def state_root(root: Path | None = None) -> Path:
     result = state_base() / repository_id(root)
-    result.mkdir(parents=True, exist_ok=True)
+    result.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        result.chmod(0o700)
+    except OSError:
+        pass
     return result
 
 
@@ -94,7 +111,11 @@ def task_dir(task_id: str, root: Path | None = None) -> Path:
 
     if root is not None:
         directory = state_root(root) / task_id
-        directory.mkdir(parents=True, exist_ok=True)
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            directory.chmod(0o700)
+        except OSError:
+            pass
         return directory
 
     current = state_root() / task_id
@@ -127,7 +148,11 @@ def task_dir(task_id: str, root: Path | None = None) -> Path:
             f"task id is ambiguous across repositories: {locations}"
         )
 
-    current.mkdir(parents=True, exist_ok=True)
+    current.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        current.chmod(0o700)
+    except OSError:
+        pass
     return current
 
 
@@ -147,7 +172,12 @@ def atomic_write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
     temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.chmod(0o600)
     os.replace(temporary, path)
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
 
 
 def save_task(task: dict[str, Any], root: Path | None = None) -> None:
@@ -191,7 +221,7 @@ def read_events(task_id: str, root: Path | None = None, *, verify: bool = True) 
 def reduce_events(task_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
     ledger: dict[str, Any] = {
         "task_id": task_id, "status": "unknown", "actors": {},
-        "checkpoints": [], "controller_messages": [],
+        "checkpoints": [], "controller_messages": [], "callbacks": [],
         "verification": None, "review": None, "report": None,
         "suspended": False, "updated_at": None,
     }
@@ -216,6 +246,23 @@ def reduce_events(task_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
         elif etype in {"codex.sent", "codex.interrupted", "codex.approved", "codex.followup"}:
             ledger["controller_messages"].append({"type": etype, "actor": actor, **payload})
             ledger["status"] = "worker-running"
+        elif etype in {"worker.callback", "reviewer.callback"}:
+            ledger["callbacks"].append({"type": etype, "actor": actor, **payload})
+            callback_type = payload.get("callback_type")
+            if callback_type == "ack":
+                ledger["status"] = "worker-acknowledged"
+            elif callback_type == "discovery":
+                ledger["status"] = "worker-discovery-received"
+            elif callback_type == "question":
+                ledger["status"] = "worker-question-received"
+            elif callback_type == "blocked":
+                ledger["status"] = "worker-blocked"
+            elif callback_type == "done":
+                ledger["status"] = (
+                    "review-callback-received"
+                    if actor == "reviewer"
+                    else "worker-callback-received"
+                )
         elif etype == "task.suspended":
             ledger["suspended"] = True
             ledger["status"] = "suspended"
@@ -231,8 +278,21 @@ def reduce_events(task_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
         elif etype == "review.completed":
             ledger["review"] = payload
             ledger["status"] = "review-complete"
+        elif etype == "worker.blocked":
+            ledger["worker_blocked"] = payload
+            ledger["status"] = "worker-blocked"
+        elif etype == "worker.stalled":
+            ledger["worker_stalled"] = payload
+            ledger["status"] = "worker-stalled"
+        elif etype == "worker.recovered":
+            ledger["worker_stalled"] = None
+            ledger["worker_blocked"] = None
+            ledger["status"] = "worker-running"
         elif etype == "task.completed":
             ledger["status"] = "completed"
+        elif etype == "task.cancelled":
+            ledger["status"] = "cancelled"
+            ledger["cancelled"] = payload
         elif etype == "task.failed":
             ledger["status"] = "failed"
             ledger["failure"] = payload
@@ -252,6 +312,10 @@ def append_event(
     directory = task_dir(task_id, root)
     lock_path = directory / ".events.lock"
     with lock_path.open("a+", encoding="utf-8") as lock:
+        try:
+            os.fchmod(lock.fileno(), 0o600)
+        except OSError:
+            pass
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         events = read_events(task_id, root)
         sequence = len(events) + 1
@@ -263,6 +327,10 @@ def append_event(
         }
         event = {**material, "event_hash": sha256_json(material)}
         with events_path(task_id, root).open("a", encoding="utf-8") as handle:
+            try:
+                os.fchmod(handle.fileno(), 0o600)
+            except OSError:
+                pass
             handle.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
             handle.flush()
             os.fsync(handle.fileno())

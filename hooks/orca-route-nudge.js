@@ -7,7 +7,7 @@
 //
 //   { "hookSpecificOutput": {
 //       "hookEventName": "UserPromptSubmit",
-//       "additionalContext": "<nudge: delegate via orca worktree create --agent X>"
+//       "additionalContext": "<nudge: delegate via orca terminal create in current worktree>"
 //   } }
 //
 // Fail-open exit 0 on any error.
@@ -85,8 +85,9 @@ process.stdin.on('end', () => {
 
     const modelHint = agent === 'codex' ? ' (gpt-5.6-sol)' : '';
     const nudge =
-      `nudge: delegate via \`orca worktree create --agent ${agent}${modelHint} --prompt "...\`" — ` +
-      `this looks like a ${agent === 'codex' ? 'heavy' : 'multi-file'} task. ` +
+      `nudge: use the orca-sin-team skill and create \`${agent}${modelHint}\` as a new Orca terminal ` +
+      `in the current worktree via \`orca terminal create --worktree path:<repo> --command ${agent}\`. ` +
+      `Pass the parent terminal handle for direct callbacks; never create a worker worktree or sleep-poll. ` +
       `(Classification: ${result.split('\n')[0] || result}. Throttled: ≤1/90s.)`;
 
     process.stdout.write(

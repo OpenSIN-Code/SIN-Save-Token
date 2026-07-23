@@ -1,4 +1,35 @@
 {
+  "$schema": "./orca-orchestrator.schema.json",
+  "version": 3,
+  "team_runtime": {
+    "workspace_mode": "same-worktree",
+    "spawn_primitive": "orca-terminal-create",
+    "forbid_worker_worktrees": true,
+    "callback_transport": "parent-terminal",
+    "require_parent_terminal_handle": true,
+    "forbid_sleep_wait": true,
+    "allow_recursive_delegation": true,
+    "artifact_root": ".sin-worker/tasks/{task_id}/outbox",
+    "parallel_write_policy": "exclusive-repository-writer",
+    "maximum_parallel_editors": 1,
+    "baseline_ref_root": "refs/sin-orca/baselines/{task_id}"
+  },
+  "worker_contract": {
+    "approval_mode": "stepwise",
+    "checkpoint_policy": "callback-stop-for-explicit-approval",
+    "require_exactly_one_checkpoint_per_step": true,
+    "require_direct_ack_callback": true,
+    "require_direct_checkpoint_callbacks": true,
+    "require_direct_done_callback": true,
+    "require_task_namespaced_artifacts": true,
+    "require_non_empty_implementer_evidence": true,
+    "forbid_new_worktrees": true,
+    "forbid_commits": true,
+    "forbid_pushes": true,
+    "forbid_sleep_polling": true,
+    "forbid_architecture_decisions": true,
+    "allow_bounded_child_delegation": true
+  },
   "worker_control": {
     "maximum_worker_steps": null,
     "maximum_commands": null,
@@ -24,13 +55,20 @@
   "verification": {
     "command_timeout_seconds": 600,
     "maximum_output_chars": 4000,
-    "required_for_roles": ["implementer"]
+    "required_for_roles": ["implementer"],
+    "require_repository_head_unchanged": true,
+    "require_baseline_ref_unchanged": true,
+    "require_snapshot_diff_check": true
   },
   "review": {
     "required_for_roles": ["implementer"],
     "blind": true,
+    "same_worktree": true,
+    "new_terminal": true,
+    "different_agent": true,
     "maximum_diff_chars": 60000,
     "require_all_criteria_proven": true,
+    "require_diff_hash_match": true,
     "preferred_agents": ["opencode", "mimo-code"]
   }
 }

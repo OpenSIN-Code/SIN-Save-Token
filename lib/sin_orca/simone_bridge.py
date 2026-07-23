@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .state import load_task, read_events
+from .verification import redact_text
 
 SOURCE = "sin-orca"
 MAX_STRING_CHARS = 2_000
@@ -36,6 +37,22 @@ _EVENT_FIELDS: dict[str, tuple[str, ...]] = {
     "codex.sent": ("text",),
     "codex.interrupted": ("text", "control_c_sent"),
     "codex.followup": ("step_id", "instruction"),
+    "worker.callback": (
+        "callback_type",
+        "step_id",
+        "summary",
+        "changed_files",
+        "verification_status",
+        "requested_action",
+    ),
+    "reviewer.callback": (
+        "callback_type",
+        "step_id",
+        "summary",
+        "changed_files",
+        "verification_status",
+        "requested_action",
+    ),
     "task.suspended": ("reason",),
     "task.resumed": ("instruction",),
     "worker.report.received": (
@@ -63,7 +80,9 @@ _EVENT_FIELDS: dict[str, tuple[str, ...]] = {
         "idle_seconds",
         "action_required",
     ),
+    "worker.recovered": ("actor",),
     "task.completed": ("changed_files",),
+    "task.cancelled": ("reason", "interrupted_actors"),
     "task.failed": ("stage", "error"),
 }
 
@@ -85,7 +104,7 @@ _FORBIDDEN_KEYS = {
 
 def _bounded(value: Any) -> Any:
     if isinstance(value, str):
-        return value[:MAX_STRING_CHARS]
+        return redact_text(value)[:MAX_STRING_CHARS]
     if isinstance(value, list):
         return [_bounded(item) for item in value[:MAX_LIST_ITEMS]]
     if isinstance(value, dict):
@@ -127,6 +146,7 @@ def compact_event(event: dict[str, Any]) -> dict[str, Any]:
             if key in {
                 "outside_allowlist_touched",
                 "unrequested_dependencies_added",
+                "architecture_decisions_made",
             }
             and isinstance(value, bool)
         } if isinstance(scope, dict) else {}
@@ -191,10 +211,28 @@ def _control_plane_command() -> list[str]:
     return command
 
 
+def _parse_json_object(value: str) -> dict[str, Any]:
+    decoder = json.JSONDecoder()
+    stripped = value.strip()
+    for index, character in enumerate(stripped):
+        if character != "{":
+            continue
+        try:
+            parsed, _ = decoder.raw_decode(stripped[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    raise RuntimeError("control-plane command returned no JSON object")
+
+
 def call_control_plane(
     operation: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
+    environment = os.environ.copy()
+    environment.pop("SIN_MANIFEST_HMAC_KEY", None)
+
     process = subprocess.run(
         [
             *_control_plane_command(),
@@ -211,6 +249,7 @@ def call_control_plane(
         capture_output=True,
         check=False,
         timeout=60,
+        env=environment,
     )
 
     if process.returncode != 0:
@@ -221,16 +260,10 @@ def call_control_plane(
         )
         raise RuntimeError(message[:MAX_STRING_CHARS])
 
-    try:
-        result = json.loads(process.stdout)
-    except json.JSONDecodeError as error:
+    result = _parse_json_object(process.stdout)
+    if result.get("ok") is not True:
         raise RuntimeError(
-            "control-plane command returned invalid JSON"
-        ) from error
-
-    if not isinstance(result, dict) or not result.get("ok"):
-        raise RuntimeError(
-            str(result.get("error") if isinstance(result, dict) else result)
+            str(result.get("error") or "control-plane command reported failure")
         )
     return result
 
@@ -304,9 +337,11 @@ def sync_task(
 
     event_results: list[dict[str, Any]] = []
     artifact_results: list[dict[str, Any]] = []
+    last_event_hash: str | None = None
 
     for event in read_events(task_id):
         event_hash = str(event["event_hash"])
+        last_event_hash = event_hash
         result = call_control_plane(
             "execution.event",
             {
@@ -349,4 +384,6 @@ def sync_task(
             for result in artifact_results
             if result.get("duplicate")
         ),
+        "last_event_hash": last_event_hash,
+        "idempotent": True,
     }

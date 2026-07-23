@@ -5,6 +5,7 @@ Unit tests for sin_orca package — state, events, scope, artifacts, lease.
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -28,7 +29,10 @@ from sin_orca.state import (
 )
 from sin_orca.verification import (
     actual_changed_files,
+    controller_environment,
     path_allowed,
+    redact_argv,
+    redact_text,
     validate_scope,
 )
 from sin_orca.lease import (
@@ -313,7 +317,13 @@ class TestArtifactValidation(unittest.TestCase):
             "status": "complete",
             "changed_files": [],
             "evidence": [],
+            "commands": [],
             "unresolved": [],
+            "scope_compliance": {
+                "outside_allowlist_touched": False,
+                "unrequested_dependencies_added": False,
+                "architecture_decisions_made": False,
+            },
         }), encoding="utf-8")
 
         with self.assertRaises(ArtifactValidationError):
@@ -350,7 +360,13 @@ class TestArtifactValidation(unittest.TestCase):
             "status": "complete",
             "changed_files": [],
             "evidence": [],
+            "commands": [],
             "unresolved": [],
+            "scope_compliance": {
+                "outside_allowlist_touched": False,
+                "unrequested_dependencies_added": False,
+                "architecture_decisions_made": False,
+            },
         }), encoding="utf-8")
 
         result = ingest_artifact(
@@ -394,7 +410,13 @@ class TestArtifactValidation(unittest.TestCase):
                 "status": "complete",
                 "changed_files": [],
                 "evidence": [],
+                "commands": [],
                 "unresolved": [],
+                "scope_compliance": {
+                    "outside_allowlist_touched": False,
+                    "unrequested_dependencies_added": False,
+                    "architecture_decisions_made": False,
+                },
             }), encoding="utf-8")
 
             result = ingest_artifact(
@@ -410,6 +432,386 @@ class TestArtifactValidation(unittest.TestCase):
             else:
                 self.assertTrue(result["ok"])
                 self.assertTrue(result["duplicate"])
+
+
+class TestArtifactProtocol(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self._patcher = patch(
+            "sin_orca.state.state_root",
+            lambda *a, **k: self.tmpdir,
+        )
+        self._patcher.start()
+
+    def tearDown(self):
+        self._patcher.stop()
+
+    def _save_implementer_task(self, task_id: str) -> None:
+        save_task({
+            "task_id": task_id,
+            "task_hash": "sha256:protocol",
+            "base_sha": "a" * 40,
+            "role": "implementer",
+            "objective": "test protocol",
+            "allowed_paths": ["README.md"],
+            "forbidden_paths": [],
+            "steps": [{"id": "S01", "instruction": "edit"}],
+            "acceptance_criteria": [{"id": "AC01", "text": "works"}],
+            "required_checkpoints": ["plan-ready"],
+        })
+        append_event(
+            task_id,
+            "task.created",
+            {
+                "task_hash": "sha256:protocol",
+                "base_sha": "a" * 40,
+                "role": "implementer",
+            },
+            actor="codex",
+        )
+        append_event(
+            task_id,
+            "worker.spawned",
+            {
+                "agent": "mimo-code",
+                "terminal_handle": "worker-terminal",
+                "worktree_path": "/tmp/worker",
+            },
+            actor="worker",
+        )
+        append_event(
+            task_id,
+            "checkpoint.received",
+            {
+                "checkpoint": "plan-ready",
+                "sequence": 1,
+            },
+            actor="worker",
+        )
+
+    def _write_report(self, outbox: Path, task_id: str) -> None:
+        outbox.mkdir(parents=True, exist_ok=True)
+        (outbox / "report.json").write_text(
+            json.dumps({
+                "task_id": task_id,
+                "task_hash": "sha256:protocol",
+                "base_sha": "a" * 40,
+                "status": "complete",
+                "changed_files": ["README.md"],
+                "evidence": ["README.md updated"],
+                "commands": [],
+                "unresolved": [],
+                "scope_compliance": {
+                    "outside_allowlist_touched": False,
+                    "unrequested_dependencies_added": False,
+                    "architecture_decisions_made": False,
+                },
+            }),
+            encoding="utf-8",
+        )
+
+    def test_implementer_report_requires_prior_step_approval(self):
+        task_id = "protocol-report-001"
+        self._save_implementer_task(task_id)
+        outbox = self.tmpdir / "outbox"
+        self._write_report(outbox, task_id)
+
+        with self.assertRaisesRegex(
+            ArtifactValidationError,
+            "before every step was approved",
+        ):
+            ingest_artifact(
+                task_id=task_id,
+                actor="worker",
+                outbox=outbox,
+                filename="report.json",
+            )
+
+        append_event(
+            task_id,
+            "codex.approved",
+            {"step_id": "S01", "instruction": "continue"},
+            actor="codex",
+        )
+        result = ingest_artifact(
+            task_id=task_id,
+            actor="worker",
+            outbox=outbox,
+            filename="report.json",
+        )
+        self.assertTrue(result["ok"])
+
+    def test_review_artifact_must_match_assigned_diff(self):
+        task_id = "protocol-review-001"
+        save_task({
+            "task_id": task_id,
+            "task_hash": "sha256:review",
+            "base_sha": "b" * 40,
+            "role": "implementer",
+            "objective": "review",
+            "allowed_paths": ["README.md"],
+            "steps": [],
+            "acceptance_criteria": [{"id": "AC01", "text": "works"}],
+            "required_checkpoints": [],
+        })
+        append_event(
+            task_id,
+            "task.created",
+            {
+                "task_hash": "sha256:review",
+                "base_sha": "b" * 40,
+                "role": "implementer",
+            },
+            actor="codex",
+        )
+        append_event(
+            task_id,
+            "worker.spawned",
+            {
+                "agent": "mimo-code",
+                "terminal_handle": "worker-terminal",
+                "worktree_path": "/tmp/worker",
+            },
+            actor="worker",
+        )
+        append_event(
+            task_id,
+            "reviewer.spawned",
+            {
+                "agent": "opencode",
+                "terminal_handle": "review-terminal",
+                "worktree_path": "/tmp/worker",
+                "same_worktree": True,
+                "diff_sha256": "d" * 64,
+            },
+            actor="reviewer",
+        )
+
+        outbox = self.tmpdir / "review-outbox"
+        outbox.mkdir()
+        review = {
+            "task_id": task_id,
+            "task_hash": "sha256:review",
+            "base_sha": "b" * 40,
+            "verdict": "accept",
+            "diff_sha256": "e" * 64,
+            "criteria": [{
+                "id": "AC01",
+                "status": "proven",
+                "evidence": "independent test passed",
+            }],
+            "scope_violation": False,
+            "regressions": [],
+            "unverified": [],
+        }
+        (outbox / "review.json").write_text(
+            json.dumps(review),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            ArtifactValidationError,
+            "does not match reviewer assignment",
+        ):
+            ingest_artifact(
+                task_id=task_id,
+                actor="reviewer",
+                outbox=outbox,
+                filename="review.json",
+            )
+
+        review["diff_sha256"] = "d" * 64
+        (outbox / "review.json").write_text(
+            json.dumps(review),
+            encoding="utf-8",
+        )
+        result = ingest_artifact(
+            task_id=task_id,
+            actor="reviewer",
+            outbox=outbox,
+            filename="review.json",
+        )
+        self.assertTrue(result["ok"])
+
+    def test_future_checkpoint_requires_previous_step_approval(self):
+        task_id = "protocol-checkpoint-001"
+        save_task({
+            "task_id": task_id,
+            "task_hash": "sha256:checkpoint",
+            "base_sha": "c" * 40,
+            "role": "implementer",
+            "objective": "two steps",
+            "allowed_paths": ["README.md"],
+            "steps": [
+                {"id": "S01", "instruction": "first"},
+                {"id": "S02", "instruction": "second"},
+            ],
+            "acceptance_criteria": [{"id": "AC01", "text": "works"}],
+            "required_checkpoints": ["first-ready", "second-ready"],
+        })
+        append_event(
+            task_id,
+            "task.created",
+            {
+                "task_hash": "sha256:checkpoint",
+                "base_sha": "c" * 40,
+                "role": "implementer",
+            },
+            actor="codex",
+        )
+        append_event(
+            task_id,
+            "worker.spawned",
+            {
+                "agent": "mimo-code",
+                "terminal_handle": "worker-terminal",
+                "worktree_path": "/tmp/worker",
+            },
+            actor="worker",
+        )
+
+        outbox = self.tmpdir / "checkpoint-outbox"
+        outbox.mkdir()
+
+        def write_checkpoint(
+            checkpoint: str,
+            sequence: int,
+            step_id: str,
+        ) -> None:
+            (outbox / "checkpoint.json").write_text(
+                json.dumps({
+                    "task_id": task_id,
+                    "task_hash": "sha256:checkpoint",
+                    "base_sha": "c" * 40,
+                    "checkpoint": checkpoint,
+                    "sequence": sequence,
+                    "step_id": step_id,
+                    "status": "ready",
+                    "changed_files": [],
+                    "commands": [],
+                    "unresolved": [],
+                    "child_process_running": False,
+                }),
+                encoding="utf-8",
+            )
+
+        write_checkpoint("first-ready", 1, "S01")
+        self.assertTrue(ingest_artifact(
+            task_id=task_id,
+            actor="worker",
+            outbox=outbox,
+            filename="checkpoint.json",
+        )["ok"])
+
+        write_checkpoint("second-ready", 2, "S02")
+        with self.assertRaisesRegex(
+            ArtifactValidationError,
+            "preceding step approval",
+        ):
+            ingest_artifact(
+                task_id=task_id,
+                actor="worker",
+                outbox=outbox,
+                filename="checkpoint.json",
+            )
+
+        append_event(
+            task_id,
+            "codex.approved",
+            {"step_id": "S01", "instruction": "continue"},
+            actor="codex",
+        )
+        self.assertTrue(ingest_artifact(
+            task_id=task_id,
+            actor="worker",
+            outbox=outbox,
+            filename="checkpoint.json",
+        )["ok"])
+
+    def test_symbolic_link_artifact_is_rejected(self):
+        task_id = "protocol-symlink-001"
+        save_task({
+            "task_id": task_id,
+            "task_hash": "sha256:protocol",
+            "base_sha": "a" * 40,
+            "role": "test",
+            "objective": "test",
+            "allowed_paths": [],
+            "steps": [],
+            "acceptance_criteria": [],
+            "required_checkpoints": [],
+        })
+        outbox = self.tmpdir / "symlink-outbox"
+        outbox.mkdir()
+        target = self.tmpdir / "outside.json"
+        target.write_text("{}", encoding="utf-8")
+        (outbox / "report.json").symlink_to(target)
+
+        with self.assertRaisesRegex(
+            ArtifactValidationError,
+            "must not be a symbolic link",
+        ):
+            ingest_artifact(
+                task_id=task_id,
+                actor="worker",
+                outbox=outbox,
+                filename="report.json",
+            )
+
+
+class TestSecretIsolation(unittest.TestCase):
+    def test_controller_environment_does_not_expose_manifest_key(self):
+        with patch.dict(
+            os.environ,
+            {"SIN_MANIFEST_HMAC_KEY": "controller-only-secret"},
+        ):
+            environment = controller_environment()
+
+        self.assertNotIn("SIN_MANIFEST_HMAC_KEY", environment)
+
+    def test_verification_redacts_secret_arguments_and_output(self):
+        argv = redact_argv([
+            "runner",
+            "--api-key",
+            "top-secret",
+            "--token=second-secret",
+            "https://user:password@example.invalid/path",
+        ])
+        rendered = " ".join(argv)
+        self.assertNotIn("top-secret", rendered)
+        self.assertNotIn("second-secret", rendered)
+        self.assertNotIn("password@example", rendered)
+        self.assertIn("<redacted>", rendered)
+
+        output = redact_text(
+            "password=hunter2 Authorization: Bearer abc.def.ghi"
+        )
+        self.assertNotIn("hunter2", output)
+        self.assertNotIn("abc.def.ghi", output)
+
+    def test_orca_subprocess_does_not_receive_manifest_key(self):
+        from sin_orca.dispatch import run_orca
+
+        completed = subprocess.CompletedProcess(
+            ["orca"],
+            0,
+            stdout='{"ok": true}',
+            stderr="",
+        )
+        with patch.dict(
+            os.environ,
+            {"SIN_MANIFEST_HMAC_KEY": "controller-only-secret"},
+        ), patch(
+            "sin_orca.dispatch.shutil.which",
+            return_value="/usr/local/bin/orca",
+        ), patch(
+            "sin_orca.dispatch.subprocess.run",
+            return_value=completed,
+        ) as runner:
+            result = run_orca(["status"])
+
+        self.assertTrue(result["ok"])
+        environment = runner.call_args.kwargs["env"]
+        self.assertNotIn("SIN_MANIFEST_HMAC_KEY", environment)
 
 
 class TestControllerLease(unittest.TestCase):

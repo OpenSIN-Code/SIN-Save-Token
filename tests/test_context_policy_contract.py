@@ -45,6 +45,31 @@ class ContextPolicyContractTests(unittest.TestCase):
             ["agent-grep"],
         )
 
+    def test_provider_decisions_match_intelligence_registry(self) -> None:
+        intelligence = json.loads(
+            (ROOT / "config" / "intelligence-providers.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        providers = intelligence["providers"]
+        self.assertEqual(
+            self.routes["code_symbol"]["providers"],
+            [
+                providers["symbol_navigation"]["primary"],
+                providers["symbol_navigation"]["fallback"],
+            ],
+        )
+        self.assertEqual(
+            self.routes["code_architecture"]["providers"],
+            [
+                providers["general_code_graph"]["primary"],
+                providers["general_code_graph"]["fallback"],
+            ],
+        )
+        self.assertFalse(
+            providers["general_code_graph"]["allow_simultaneous_execution"]
+        )
+
     def test_provider_attempts_and_context_budget_are_bounded(self) -> None:
         retrieval = self.policy["retrieval"]
         budgets = self.policy["budgets"]

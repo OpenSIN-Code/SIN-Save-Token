@@ -30,6 +30,10 @@ SIN_CONTEXT = ROOT / "bin" / "sin-context"
 SENSITIVE_NAME = re.compile(
     r"(?i)(token|secret|password|passwd|api[_-]?key|authorization|cookie)"
 )
+AUTHORIZATION_HEADER = re.compile(
+    r"(?im)\bAuthorization\s*:\s*[^\r\n]+"
+)
+BEARER_VALUE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 SENSITIVE_ASSIGNMENT = re.compile(
     r"(?i)\b(token|secret|password|passwd|api[_-]?key|authorization|cookie)\b"
     r"(\s*[:=]\s*)([^\s,;]+)"
@@ -37,8 +41,27 @@ SENSITIVE_ASSIGNMENT = re.compile(
 URL_CREDENTIALS = re.compile(r"(https?://[^:/\s]+:)[^@/\s]+@", re.IGNORECASE)
 
 
+def safe_subprocess_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.pop("SIN_MANIFEST_HMAC_KEY", None)
+    return environment
+
+
+def ensure_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
 def redact_sensitive_text(text: str) -> str:
-    redacted = SENSITIVE_ASSIGNMENT.sub(r"\1\2<redacted>", text)
+    redacted = AUTHORIZATION_HEADER.sub(
+        "Authorization: <redacted>",
+        text,
+    )
+    redacted = BEARER_VALUE.sub("Bearer <redacted>", redacted)
+    redacted = SENSITIVE_ASSIGNMENT.sub(r"\1\2<redacted>", redacted)
     return URL_CREDENTIALS.sub(r"\1<redacted>@", redacted)
 
 
@@ -239,15 +262,15 @@ def execute(
             capture_output=True,
             timeout=timeout_seconds,
             check=False,
-            env=os.environ.copy(),
+            env=safe_subprocess_environment(),
         )
         exit_code = process.returncode
         stdout = process.stdout
         stderr = process.stderr
     except subprocess.TimeoutExpired as error:
         exit_code = 124
-        stdout = error.stdout if isinstance(error.stdout, str) else ""
-        stderr = error.stderr if isinstance(error.stderr, str) else ""
+        stdout = ensure_text(error.stdout)
+        stderr = ensure_text(error.stderr)
         stderr += "\nbenchmark timeout"
     except OSError as error:
         exit_code = 127
@@ -624,7 +647,11 @@ def main() -> int:
     timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     output = args.out or DEFAULT_OUTPUT_DIR / f"context-benchmark-{timestamp}.json"
     output = output.resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
+    output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        output.parent.chmod(0o700)
+    except OSError:
+        pass
 
     report = build_report(
         results=results,
@@ -638,6 +665,10 @@ def main() -> int:
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    try:
+        output.chmod(0o600)
+    except OSError:
+        pass
     print(output)
 
     required_modes = {"sst-cold", "sst-warm"}
@@ -648,7 +679,13 @@ def main() -> int:
         for result in results
         if result.mode in required_modes and not result.success
     ]
-    return 1 if failed else 0
+    if failed:
+        return 1
+    if missing_modes:
+        # Explicit --allow-partial is a smoke run only. The report itself
+        # remains claimable_abc_comparison=false and contains the reasons.
+        return 0
+    return 0 if report["claimable_abc_comparison"] is True else 1
 
 
 if __name__ == "__main__":

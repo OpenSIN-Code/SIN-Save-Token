@@ -26,22 +26,34 @@ from pathlib import Path
 args = sys.argv[1:]
 state = Path(os.environ["FAKE_ORCA_STATE"])
 state.mkdir(parents=True, exist_ok=True)
+with (state / "commands.jsonl").open("a") as handle:
+    handle.write(json.dumps(args) + "\n")
+
+terminals_path = state / "terminals.json"
+if terminals_path.is_file():
+    terminals = json.loads(terminals_path.read_text())
+else:
+    terminals = ["parent-terminal"]
+
+def save_terminals():
+    terminals_path.write_text(json.dumps(terminals))
 
 if args[:2] == ["worktree", "create"]:
-    name = args[args.index("--name") + 1]
-    worktree = state / name
-    (worktree / ".sin-worker" / "outbox").mkdir(parents=True, exist_ok=True)
-    print(json.dumps({
-        "worktreeId": name,
-        "worktreePath": str(worktree),
-        "branch": name,
-    }))
-    raise SystemExit(0)
+    print(json.dumps({"ok": False, "error": "worktree creation forbidden"}))
+    raise SystemExit(9)
 
 if args[:2] == ["terminal", "list"]:
     print(json.dumps({
-        "terminals": [{"handle": "terminal-001"}]
+        "ok": True,
+        "result": {"terminals": [{"handle": item} for item in terminals]},
     }))
+    raise SystemExit(0)
+
+if args[:2] == ["terminal", "create"]:
+    handle = f"worker-terminal-{len(terminals)}"
+    terminals.append(handle)
+    save_terminals()
+    print(json.dumps({"ok": True, "result": {"handle": handle}}))
     raise SystemExit(0)
 
 if args[:2] == ["terminal", "send"]:
@@ -53,16 +65,17 @@ if args[:2] == ["terminal", "send"]:
 
 if args[:2] == ["terminal", "read"]:
     print(json.dumps({
+        "ok": True,
         "result": {"text": ""},
         "nextCursor": "cursor-1",
     }))
     raise SystemExit(0)
 
 if args[:2] == ["terminal", "wait"]:
-    print(json.dumps({"status": "idle"}))
+    print(json.dumps({"ok": True, "status": "idle"}))
     raise SystemExit(0)
 
-print(json.dumps({"error": "unsupported", "args": args}))
+print(json.dumps({"ok": False, "error": "unsupported", "args": args}))
 raise SystemExit(1)
 ''')
 
@@ -120,11 +133,13 @@ class TestE2EDispatch(unittest.TestCase):
                 self.sin_orca_bin, "dispatch",
                 "--role", "implementer",
                 "--agent", "mimo-code",
+                "--parent-terminal", "parent-terminal",
                 "--objective", "Change README",
                 "--step", "Change README safely",
                 "--allowed-path", "README.md",
                 "--acceptance", "README contains the requested text",
                 "--verify-command", "git diff --check",
+                "--checkpoint", "plan-ready",
             ],
             cwd=self.repository,
             text=True,
@@ -138,9 +153,21 @@ class TestE2EDispatch(unittest.TestCase):
         output = json.loads(process.stdout)
         self.assertNotEqual(output["base_sha"], "HEAD")
         self.assertEqual(len(output["base_sha"]), 40)
-        self.assertEqual(output["terminal"], "terminal-001")
+        self.assertEqual(output["terminal"], "worker-terminal-1")
+        self.assertEqual(
+            output["approval_mode"], "continuous-preauthorized"
+        )
 
         task_id = output["task_id"]
+        self.assertTrue(
+            (
+                self.repository
+                / ".sin-worker"
+                / "tasks"
+                / task_id
+                / "outbox"
+            ).is_dir()
+        )
         task_files = list(self.state_root.rglob(f"{task_id}/task.json"))
         self.assertEqual(len(task_files), 1)
 
@@ -148,6 +175,15 @@ class TestE2EDispatch(unittest.TestCase):
         self.assertEqual(task["task_id"], task_id)
         self.assertTrue(task["task_hash"].startswith("sha256:"))
         self.assertEqual(task["base_sha"], output["base_sha"])
+        self.assertEqual(
+            task["approval_mode"], "continuous-preauthorized"
+        )
+        prompt = (task_files[0].parent / "worker-prompt.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Approval mode: continuous-preauthorized", prompt)
+        self.assertIn("continue automatically", prompt)
+        self.assertIn("type <ack|checkpoint|discovery|question", prompt)
 
         events_file = task_files[0].parent / "events.jsonl"
         events = [
@@ -161,12 +197,153 @@ class TestE2EDispatch(unittest.TestCase):
             ["task.created", "worker.spawned"],
         )
 
-    def test_dispatch_calls_orca_worktree_create(self):
+    def test_stepwise_dispatch_is_explicit_and_not_default(self):
+        process = subprocess.run(
+            [
+                self.sin_orca_bin, "dispatch",
+                "--role", "implementer",
+                "--agent", "mimo-code",
+                "--parent-terminal", "parent-terminal",
+                "--approval-mode", "stepwise",
+                "--objective", "Change README at a protected boundary",
+                "--step", "Change README safely",
+                "--allowed-path", "README.md",
+                "--acceptance", "README contains the requested text",
+                "--verify-command", "git diff --check",
+                "--checkpoint", "approval-boundary",
+            ],
+            cwd=self.repository,
+            text=True,
+            capture_output=True,
+            env=self.env,
+            check=False,
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        output = json.loads(process.stdout)
+        self.assertEqual(output["approval_mode"], "stepwise")
+        task_file = next(
+            self.state_root.rglob(f"{output['task_id']}/task.json")
+        )
+        task = json.loads(task_file.read_text(encoding="utf-8"))
+        self.assertEqual(task["approval_mode"], "stepwise")
+        prompt = (task_file.parent / "worker-prompt.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Approval mode: stepwise", prompt)
+        self.assertIn("explicit high-risk boundary", prompt)
+
+    def test_discovery_callback_reaches_parent_and_event_log(self):
+        dispatched = subprocess.run(
+            [
+                self.sin_orca_bin, "dispatch",
+                "--role", "explorer",
+                "--agent", "opencode",
+                "--parent-terminal", "parent-terminal",
+                "--objective", "Inspect project gaps",
+                "--step", "Inspect README",
+                "--allowed-path", "README.md",
+                "--acceptance", "Gaps are reported",
+                "--read-only",
+            ],
+            cwd=self.repository,
+            text=True,
+            capture_output=True,
+            env=self.env,
+            check=False,
+        )
+        self.assertEqual(dispatched.returncode, 0, dispatched.stderr)
+        task_id = json.loads(dispatched.stdout)["task_id"]
+        notified = subprocess.run(
+            [
+                self.sin_orca_bin, "notify", task_id,
+                "--type", "discovery",
+                "--summary", "Missing recovery path discovered",
+                "--action", "add a bounded recovery task",
+            ],
+            cwd=self.repository,
+            text=True,
+            capture_output=True,
+            env=self.env,
+            check=False,
+        )
+        self.assertEqual(notified.returncode, 0, notified.stderr)
+        payload = json.loads(notified.stdout)
+        self.assertEqual(payload["type"], "discovery")
+        events_file = next(
+            self.state_root.rglob(f"{task_id}/events.jsonl")
+        )
+        events = [
+            json.loads(line)
+            for line in events_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        callbacks = [
+            event for event in events
+            if event["type"] == "worker.callback"
+        ]
+        self.assertEqual(
+            callbacks[-1]["payload"]["callback_type"], "discovery"
+        )
+        sends = [
+            json.loads(line)
+            for line in (self.fake_state / "terminal-send.jsonl").read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+        self.assertTrue(
+            any(
+                "type=discovery" in command[command.index("--text") + 1]
+                for command in sends
+                if command[:2] == ["terminal", "send"]
+                and "--text" in command
+            )
+        )
+
+    def test_dispatch_without_parent_terminal_fails_closed(self):
+        process = subprocess.run(
+            [
+                self.sin_orca_bin,
+                "dispatch",
+                "--role",
+                "explorer",
+                "--agent",
+                "opencode",
+                "--objective",
+                "Read code",
+                "--step",
+                "Read the code",
+                "--allowed-path",
+                "README.md",
+                "--acceptance",
+                "Code is read",
+                "--read-only",
+            ],
+            cwd=self.repository,
+            text=True,
+            capture_output=True,
+            env={
+                key: value
+                for key, value in self.env.items()
+                if key not in {
+                    "SIN_ORCA_PARENT_TERMINAL",
+                    "ORCA_TERMINAL_HANDLE",
+                    "ORCA_CURRENT_TERMINAL",
+                }
+            },
+            check=False,
+        )
+
+        self.assertNotEqual(process.returncode, 0)
+        self.assertIn("parent-terminal", process.stderr)
+
+    def test_dispatch_uses_terminal_create_and_forbids_worktree_create(self):
         process = subprocess.run(
             [
                 self.sin_orca_bin, "dispatch",
                 "--role", "explorer",
                 "--agent", "opencode",
+                "--parent-terminal", "parent-terminal",
                 "--objective", "Read code",
                 "--step", "Read the code",
                 "--allowed-path", "src/",
@@ -182,8 +359,23 @@ class TestE2EDispatch(unittest.TestCase):
 
         self.assertEqual(process.returncode, 0, process.stderr)
 
-        worktrees = list(self.fake_state.iterdir())
-        self.assertTrue(len(worktrees) > 0)
+        commands = [
+            json.loads(line)
+            for line in (self.fake_state / "commands.jsonl").read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+        self.assertTrue(any(command[:2] == ["terminal", "create"] for command in commands))
+        self.assertFalse(any(command[:2] == ["worktree", "create"] for command in commands))
+        self.assertTrue(
+            any(
+                command[:2] == ["terminal", "create"]
+                and command[command.index("--worktree") + 1]
+                == f"path:{self.repository}"
+                for command in commands
+            )
+        )
 
     def test_two_cache_entries_can_share_one_blob(self):
         from sin_cache import SinCache
@@ -273,12 +465,124 @@ class TestE2EDispatch(unittest.TestCase):
         self.assertIn("VALUE = 42", result["text"])
         self.assertGreater(result["full_chars"], 0)
 
+    def test_same_worktree_baseline_preserves_head_index_and_dirty_state(self):
+        from sin_orca.dispatch import (
+            baseline_ref_is_valid,
+            create_baseline_commit,
+        )
+        from sin_orca.verification import actual_changed_files, bounded_diff
+
+        repo = self.tmpdir / "baseline-repo"
+        repo.mkdir()
+        initialize_repository(repo)
+        (repo / "README.md").write_text(
+            "preexisting staged state\n",
+            encoding="utf-8",
+        )
+        subprocess.run(
+            ["git", "add", "README.md"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+        (repo / "preexisting.txt").write_text(
+            "already here\n",
+            encoding="utf-8",
+        )
+
+        head_before = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        index_before = subprocess.run(
+            ["git", "write-tree"],
+            cwd=repo,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        status_before = subprocess.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=repo,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+
+        repository_head, baseline_sha, baseline_ref = create_baseline_commit(
+            repo,
+            "baseline-contract-001",
+        )
+        self.assertEqual(repository_head, head_before)
+        self.assertTrue(baseline_ref_is_valid(repo, baseline_ref, baseline_sha))
+        self.assertEqual(
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.strip(),
+            head_before,
+        )
+        self.assertEqual(
+            subprocess.run(
+                ["git", "write-tree"],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.strip(),
+            index_before,
+        )
+        self.assertEqual(
+            subprocess.run(
+                ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout,
+            status_before,
+        )
+        self.assertEqual(
+            actual_changed_files(worktree=repo, base_sha=baseline_sha),
+            [],
+        )
+
+        (repo / "README.md").write_text("worker state\n", encoding="utf-8")
+        (repo / "worker.txt").write_text("new work\n", encoding="utf-8")
+        runtime_file = (
+            repo
+            / ".sin-worker"
+            / "tasks"
+            / "baseline-contract-001"
+            / "outbox"
+            / "checkpoint.json"
+        )
+        runtime_file.parent.mkdir(parents=True)
+        runtime_file.write_text("{}\n", encoding="utf-8")
+
+        self.assertEqual(
+            actual_changed_files(worktree=repo, base_sha=baseline_sha),
+            ["README.md", "worker.txt"],
+        )
+        diff = bounded_diff(worktree=repo, base_sha=baseline_sha)
+        self.assertIn("worker state", diff["text"])
+        self.assertIn("worker.txt", diff["text"])
+        self.assertNotIn(".sin-worker", diff["text"])
+
     def test_complete_writes_reproducible_manifest(self):
         import argparse
         import contextlib
         import io
         from sin_orca.cli import _cmd_complete
         from sin_orca.state import append_event, save_task
+        from sin_orca.verification import bounded_diff
+        from sin_orca.writer_reservation import acquire_writer
         from unittest.mock import patch
 
         repo = self.tmpdir / "manifest-repo"
@@ -292,13 +596,27 @@ class TestE2EDispatch(unittest.TestCase):
             check=True,
         ).stdout.strip()
         (repo / "README.md").write_text("updated\n", encoding="utf-8")
+        diff_sha256 = bounded_diff(
+            worktree=repo,
+            base_sha=base_sha,
+        )["full_sha256"]
 
         state = self.tmpdir / "manifest-state"
         task_id = "manifest-test-001"
+        baseline_ref = f"refs/sin-orca/baselines/{task_id}"
+        subprocess.run(
+            ["git", "update-ref", baseline_ref, base_sha],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
         task = {
             "task_id": task_id,
             "task_hash": "sha256:manifest-test",
             "base_sha": base_sha,
+            "baseline_ref": baseline_ref,
+            "repository_root": str(repo),
+            "repository_head_sha": base_sha,
             "role": "explorer",
             "objective": "Verify completion manifest",
             "allowed_paths": ["README.md"],
@@ -311,6 +629,7 @@ class TestE2EDispatch(unittest.TestCase):
 
         with patch("sin_orca.state.state_root", lambda *a, **k: state):
             save_task(task)
+            acquire_writer(repo, task_id=task_id)
             append_event(
                 task_id,
                 "task.created",
@@ -333,17 +652,45 @@ class TestE2EDispatch(unittest.TestCase):
             )
             append_event(
                 task_id,
+                "worker.callback",
+                {
+                    "callback_type": "ack",
+                    "summary": "scope understood",
+                    "changed_files": [],
+                    "verification_status": "not-run",
+                    "requested_action": "none",
+                },
+                actor="worker",
+            )
+            append_event(
+                task_id,
                 "worker.report.received",
                 {
                     "task_id": task_id,
                     "task_hash": task["task_hash"],
                     "base_sha": base_sha,
                     "status": "complete",
+                    "changed_files": ["README.md"],
+                    "evidence": [],
+                    "commands": [],
                     "unresolved": [],
                     "scope_compliance": {
                         "outside_allowlist_touched": False,
                         "unrequested_dependencies_added": False,
+                        "architecture_decisions_made": False,
                     },
+                },
+                actor="worker",
+            )
+            append_event(
+                task_id,
+                "worker.callback",
+                {
+                    "callback_type": "done",
+                    "summary": "exploration complete",
+                    "changed_files": ["README.md"],
+                    "verification_status": "passed",
+                    "requested_action": "verify",
                 },
                 actor="worker",
             )
@@ -354,6 +701,7 @@ class TestE2EDispatch(unittest.TestCase):
                     "ok": True,
                     "results": [{"ok": True, "argv": ["git", "diff", "--check"]}],
                     "changed_files": ["README.md"],
+                    "diff_sha256": diff_sha256,
                 },
                 actor="controller",
             )
@@ -376,6 +724,25 @@ class TestE2EDispatch(unittest.TestCase):
                 )
             self.assertEqual(second_result, 0, second_output.getvalue())
             self.assertTrue(json.loads(second_output.getvalue())["reused"])
+
+            (repo / "README.md").write_text(
+                "changed after completion\n",
+                encoding="utf-8",
+            )
+            stale_output = io.StringIO()
+            with contextlib.redirect_stdout(stale_output):
+                stale_result = _cmd_complete(
+                    argparse.Namespace(task_id=task_id)
+                )
+            self.assertEqual(stale_result, 1, stale_output.getvalue())
+            stale_payload = json.loads(stale_output.getvalue())
+            self.assertEqual(stale_payload["status"], "manifest-invalid")
+            self.assertTrue(
+                any(
+                    "worktree" in error
+                    for error in stale_payload["errors"]
+                )
+            )
 
     def test_stall_detection_does_not_refresh_before_check(self):
         from datetime import datetime, timedelta, timezone
@@ -404,6 +771,232 @@ class TestE2EDispatch(unittest.TestCase):
             )
 
         self.assertTrue(result["stalled"])
+
+    def test_blind_reviewer_uses_new_terminal_in_implementer_worktree(self):
+        from sin_orca.review import start_blind_review
+        from sin_orca.state import append_event, rebuild_ledger, save_task
+        from sin_orca.verification import bounded_diff
+        from sin_orca.writer_reservation import acquire_writer
+        from unittest.mock import patch
+
+        repo = self.tmpdir / "review-worktree"
+        repo.mkdir()
+        initialize_repository(repo)
+        base_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        (repo / "README.md").write_text(
+            "test\nreview change\n",
+            encoding="utf-8",
+        )
+        diff_sha256 = bounded_diff(
+            worktree=repo,
+            base_sha=base_sha,
+        )["full_sha256"]
+
+        state = self.tmpdir / "review-state"
+        task_id = "review-terminal-001"
+        baseline_ref = f"refs/sin-orca/baselines/{task_id}"
+        subprocess.run(
+            ["git", "update-ref", baseline_ref, base_sha],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+        task = {
+            "task_id": task_id,
+            "task_hash": "sha256:review-terminal",
+            "base_sha": base_sha,
+            "baseline_ref": baseline_ref,
+            "repository_root": str(repo),
+            "repository_head_sha": base_sha,
+            "worktree_selector": f"path:{repo}",
+            "parent_terminal_handle": "parent-terminal",
+            "artifact_outbox": ".sin-worker/tasks/review-terminal-001/outbox",
+            "role": "implementer",
+            "objective": "review README",
+            "allowed_paths": ["README.md"],
+            "forbidden_paths": [],
+            "steps": [{"id": "S01", "instruction": "edit"}],
+            "acceptance_criteria": [{"id": "AC01", "text": "review change exists"}],
+            "required_checkpoints": ["plan-ready"],
+            "allow_edits": True,
+        }
+
+        with patch("sin_orca.state.state_root", lambda *a, **k: state):
+            save_task(task)
+            acquire_writer(repo, task_id=task_id)
+            append_event(
+                task_id,
+                "task.created",
+                {
+                    "task_hash": task["task_hash"],
+                    "base_sha": base_sha,
+                    "role": "implementer",
+                },
+                actor="codex",
+            )
+            append_event(
+                task_id,
+                "worker.spawned",
+                {
+                    "agent": "mimo-code",
+                    "terminal_handle": "worker-terminal",
+                    "parent_terminal_handle": "parent-terminal",
+                    "worktree_path": str(repo),
+                    "worktree_selector": f"path:{repo}",
+                    "same_worktree": True,
+                    "outbox_path": str(
+                        repo / ".sin-worker/tasks/review-terminal-001/outbox"
+                    ),
+                },
+                actor="worker",
+            )
+            append_event(
+                task_id,
+                "worker.callback",
+                {
+                    "callback_type": "ack",
+                    "summary": "scope understood",
+                    "changed_files": [],
+                    "verification_status": "not-run",
+                    "requested_action": "none",
+                },
+                actor="worker",
+            )
+            append_event(
+                task_id,
+                "checkpoint.received",
+                {
+                    "checkpoint": "plan-ready",
+                    "sequence": 1,
+                    "step_id": "S01",
+                    "status": "ready",
+                    "changed_files": [],
+                    "commands": [],
+                    "unresolved": [],
+                    "child_process_running": False,
+                },
+                actor="worker",
+            )
+            append_event(
+                task_id,
+                "worker.callback",
+                {
+                    "callback_type": "checkpoint",
+                    "step_id": "S01",
+                    "summary": "plan ready",
+                    "changed_files": [],
+                    "verification_status": "not-run",
+                    "requested_action": "approve S01",
+                },
+                actor="worker",
+            )
+            append_event(
+                task_id,
+                "codex.approved",
+                {"step_id": "S01", "instruction": "continue"},
+                actor="codex",
+            )
+            append_event(
+                task_id,
+                "worker.report.received",
+                {
+                    "task_id": task_id,
+                    "task_hash": task["task_hash"],
+                    "base_sha": base_sha,
+                    "status": "complete",
+                    "changed_files": ["README.md"],
+                    "evidence": ["README.md contains review change"],
+                    "commands": [],
+                    "unresolved": [],
+                    "scope_compliance": {
+                        "outside_allowlist_touched": False,
+                        "unrequested_dependencies_added": False,
+                        "architecture_decisions_made": False,
+                    },
+                },
+                actor="worker",
+            )
+            append_event(
+                task_id,
+                "worker.callback",
+                {
+                    "callback_type": "done",
+                    "summary": "implementation complete",
+                    "changed_files": ["README.md"],
+                    "verification_status": "passed",
+                    "requested_action": "verify",
+                },
+                actor="worker",
+            )
+            append_event(
+                task_id,
+                "verification.completed",
+                {
+                    "ok": True,
+                    "results": [{"ok": True, "argv": ["git", "diff", "--check"]}],
+                    "changed_files": ["README.md"],
+                    "diff_sha256": diff_sha256,
+                },
+                actor="controller",
+            )
+
+            calls = [
+                {"result": {"terminals": [{"handle": "worker-terminal"}]}},
+                {"ok": True, "result": {"handle": "reviewer-terminal"}},
+                {"ok": True},
+            ]
+            with patch(
+                "sin_orca.review.ReviewContextBuilder.build_review_context",
+                return_value={
+                    "schema_version": 1,
+                    "base_sha": base_sha,
+                    "worktree": str(repo),
+                    "changed_files": [{"path": "README.md"}],
+                    "changed_symbols": [],
+                    "affected_flows": [],
+                    "test_gaps": [],
+                    "risk_signals": [],
+                    "crg_advisory": {
+                        "ok": False,
+                        "provider": "code-review-graph",
+                        "status": "test-fixture",
+                        "authoritative": False,
+                    },
+                    "crg_authoritative": False,
+                    "graphify_paths": [],
+                    "uncertainties": [],
+                    "recommended_review_order": [],
+                    "total_risk_score": 0.0,
+                    "diff_hash": diff_sha256,
+                    "diff_length": 1,
+                },
+            ), patch(
+                "sin_orca.review.run_orca",
+                side_effect=calls,
+            ):
+                result = start_blind_review(
+                    task_id=task_id,
+                    preferred_agents=["opencode", "mimo-code"],
+                )
+
+            self.assertEqual(result["terminal"], "reviewer-terminal")
+            self.assertTrue(result["same_worktree"])
+            self.assertEqual(result["worktree_path"], str(repo))
+            self.assertEqual(result["diff_sha256"], diff_sha256)
+
+            reviewer = rebuild_ledger(task_id)["actors"]["reviewer"]
+            self.assertEqual(reviewer["terminal_handle"], "reviewer-terminal")
+            self.assertNotEqual(
+                reviewer["terminal_handle"],
+                "worker-terminal",
+            )
+            self.assertEqual(reviewer["worktree_path"], str(repo))
 
     def test_completion_rejects_unverified_criterion(self):
         from sin_orca.gates import completion_errors

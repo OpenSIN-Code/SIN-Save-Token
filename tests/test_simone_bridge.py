@@ -8,7 +8,12 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from sin_orca.simone_bridge import compact_event, sync_task
+from sin_orca.cli import _sync_bound_task
+from sin_orca.simone_bridge import (
+    _parse_json_object,
+    compact_event,
+    sync_task,
+)
 from sin_orca.state import append_event, save_task
 
 
@@ -23,6 +28,22 @@ class TestSimoneBridge(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.state_patch.stop()
+
+    def test_control_plane_json_parser_tolerates_short_preamble(self) -> None:
+        parsed = _parse_json_object(
+            "control-plane ready\n{\"ok\": true, \"result\": {}}\n"
+        )
+        self.assertTrue(parsed["ok"])
+
+    def test_compact_text_is_redacted_and_bounded(self) -> None:
+        compact = compact_event({
+            "type": "codex.sent",
+            "payload": {
+                "text": "Authorization: Bearer secret-value",
+            },
+        })
+        self.assertNotIn("secret-value", compact["text"])
+        self.assertIn("<redacted>", compact["text"])
 
     def test_compact_verification_removes_raw_output(self) -> None:
         compact = compact_event(
@@ -114,6 +135,8 @@ class TestSimoneBridge(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["events_synced"], 2)
         self.assertEqual(result["artifacts_synced"], 1)
+        self.assertTrue(result["idempotent"])
+        self.assertIsInstance(result["last_event_hash"], str)
         self.assertEqual(
             [operation for operation, _ in calls],
             [
@@ -133,6 +156,52 @@ class TestSimoneBridge(unittest.TestCase):
             "/state/report-c.json",
         )
         self.assertNotIn("content", artifact)
+
+    def test_automatic_sync_only_runs_for_explicit_binding(self) -> None:
+        unbound_id = "bridge-unbound-001"
+        save_task({
+            "task_id": unbound_id,
+            "task_hash": "sha256:unbound",
+            "repository_root": "/repo",
+            "base_sha": "a" * 40,
+            "role": "implementer",
+        })
+        with patch(
+            "sin_orca.cli.sync_task_to_simone",
+        ) as sync_call:
+            self.assertIsNone(_sync_bound_task(unbound_id))
+            sync_call.assert_not_called()
+
+        bound_id = "bridge-bound-001"
+        save_task({
+            "task_id": bound_id,
+            "simone_task_id": "TASK-SIMONE-BOUND",
+            "task_hash": "sha256:bound",
+            "repository_root": "/repo",
+            "base_sha": "b" * 40,
+            "role": "implementer",
+        })
+        with patch(
+            "sin_orca.cli.sync_task_to_simone",
+            return_value={
+                "ok": True,
+                "simone_task_id": "TASK-SIMONE-BOUND",
+                "events_synced": 1,
+                "event_duplicates": 0,
+                "artifacts_synced": 0,
+                "artifact_duplicates": 0,
+                "last_event_hash": "c" * 64,
+                "idempotent": True,
+            },
+        ) as sync_call:
+            status = _sync_bound_task(bound_id)
+
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["last_event_hash"], "c" * 64)
+        sync_call.assert_called_once_with(
+            bound_id,
+            simone_task_id="TASK-SIMONE-BOUND",
+        )
 
 
 if __name__ == "__main__":

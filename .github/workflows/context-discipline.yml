@@ -37,15 +37,35 @@ jobs:
           paths += sorted(Path("shared/contracts").glob("*.json"))
           assert paths, "no JSON policy files found"
 
+          documents = {
+              path.name: json.loads(path.read_text(encoding="utf-8"))
+              for path in paths
+          }
           for path in paths:
-              document = json.loads(path.read_text(encoding="utf-8"))
+              document = documents[path.name]
               if path.name.endswith(".schema.json"):
                   Draft202012Validator.check_schema(document)
               print(f"validated {path}")
+
+          orchestrator_schema = documents["orca-orchestrator.schema.json"]
+          orchestrator_policy = documents["orca-orchestrator.json"]
+          Draft202012Validator(orchestrator_schema).validate(
+              orchestrator_policy
+          )
+          print("validated orca-orchestrator.json against schema")
           PY
 
       - name: Compile all Python sources
-        run: python -m compileall -q bin lib tests scripts
+        run: |
+          python -m compileall -q lib tests scripts
+          python -m py_compile \
+            bin/sin-context \
+            bin/sin-orca \
+            bin/gitnexus-query \
+            bin/benchmark-context \
+            bin/audit-token-architecture.py \
+            scripts/verify-local-integration.py \
+            scripts/live-orca-smoke.py
 
       - name: Structural audit
         run: python scripts/audit-python-structure.py .
@@ -62,6 +82,7 @@ jobs:
           test -x bin/sin-memory-write
           test -x bin/brain-sync.py
           test -x bin/sin-orca
+          test -x bin/gitnexus-query
 
       - name: Enforce orchestration invariants
         run: |
@@ -69,6 +90,28 @@ jobs:
           import json
 
           config = json.load(open("config/orca-orchestrator.json", encoding="utf-8"))
+          team = config["team_runtime"]
+          assert team["workspace_mode"] == "same-worktree"
+          assert team["spawn_primitive"] == "orca-terminal-create"
+          assert team["forbid_worker_worktrees"] is True
+          assert team["callback_transport"] == "parent-terminal"
+          assert team["require_parent_terminal_handle"] is True
+          assert team["artifact_root"] == ".sin-worker/tasks/{task_id}/outbox"
+          assert team["parallel_write_policy"] == "exclusive-repository-writer"
+          assert team["maximum_parallel_editors"] == 1
+          assert team["baseline_ref_root"] == "refs/sin-orca/baselines/{task_id}"
+
+          contract = config["worker_contract"]
+          assert contract["approval_mode"] == "stepwise"
+          assert contract["checkpoint_policy"] == "callback-stop-for-explicit-approval"
+          assert contract["require_exactly_one_checkpoint_per_step"] is True
+          assert contract["require_direct_ack_callback"] is True
+          assert contract["require_direct_checkpoint_callbacks"] is True
+          assert contract["require_direct_done_callback"] is True
+          assert contract["forbid_new_worktrees"] is True
+          assert contract["forbid_commits"] is True
+          assert contract["forbid_sleep_polling"] is True
+
           worker = config["worker_control"]
           assert worker["maximum_worker_steps"] is None
           assert worker["maximum_commands"] is None
@@ -81,6 +124,19 @@ jobs:
           assert graph["fallback"] == "gitnexus"
           assert graph["allow_simultaneous_execution"] is False
           assert providers["rules"]["never_accept_code_without_controller_verification"] is True
+
+          context = json.load(open("config/context-policy.json", encoding="utf-8"))
+          routes = {route["name"]: route for route in context["routes"]}
+          symbols = providers["providers"]["symbol_navigation"]
+          assert routes["code_symbol"]["providers"] == [
+              symbols["primary"], symbols["fallback"]
+          ]
+          assert routes["code_architecture"]["providers"] == [
+              graph["primary"], graph["fallback"]
+          ]
+          runtime = json.load(open("config/provider-runtime.json", encoding="utf-8"))
+          assert "gitnexus" in runtime["providers"]
+          assert "code-review-graph" in runtime["providers"]
 
           capabilities = json.load(open("config/capabilities.json", encoding="utf-8"))
           for name, capability in capabilities["capabilities"].items():

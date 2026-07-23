@@ -19,10 +19,49 @@ from typing import Any
 class ProviderSpec:
     name: str
     argv: list[str]
-    timeout_seconds: int = 120
+    timeout_seconds: float = 120
     maximum_output_chars: int = 16000
     failure_threshold: int = 3
-    cooldown_seconds: int = 300
+    cooldown_seconds: float = 300
+
+    def __post_init__(self) -> None:
+        if not self.name.strip():
+            raise ValueError("provider name must not be empty")
+        if not self.argv or not all(
+            isinstance(item, str) and item for item in self.argv
+        ):
+            raise ValueError("provider argv must contain non-empty strings")
+        time_limits = {
+            "timeout_seconds": (self.timeout_seconds, 0.01, 3_600),
+            "cooldown_seconds": (self.cooldown_seconds, 0.01, 86_400),
+        }
+        for field, (value, minimum, maximum) in time_limits.items():
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not minimum <= float(value) <= maximum
+            ):
+                raise ValueError(
+                    f"{field} must be between {minimum} and {maximum}"
+                )
+
+        integer_limits = {
+            "maximum_output_chars": (
+                self.maximum_output_chars,
+                1,
+                1_000_000,
+            ),
+            "failure_threshold": (self.failure_threshold, 1, 100),
+        }
+        for field, (value, minimum, maximum) in integer_limits.items():
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or not minimum <= value <= maximum
+            ):
+                raise ValueError(
+                    f"{field} must be between {minimum} and {maximum}"
+                )
 
 
 @dataclass(frozen=True)
@@ -53,9 +92,18 @@ class ProviderRuntime:
         self.state_path.parent.mkdir(
             parents=True,
             exist_ok=True,
+            mode=0o700,
         )
+        try:
+            self.state_path.parent.chmod(0o700)
+        except OSError:
+            pass
 
         self._initialize()
+        try:
+            self.state_path.chmod(0o600)
+        except OSError:
+            pass
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(
@@ -68,6 +116,9 @@ class ProviderRuntime:
         )
         connection.execute(
             "PRAGMA busy_timeout=10000"
+        )
+        connection.execute(
+            "PRAGMA synchronous=FULL"
         )
         return connection
 
@@ -173,9 +224,8 @@ class ProviderRuntime:
         opened_until = 0
 
         if failures >= spec.failure_threshold:
-            opened_until = (
-                int(time.time())
-                + spec.cooldown_seconds
+            opened_until = int(
+                time.time() + float(spec.cooldown_seconds)
             )
 
         connection = self._connect()
@@ -265,15 +315,17 @@ class ProviderRuntime:
         argv: list[str],
         *,
         cwd: Path,
-        timeout_seconds: int,
+        timeout_seconds: float,
         maximum_output_chars: int,
     ) -> BoundedProcessResult:
+        environment = os.environ.copy()
+        environment.pop("SIN_MANIFEST_HMAC_KEY", None)
         process = subprocess.Popen(
             argv,
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=os.environ.copy(),
+            env=environment,
             start_new_session=True,
         )
         if process.stdout is None or process.stderr is None:
@@ -542,7 +594,7 @@ def load_provider_specs(
         result[name] = ProviderSpec(
             name=name,
             argv=list(argv),
-            timeout_seconds=int(
+            timeout_seconds=float(
                 config.get("timeout_seconds", 120)
             ),
             maximum_output_chars=int(
@@ -554,7 +606,7 @@ def load_provider_specs(
             failure_threshold=int(
                 config.get("failure_threshold", 3)
             ),
-            cooldown_seconds=int(
+            cooldown_seconds=float(
                 config.get("cooldown_seconds", 300)
             ),
         )

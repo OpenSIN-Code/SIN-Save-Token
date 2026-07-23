@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import stat
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -13,16 +14,24 @@ from sin_context.evidence_firewall import wrap_evidence
 
 from .state import (
     append_event,
+    atomic_write_json,
     load_task,
     read_events,
     rebuild_ledger,
     task_dir,
+    utc_now,
 )
+from .verification import redact_argv, redact_text
 
 ALLOWED_ARTIFACTS = {
     "checkpoint.json": "checkpoint.received",
     "report.json": "worker.report.received",
     "review.json": "review.completed",
+}
+ARTIFACT_ACTORS = {
+    "checkpoint.json": "worker",
+    "report.json": "worker",
+    "review.json": "reviewer",
 }
 
 DEFAULT_MAX_ARTIFACT_BYTES = 1024 * 1024
@@ -33,12 +42,17 @@ class ArtifactValidationError(RuntimeError):
 
 
 def _maximum_artifact_bytes() -> int:
-    return int(
-        os.getenv(
-            "SIN_ORCA_MAX_ARTIFACT_BYTES",
-            str(DEFAULT_MAX_ARTIFACT_BYTES),
-        )
+    raw = os.getenv(
+        "SIN_ORCA_MAX_ARTIFACT_BYTES",
+        str(DEFAULT_MAX_ARTIFACT_BYTES),
     )
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = DEFAULT_MAX_ARTIFACT_BYTES
+    if value <= 0:
+        value = DEFAULT_MAX_ARTIFACT_BYTES
+    return min(value, 16 * 1024 * 1024)
 
 
 def _artifact_already_recorded(
@@ -95,6 +109,21 @@ def _validate_shape(
                 "checkpoint requires integer sequence"
             )
 
+        for field in ("step_id", "status"):
+            if not isinstance(payload.get(field), str) or not payload[field]:
+                raise ArtifactValidationError(
+                    f"checkpoint requires non-empty string {field}"
+                )
+        for field in ("changed_files", "commands", "unresolved"):
+            if not isinstance(payload.get(field), list):
+                raise ArtifactValidationError(
+                    f"checkpoint requires list field {field}"
+                )
+        if not isinstance(payload.get("child_process_running"), bool):
+            raise ArtifactValidationError(
+                "checkpoint requires child_process_running boolean"
+            )
+
     elif filename == "report.json":
         if payload.get("status") != "complete":
             raise ArtifactValidationError(
@@ -104,6 +133,7 @@ def _validate_shape(
         for field in (
             "changed_files",
             "evidence",
+            "commands",
             "unresolved",
         ):
             if not isinstance(payload.get(field), list):
@@ -111,10 +141,36 @@ def _validate_shape(
                     f"worker report requires list field {field}"
                 )
 
+        scope = payload.get("scope_compliance")
+        if not isinstance(scope, dict):
+            raise ArtifactValidationError(
+                "worker report requires scope_compliance object"
+            )
+        for field in (
+            "outside_allowlist_touched",
+            "unrequested_dependencies_added",
+            "architecture_decisions_made",
+        ):
+            if not isinstance(scope.get(field), bool):
+                raise ArtifactValidationError(
+                    f"scope_compliance requires boolean {field}"
+                )
+
     elif filename == "review.json":
         if payload.get("verdict") not in {"accept", "reject"}:
             raise ArtifactValidationError(
                 "review verdict must be accept or reject"
+            )
+
+        if not isinstance(payload.get("diff_sha256"), str) or not payload.get(
+            "diff_sha256"
+        ):
+            raise ArtifactValidationError(
+                "review requires diff_sha256 string"
+            )
+        if not isinstance(payload.get("scope_violation"), bool):
+            raise ArtifactValidationError(
+                "review requires scope_violation boolean"
             )
 
         for field in (
@@ -125,6 +181,23 @@ def _validate_shape(
             if not isinstance(payload.get(field), list):
                 raise ArtifactValidationError(
                     f"review requires list field {field}"
+                )
+
+        for criterion in payload["criteria"]:
+            if not isinstance(criterion, dict):
+                raise ArtifactValidationError(
+                    "review criteria entries must be objects"
+                )
+            if criterion.get("status") not in {
+                "proven", "failed", "unverified"
+            }:
+                raise ArtifactValidationError(
+                    "review criterion status is invalid"
+                )
+            evidence = criterion.get("evidence")
+            if not isinstance(evidence, str) or not evidence.strip():
+                raise ArtifactValidationError(
+                    "review criterion requires non-empty evidence string"
                 )
 
 
@@ -150,6 +223,36 @@ def _validate_checkpoint_order(
         )
 
     expected = required[index]
+    approved_steps = [
+        str(message.get("step_id"))
+        for message in ledger.get("controller_messages", [])
+        if message.get("type") == "codex.approved"
+        and message.get("step_id")
+    ]
+    approval_mode = task.get("approval_mode", "stepwise")
+    if approval_mode == "stepwise":
+        if len(approved_steps) != index:
+            raise ArtifactValidationError(
+                "checkpoint arrived before the preceding protected step approval"
+            )
+    elif approval_mode == "continuous-preauthorized":
+        if approved_steps:
+            raise ArtifactValidationError(
+                "continuous-preauthorized task contains unexpected approvals"
+            )
+    else:
+        raise ArtifactValidationError(
+            f"unsupported task approval mode: {approval_mode!r}"
+        )
+
+    steps = [
+        step for step in task.get("steps", [])
+        if isinstance(step, dict) and step.get("id")
+    ]
+    if index < len(steps) and payload.get("step_id") != str(steps[index]["id"]):
+        raise ArtifactValidationError(
+            f"checkpoint step_id must be {steps[index]['id']!r}"
+        )
 
     if payload.get("checkpoint") != expected:
         raise ArtifactValidationError(
@@ -164,21 +267,232 @@ def _validate_checkpoint_order(
         )
 
 
+def _validate_report_protocol(
+    task_id: str,
+    payload: dict[str, Any],
+) -> None:
+    task = load_task(task_id)
+    ledger = rebuild_ledger(task_id)
+
+    required = list(task.get("required_checkpoints", []))
+    received = [
+        item.get("checkpoint")
+        for item in ledger.get("checkpoints", [])
+        if item.get("actor") == "worker"
+    ]
+    if received != required:
+        raise ArtifactValidationError(
+            "worker report arrived before all checkpoints"
+        )
+
+    expected_steps = [
+        str(step.get("id"))
+        for step in task.get("steps", [])
+        if isinstance(step, dict) and step.get("id")
+    ]
+    approved_steps = [
+        str(message.get("step_id"))
+        for message in ledger.get("controller_messages", [])
+        if message.get("type") == "codex.approved"
+        and message.get("step_id")
+    ]
+    approval_mode = task.get("approval_mode", "stepwise")
+    if approval_mode == "stepwise":
+        if approved_steps != expected_steps:
+            raise ArtifactValidationError(
+                "worker report arrived before every protected step was approved in order"
+            )
+    elif approval_mode == "continuous-preauthorized":
+        if approved_steps:
+            raise ArtifactValidationError(
+                "continuous-preauthorized task contains unexpected approvals"
+            )
+    else:
+        raise ArtifactValidationError(
+            f"unsupported task approval mode: {approval_mode!r}"
+        )
+
+    if task.get("role") == "implementer" and not payload.get("evidence"):
+        raise ArtifactValidationError(
+            "implementer report requires non-empty evidence"
+        )
+
+
+def _validate_review_protocol(
+    task_id: str,
+    payload: dict[str, Any],
+) -> None:
+    ledger = rebuild_ledger(task_id)
+    worker = ledger.get("actors", {}).get("worker")
+    reviewer = ledger.get("actors", {}).get("reviewer")
+
+    if not isinstance(worker, dict) or not isinstance(reviewer, dict):
+        raise ArtifactValidationError(
+            "review actors are incomplete"
+        )
+    if reviewer.get("agent") == worker.get("agent"):
+        raise ArtifactValidationError(
+            "reviewer must use a different agent than implementer"
+        )
+    if reviewer.get("same_worktree") is not True:
+        raise ArtifactValidationError(
+            "reviewer must inspect the implementer worktree"
+        )
+    expected_diff = reviewer.get("diff_sha256")
+    if not isinstance(expected_diff, str) or (
+        payload.get("diff_sha256") != expected_diff
+    ):
+        raise ArtifactValidationError(
+            "review diff_sha256 does not match reviewer assignment"
+        )
+
+
+def _command_text(value: Any) -> str:
+    if isinstance(value, list):
+        return " ".join(redact_argv([str(item) for item in value]))[:2_000]
+    return redact_text(str(value or ""))[:2_000]
+
+
+def _record_command_history(
+    task_id: str,
+    payload: dict[str, Any],
+) -> None:
+    commands = payload.get("commands")
+    if not isinstance(commands, list):
+        return
+
+    history_path = task_dir(task_id) / "command-history.json"
+    history: list[dict[str, Any]] = []
+    if history_path.is_file():
+        try:
+            loaded = json.loads(history_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, list):
+                history = [item for item in loaded if isinstance(item, dict)]
+        except (OSError, json.JSONDecodeError):
+            history = []
+
+    for entry in commands[:100]:
+        if not isinstance(entry, dict):
+            continue
+        exit_code = entry.get("exit_code")
+        if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+            continue
+        error_text = str(entry.get("error") or entry.get("stderr") or "")
+        history.append({
+            "command": _command_text(entry.get("command")),
+            "exit_code": exit_code,
+            "error_hash": hashlib.sha256(
+                error_text.encode("utf-8")
+            ).hexdigest(),
+            "recorded_at": utc_now(),
+        })
+
+    atomic_write_json(history_path, history[-500:])
+
+
+def _record_artifact_activity(
+    task_id: str,
+    actor: str,
+    payload: dict[str, Any],
+) -> None:
+    activity_path = task_dir(task_id) / "activity.json"
+    activity: dict[str, Any] = {}
+    if activity_path.is_file():
+        try:
+            loaded = json.loads(activity_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                activity = loaded
+        except (OSError, json.JSONDecodeError):
+            activity = {}
+
+    activity[f"{actor}_last_active"] = utc_now()
+    child_running = payload.get("child_process_running")
+    if isinstance(child_running, bool):
+        activity[f"{actor}_child_process_running"] = child_running
+    atomic_write_json(activity_path, activity)
+
+
+def _read_artifact_bytes(
+    source: Path,
+    maximum: int,
+) -> bytes:
+    try:
+        metadata = source.lstat()
+    except FileNotFoundError as error:
+        raise ArtifactValidationError(
+            "artifact disappeared before ingestion"
+        ) from error
+
+    if stat.S_ISLNK(metadata.st_mode):
+        raise ArtifactValidationError(
+            "artifact must not be a symbolic link"
+        )
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ArtifactValidationError(
+            "artifact must be a regular file"
+        )
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(source, flags)
+    except OSError as error:
+        raise ArtifactValidationError(
+            "artifact could not be opened safely"
+        ) from error
+
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise ArtifactValidationError(
+                "artifact changed type during ingestion"
+            )
+        if opened.st_size > maximum:
+            raise ArtifactValidationError(
+                f"artifact exceeds controller context limit: "
+                f"{opened.st_size} > {maximum}"
+            )
+
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, min(64 * 1024, maximum + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > maximum:
+                raise ArtifactValidationError(
+                    "artifact grew beyond controller context limit"
+                )
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
 def _archive_bytes(
     destination: Path,
     raw: bytes,
 ) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        destination.parent.chmod(0o700)
+    except OSError:
+        pass
     temporary = destination.with_name(
-        f".{destination.name}.tmp-{os.getpid()}"
+        f".{destination.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
     )
 
     with temporary.open("xb") as handle:
+        os.fchmod(handle.fileno(), 0o600)
         handle.write(raw)
         handle.flush()
         os.fsync(handle.fileno())
 
     os.replace(temporary, destination)
+    try:
+        destination.chmod(0o600)
+    except OSError:
+        pass
 
 
 def _list_count(value: Any) -> int:
@@ -230,6 +544,7 @@ def _artifact_summary(
                 if key in {
                     "outside_allowlist_touched",
                     "unrequested_dependencies_added",
+                    "architecture_decisions_made",
                 }
                 and isinstance(value, bool)
             }
@@ -256,9 +571,14 @@ def ingest_artifact(
         raise ArtifactValidationError(
             f"unsupported artifact: {filename}"
         )
+    expected_actor = ARTIFACT_ACTORS[filename]
+    if actor != expected_actor:
+        raise ArtifactValidationError(
+            f"{filename} must be produced by {expected_actor}"
+        )
 
-    source = (outbox / filename).resolve()
     expected_parent = outbox.resolve()
+    source = expected_parent / filename
 
     try:
         source.relative_to(expected_parent)
@@ -267,27 +587,8 @@ def ingest_artifact(
             "artifact escaped the worker outbox"
         ) from error
 
-    metadata = source.lstat()
-
-    if stat.S_ISLNK(metadata.st_mode):
-        raise ArtifactValidationError(
-            "artifact must not be a symbolic link"
-        )
-
-    if not stat.S_ISREG(metadata.st_mode):
-        raise ArtifactValidationError(
-            "artifact must be a regular file"
-        )
-
     maximum = _maximum_artifact_bytes()
-
-    if metadata.st_size > maximum:
-        raise ArtifactValidationError(
-            f"artifact exceeds controller context limit: "
-            f"{metadata.st_size} > {maximum}"
-        )
-
-    raw = source.read_bytes()
+    raw = _read_artifact_bytes(source, maximum)
     digest = hashlib.sha256(raw).hexdigest()
 
     if _artifact_already_recorded(
@@ -324,6 +625,10 @@ def ingest_artifact(
 
     if filename == "checkpoint.json":
         _validate_checkpoint_order(task_id, payload)
+    elif filename == "report.json":
+        _validate_report_protocol(task_id, payload)
+    elif filename == "review.json":
+        _validate_review_protocol(task_id, payload)
 
     archive = (
         task_dir(task_id)
@@ -367,6 +672,8 @@ def ingest_artifact(
         event_payload,
         actor=actor,
     )
+    _record_command_history(task_id, payload)
+    _record_artifact_activity(task_id, actor, payload)
 
     source.unlink()
 
