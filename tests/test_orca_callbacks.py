@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import tempfile
 import unittest
@@ -48,7 +49,12 @@ class OrcaCallbackTests(unittest.TestCase):
             "parent_terminal_handle": "parent-terminal",
             "artifact_outbox": str(self.outbox.relative_to(self.repository)),
             "role": "implementer",
+            "objective": "test callbacks",
             "steps": [{"id": "S01", "instruction": "test callback"}],
+            "required_checkpoints": ["ready"],
+            "allowed_paths": ["README.md"],
+            "forbidden_paths": [],
+            "acceptance_criteria": [{"id": "AC01", "text": "callback works"}],
         })
         append_event(
             self.task_id,
@@ -78,6 +84,67 @@ class OrcaCallbackTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.state_patch.stop()
         self.temporary.cleanup()
+
+    def write_checkpoint(self) -> None:
+        (self.outbox / "checkpoint.json").write_text(
+            json.dumps({
+                "task_id": self.task_id,
+                "task_hash": "sha256:callback",
+                "base_sha": "a" * 40,
+                "checkpoint": "ready",
+                "sequence": 1,
+                "step_id": "S01",
+                "status": "ready",
+                "changed_files": [],
+                "commands": [],
+                "unresolved": [],
+                "child_process_running": False,
+            }),
+            encoding="utf-8",
+        )
+
+    def prepare_report(self) -> None:
+        ledger = rebuild_ledger(self.task_id)
+        if not ledger.get("checkpoints"):
+            append_event(
+                self.task_id,
+                "checkpoint.received",
+                {
+                    "checkpoint": "ready",
+                    "sequence": 1,
+                    "step_id": "S01",
+                    "status": "ready",
+                    "changed_files": [],
+                    "commands": [],
+                    "unresolved": [],
+                    "child_process_running": False,
+                },
+                actor="worker",
+            )
+        append_event(
+            self.task_id,
+            "codex.approved",
+            {"step_id": "S01", "instruction": "continue"},
+            actor="codex",
+        )
+        (self.outbox / "report.json").write_text(
+            json.dumps({
+                "task_id": self.task_id,
+                "task_hash": "sha256:callback",
+                "base_sha": "a" * 40,
+                "status": "complete",
+                "changed_files": ["README.md"],
+                "evidence": ["README.md updated"],
+                "commands": [],
+                "unresolved": [],
+                "scope_compliance": {
+                    "outside_allowlist_touched": False,
+                    "unrequested_dependencies_added": False,
+                    "architecture_decisions_made": False,
+                },
+            }),
+            encoding="utf-8",
+        )
 
     def args(self, **overrides: object) -> argparse.Namespace:
         values: dict[str, object] = {
@@ -114,27 +181,39 @@ class OrcaCallbackTests(unittest.TestCase):
 
     def test_done_requires_report_artifact(self) -> None:
         with patch("sin_orca.cli.run_orca", return_value={"ok": True}):
-            with self.assertRaisesRegex(RuntimeError, "requires existing artifact"):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "requires existing or archived artifact",
+            ):
                 _cmd_notify(self.args(type="done"))
 
-        (self.outbox / "report.json").write_text("{}\n", encoding="utf-8")
+        self.prepare_report()
         with patch("sin_orca.cli.run_orca", return_value={"ok": True}):
             self.assertEqual(_cmd_notify(self.args(type="done")), 0)
+        events = rebuild_ledger(self.task_id)
+        self.assertIsInstance(events["report"], dict)
+        self.assertEqual(events["callbacks"][-1]["callback_type"], "done")
 
     def test_checkpoint_requires_checkpoint_artifact(self) -> None:
         with patch("sin_orca.cli.run_orca", return_value={"ok": True}):
-            with self.assertRaisesRegex(RuntimeError, "requires existing artifact"):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "requires existing or archived artifact",
+            ):
                 _cmd_notify(self.args(type="checkpoint", step="S01"))
 
-        (self.outbox / "checkpoint.json").write_text("{}\n", encoding="utf-8")
+        self.write_checkpoint()
         with patch("sin_orca.cli.run_orca", return_value={"ok": True}):
             self.assertEqual(
                 _cmd_notify(self.args(type="checkpoint", step="S01")),
                 0,
             )
+        ledger = rebuild_ledger(self.task_id)
+        self.assertEqual(ledger["checkpoints"][-1]["step_id"], "S01")
+        self.assertEqual(ledger["callbacks"][-1]["step_id"], "S01")
 
     def test_checkpoint_requires_valid_step_id(self) -> None:
-        (self.outbox / "checkpoint.json").write_text("{}\n", encoding="utf-8")
+        self.write_checkpoint()
         with patch("sin_orca.cli.run_orca", return_value={"ok": True}):
             with self.assertRaisesRegex(ValueError, "valid task step ID"):
                 _cmd_notify(self.args(type="checkpoint", step="S99"))

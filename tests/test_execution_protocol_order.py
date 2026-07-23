@@ -117,8 +117,8 @@ class ExecutionProtocolOrderTests(unittest.TestCase):
 
     def valid_steps(self) -> None:
         self.callback("ack")
-        self.callback("checkpoint", step_id="S01")
         self.checkpoint(1, "first-ready", "S01")
+        self.callback("checkpoint", step_id="S01")
         self.approve("S01")
         self.checkpoint(2, "second-ready", "S02")
         self.callback("checkpoint", step_id="S02")
@@ -174,16 +174,30 @@ class ExecutionProtocolOrderTests(unittest.TestCase):
 
         errors = execution_protocol_errors(self.task_id)
         self.assertIn(
-            "S01 checkpoint callback is outside its approval window",
+            "S01 approval must follow its checkpoint callback",
             errors,
+        )
+
+    def test_checkpoint_callback_before_artifact_is_rejected(self) -> None:
+        self.callback("ack")
+        self.callback("checkpoint", step_id="S01")
+        self.checkpoint(1, "first-ready", "S01")
+        self.approve("S01")
+        self.checkpoint(2, "second-ready", "S02")
+        self.callback("checkpoint", step_id="S02")
+        self.approve("S02")
+
+        self.assertIn(
+            "S01 checkpoint callback must follow its artifact",
+            execution_protocol_errors(self.task_id),
         )
 
     def test_second_checkpoint_before_first_approval_is_rejected(self) -> None:
         self.callback("ack")
-        self.callback("checkpoint", step_id="S01")
         self.checkpoint(1, "first-ready", "S01")
-        self.callback("checkpoint", step_id="S02")
+        self.callback("checkpoint", step_id="S01")
         self.checkpoint(2, "second-ready", "S02")
+        self.callback("checkpoint", step_id="S02")
         self.approve("S01")
         self.approve("S02")
 
@@ -191,7 +205,7 @@ class ExecutionProtocolOrderTests(unittest.TestCase):
         self.assertTrue(
             any(
                 error.startswith("S02 checkpoint")
-                and "outside its approval window" in error
+                and "out of step order" in error
                 for error in errors
             )
         )
@@ -199,11 +213,11 @@ class ExecutionProtocolOrderTests(unittest.TestCase):
     def test_duplicate_ack_is_rejected(self) -> None:
         self.callback("ack")
         self.callback("ack")
-        self.callback("checkpoint", step_id="S01")
         self.checkpoint(1, "first-ready", "S01")
+        self.callback("checkpoint", step_id="S01")
         self.approve("S01")
-        self.callback("checkpoint", step_id="S02")
         self.checkpoint(2, "second-ready", "S02")
+        self.callback("checkpoint", step_id="S02")
         self.approve("S02")
 
         self.assertIn(
@@ -213,8 +227,8 @@ class ExecutionProtocolOrderTests(unittest.TestCase):
 
     def test_report_and_done_before_verification_are_accepted(self) -> None:
         self.valid_steps()
-        self.callback("done")
         self.report()
+        self.callback("done")
         self.verify()
         self.assertEqual(execution_protocol_errors(self.task_id), [])
 

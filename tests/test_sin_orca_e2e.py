@@ -300,6 +300,126 @@ class TestE2EDispatch(unittest.TestCase):
             )
         )
 
+    def test_checkpoint_notify_archives_artifact_before_direct_callback(self):
+        dispatched = subprocess.run(
+            [
+                self.sin_orca_bin, "dispatch",
+                "--role", "implementer",
+                "--agent", "mimo-code",
+                "--parent-terminal", "parent-terminal",
+                "--objective", "Exercise transactional checkpoint callback",
+                "--step", "Inspect README without changing it",
+                "--allowed-path", "README.md",
+                "--acceptance", "Checkpoint is archived before callback",
+                "--verify-command", "git diff --check",
+                "--checkpoint", "inspection-complete",
+            ],
+            cwd=self.repository,
+            text=True,
+            capture_output=True,
+            env=self.env,
+            check=False,
+        )
+        self.assertEqual(dispatched.returncode, 0, dispatched.stderr)
+        output = json.loads(dispatched.stdout)
+        task_id = output["task_id"]
+        task_file = next(self.state_root.rglob(f"{task_id}/task.json"))
+        task = json.loads(task_file.read_text(encoding="utf-8"))
+
+        acknowledged = subprocess.run(
+            [
+                self.sin_orca_bin, "notify", task_id,
+                "--type", "ack",
+                "--summary", "scope understood",
+            ],
+            cwd=self.repository,
+            text=True,
+            capture_output=True,
+            env=self.env,
+            check=False,
+        )
+        self.assertEqual(acknowledged.returncode, 0, acknowledged.stderr)
+
+        outbox = Path(output["artifact_outbox"])
+        checkpoint_path = outbox / "checkpoint.json"
+        checkpoint_path.write_text(
+            json.dumps({
+                "task_id": task_id,
+                "task_hash": task["task_hash"],
+                "base_sha": task["base_sha"],
+                "checkpoint": "inspection-complete",
+                "sequence": 1,
+                "step_id": "S01",
+                "status": "complete",
+                "changed_files": [],
+                "commands": [],
+                "unresolved": [],
+                "child_process_running": False,
+            }),
+            encoding="utf-8",
+        )
+
+        notified = subprocess.run(
+            [
+                self.sin_orca_bin, "notify", task_id,
+                "--type", "checkpoint",
+                "--step", "S01",
+                "--summary", "inspection complete",
+                "--verify", "passed",
+            ],
+            cwd=self.repository,
+            text=True,
+            capture_output=True,
+            env=self.env,
+            check=False,
+        )
+        self.assertEqual(notified.returncode, 0, notified.stderr)
+        payload = json.loads(notified.stdout)
+        self.assertTrue(payload["artifact"]["ok"])
+        self.assertEqual(payload["type"], "checkpoint")
+        self.assertFalse(checkpoint_path.exists())
+
+        events = [
+            json.loads(line)
+            for line in (task_file.parent / "events.jsonl").read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+        artifact_event = next(
+            event for event in events
+            if event["type"] == "checkpoint.received"
+        )
+        callback_event = next(
+            event for event in events
+            if event["type"] == "worker.callback"
+            and event["payload"].get("callback_type") == "checkpoint"
+        )
+        self.assertLess(
+            artifact_event["sequence"], callback_event["sequence"]
+        )
+        self.assertEqual(
+            callback_event["payload"]["artifact"]["filename"],
+            "checkpoint.json",
+        )
+
+        sends = [
+            json.loads(line)
+            for line in (self.fake_state / "terminal-send.jsonl").read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+        self.assertTrue(
+            any(
+                "type=checkpoint" in command[command.index("--text") + 1]
+                and "step=S01" in command[command.index("--text") + 1]
+                for command in sends
+                if command[:2] == ["terminal", "send"]
+                and "--text" in command
+            )
+        )
+
     def test_dispatch_without_parent_terminal_fails_closed(self):
         process = subprocess.run(
             [

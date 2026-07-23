@@ -703,24 +703,15 @@ class TestArtifactProtocol(unittest.TestCase):
         )["ok"])
 
         write_checkpoint("second-ready", 2, "S02")
-        with self.assertRaisesRegex(
-            ArtifactValidationError,
-            "preceding step approval",
-        ):
-            ingest_artifact(
-                task_id=task_id,
-                actor="worker",
-                outbox=outbox,
-                filename="checkpoint.json",
-            )
-
-        append_event(
-            task_id,
-            "codex.approved",
-            {"step_id": "S01", "instruction": "continue"},
-            actor="codex",
+        result = ingest_artifact(
+            task_id=task_id,
+            actor="worker",
+            outbox=outbox,
+            filename="checkpoint.json",
         )
-        self.assertTrue(ingest_artifact(
+        self.assertTrue(result["ok"])
+
+    def test_symbolic_link_artifact_is_rejected(self):
             task_id=task_id,
             actor="worker",
             outbox=outbox,
@@ -756,6 +747,153 @@ class TestArtifactProtocol(unittest.TestCase):
                 outbox=outbox,
                 filename="report.json",
             )
+
+
+class TestContinuousPreauthorizedProtocol(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self._patcher = patch(
+            "sin_orca.state.state_root",
+            lambda *a, **k: self.tmpdir,
+        )
+        self._patcher.start()
+
+    def tearDown(self):
+        self._patcher.stop()
+
+    def _append_callback(
+        self,
+        task_id: str,
+        callback_type: str,
+        *,
+        step_id: str | None = None,
+    ) -> None:
+        payload = {
+            "callback_type": callback_type,
+            "summary": callback_type,
+            "changed_files": [],
+            "verification_status": "passed",
+            "requested_action": "none",
+            "parent_terminal_handle": "parent-terminal",
+        }
+        if step_id is not None:
+            payload["step_id"] = step_id
+        append_event(
+            task_id,
+            "worker.callback",
+            payload,
+            actor="worker",
+        )
+
+    def test_two_steps_complete_without_explicit_approvals(self):
+        from sin_orca.gates import execution_protocol_errors
+
+        task_id = "continuous-protocol-001"
+        save_task({
+            "task_id": task_id,
+            "task_hash": "sha256:continuous",
+            "base_sha": "a" * 40,
+            "repository_root": "/tmp/repository",
+            "parent_terminal_handle": "parent-terminal",
+            "approval_mode": "continuous-preauthorized",
+            "role": "implementer",
+            "objective": "execute two bounded steps",
+            "allowed_paths": ["src/"],
+            "forbidden_paths": [],
+            "steps": [
+                {"id": "S01", "instruction": "first"},
+                {"id": "S02", "instruction": "second"},
+            ],
+            "acceptance_criteria": [],
+            "required_checkpoints": ["first-complete", "second-complete"],
+            "allow_edits": True,
+        })
+        append_event(
+            task_id,
+            "task.created",
+            {
+                "task_hash": "sha256:continuous",
+                "base_sha": "a" * 40,
+                "role": "implementer",
+            },
+            actor="codex",
+        )
+        append_event(
+            task_id,
+            "worker.spawned",
+            {
+                "agent": "mimo-code",
+                "terminal_handle": "worker-terminal",
+                "parent_terminal_handle": "parent-terminal",
+                "worktree_path": "/tmp/repository",
+                "worktree_selector": "path:/tmp/repository",
+                "same_worktree": True,
+                "outbox_path": "/tmp/repository/.sin-worker/tasks/continuous-protocol-001/outbox",
+            },
+            actor="worker",
+        )
+        self._append_callback(task_id, "ack")
+
+        for sequence, (step_id, checkpoint) in enumerate(
+            (("S01", "first-complete"), ("S02", "second-complete")),
+            start=1,
+        ):
+            append_event(
+                task_id,
+                "checkpoint.received",
+                {
+                    "checkpoint": checkpoint,
+                    "sequence": sequence,
+                    "step_id": step_id,
+                    "status": "complete",
+                    "changed_files": [],
+                    "commands": [],
+                    "unresolved": [],
+                    "child_process_running": False,
+                },
+                actor="worker",
+            )
+            self._append_callback(
+                task_id,
+                "checkpoint",
+                step_id=step_id,
+            )
+
+        append_event(
+            task_id,
+            "worker.report.received",
+            {
+                "task_id": task_id,
+                "task_hash": "sha256:continuous",
+                "base_sha": "a" * 40,
+                "status": "complete",
+                "changed_files": [],
+                "evidence": ["two bounded steps completed"],
+                "commands": [],
+                "unresolved": [],
+                "scope_compliance": {
+                    "outside_allowlist_touched": False,
+                    "unrequested_dependencies_added": False,
+                    "architecture_decisions_made": False,
+                },
+            },
+            actor="worker",
+        )
+        self._append_callback(task_id, "done")
+
+        self.assertEqual(execution_protocol_errors(task_id), [])
+
+        append_event(
+            task_id,
+            "codex.approved",
+            {"step_id": "S01", "instruction": "unexpected"},
+            actor="codex",
+        )
+        errors = execution_protocol_errors(task_id)
+        self.assertTrue(
+            any("unexpected explicit approvals" in error for error in errors),
+            errors,
+        )
 
 
 class TestSecretIsolation(unittest.TestCase):

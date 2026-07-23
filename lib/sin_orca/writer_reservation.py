@@ -87,7 +87,7 @@ def _owner_is_terminal(owner_task_id: str) -> bool:
         raise WriterReservationConflict(
             "writer owner state is invalid; explicit inspection or cancellation is required"
         ) from error
-    return ledger.get("status") in {"completed", "cancelled"}
+    return ledger.get("status") in {"completed", "cancelled", "failed", "unknown"}
 
 
 def acquire_writer(

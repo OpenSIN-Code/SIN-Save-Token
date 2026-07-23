@@ -522,7 +522,6 @@ def _cmd_dispatch(args: argparse.Namespace) -> int:
         parent_terminal=args.parent_terminal,
         parent_task_id=args.parent_task_id,
         allow_child_delegation=args.allow_child_delegation,
-        approval_mode=args.approval_mode,
         simone_task_id=args.simone_task_id,
     )
 
@@ -1483,6 +1482,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
         "task_id": args.task_id,
         "status": ledger.get("status"),
         "role": task.get("role"),
+        "approval_mode": task.get("approval_mode", "stepwise"),
         "simone_task_id": task.get("simone_task_id"),
         "events_count": len(events),
         "last_event_hash": (
@@ -1498,6 +1498,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
             if isinstance(ledger.get("verification"), dict)
             else None
         ),
+        "report_received": isinstance(ledger.get("report"), dict),
+        "review_received": isinstance(ledger.get("review"), dict),
         "review_verdict": (
             ledger.get("review", {}).get("verdict")
             if isinstance(ledger.get("review"), dict)
@@ -1559,11 +1561,6 @@ def main() -> int:
     p.add_argument("--parent-terminal")
     p.add_argument("--parent-task-id")
     p.add_argument("--allow-child-delegation", action="store_true")
-    p.add_argument(
-        "--approval-mode",
-        choices=["continuous-preauthorized", "stepwise"],
-        default="continuous-preauthorized",
-    )
     p.add_argument("--simone-task-id")
 
     p = sub.add_parser("notify", help="Push a worker callback to its parent terminal")

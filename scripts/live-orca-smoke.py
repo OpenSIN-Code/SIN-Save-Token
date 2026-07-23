@@ -355,6 +355,30 @@ def wait_for_artifact(
         warnings = payload.get("warnings", [])
         if warnings:
             raise RuntimeError(f"actor warning while waiting for {filename}: {warnings}")
+
+        status = run(
+            [str(sin_orca), "status", task_id],
+            cwd=cwd,
+            env=env,
+            timeout=60,
+        )
+        archived = (
+            filename == "checkpoint.json" and bool(status.get("checkpoints"))
+        ) or (
+            filename == "report.json" and status.get("report_received") is True
+        ) or (
+            filename == "review.json" and status.get("review_received") is True
+        )
+        if archived:
+            transcript.append({
+                "stage": f"artifact:{actor}:{filename}",
+                "archived": True,
+            })
+            return {
+                "ok": True,
+                "filename": filename,
+                "archived": True,
+            }
         time.sleep(1)
     raise TimeoutError(f"timed out waiting for {actor}:{filename}")
 
