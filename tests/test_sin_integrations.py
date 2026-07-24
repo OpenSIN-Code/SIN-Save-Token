@@ -144,6 +144,39 @@ class TestMemoryStore(unittest.TestCase):
         self.assertEqual(ctx["total_l3"], 1)
         self.assertEqual(ctx["total_l2"], 1)
 
+    def test_memory_identifiers_cannot_escape_state_root(self):
+        with self.assertRaises(ValueError):
+            self.store.append_l1_event("../escape", "test", {})
+        with self.assertRaises(ValueError):
+            self.store.write_l2_summary("../escape", "content")
+        with self.assertRaises(ValueError):
+            self.store.write_l3_decision("../escape", "decision", "reason")
+        self.assertFalse((self.tmpdir.parent / "escape.json").exists())
+        self.assertFalse((self.tmpdir.parent / "escape.jsonl").exists())
+
+    def test_concurrent_l1_events_keep_sequence_and_hash_chain(self):
+        stores = [MemoryStore(self.tmpdir) for _ in range(20)]
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            list(executor.map(
+                lambda item: item[1].append_l1_event(
+                    "parallel-task", "worker.event", {"index": item[0]}
+                ),
+                enumerate(stores),
+            ))
+
+        events = self.store.read_l1_events("parallel-task")
+        self.assertEqual([event["sequence"] for event in events], list(range(1, 21)))
+        for previous, current in zip(events, events[1:]):
+            self.assertEqual(current["previous_hash"], previous["event_hash"])
+
+    def test_memory_refuses_symbolic_link_targets(self):
+        outside = self.tmpdir / "outside.json"
+        outside.write_text("{}", encoding="utf-8")
+        (self.store.l2_dir / "linked.json").symlink_to(outside)
+        with self.assertRaises(ValueError):
+            self.store.write_l2_summary("linked", "must not overwrite outside")
+        self.assertEqual(outside.read_text(encoding="utf-8"), "{}")
+
 
 class TestCitationManager(unittest.TestCase):
     def setUp(self):
@@ -179,6 +212,15 @@ class TestCitationManager(unittest.TestCase):
         self.mgr.add_claim("c2", "Session uses headers", [])
         contradictions = self.mgr.detect_contradictions()
         self.assertEqual(len(contradictions), 0)
+
+    def test_negation_overlap_excludes_negation_tokens_symmetrically(self):
+        self.mgr.add_claim("c1", "service is not available in production", [])
+        self.mgr.add_claim("c2", "service is available in production", [])
+        self.mgr.add_claim("c3", "database is available in staging", [])
+        contradictions = self.mgr.detect_contradictions()
+        pairs = {(item["claim_a"], item["claim_b"]) for item in contradictions}
+        self.assertIn(("c1", "c2"), pairs)
+        self.assertNotIn(("c1", "c3"), pairs)
 
     def test_to_dict_and_from_dict(self):
         self.mgr.add_source("s1", "path", "hash")

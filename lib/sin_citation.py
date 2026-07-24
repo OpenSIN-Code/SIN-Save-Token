@@ -130,9 +130,52 @@ class CitationManager:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "CitationManager":
+        if not isinstance(data, dict):
+            raise ValueError("citation data must be an object")
+        entries = data.get("entries", [])
+        claims = data.get("claims", [])
+        if not isinstance(entries, list) or not isinstance(claims, list):
+            raise ValueError("citation entries and claims must be arrays")
+
+        source_ids: set[str] = set()
+        normalized_entries: list[dict[str, Any]] = []
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                raise ValueError(f"citation entry {index} must be an object")
+            source_id = entry.get("source_id")
+            path = entry.get("path")
+            content_sha256 = entry.get("content_sha256")
+            if not isinstance(source_id, str) or not source_id:
+                raise ValueError(f"citation entry {index} requires source_id")
+            if source_id in source_ids:
+                raise ValueError(f"duplicate citation source_id: {source_id}")
+            if not isinstance(path, str) or not isinstance(content_sha256, str):
+                raise ValueError(f"citation entry {index} has invalid fields")
+            source_ids.add(source_id)
+            normalized_entries.append(dict(entry))
+
+        claim_ids: set[str] = set()
+        normalized_claims: list[dict[str, Any]] = []
+        for index, claim in enumerate(claims):
+            if not isinstance(claim, dict):
+                raise ValueError(f"citation claim {index} must be an object")
+            claim_id = claim.get("claim_id")
+            text = claim.get("text")
+            references = claim.get("source_ids", [])
+            if not isinstance(claim_id, str) or not claim_id:
+                raise ValueError(f"citation claim {index} requires claim_id")
+            if claim_id in claim_ids:
+                raise ValueError(f"duplicate citation claim_id: {claim_id}")
+            if not isinstance(text, str) or not isinstance(references, list):
+                raise ValueError(f"citation claim {index} has invalid fields")
+            if any(not isinstance(item, str) or item not in source_ids for item in references):
+                raise ValueError(f"citation claim {claim_id} references unknown sources")
+            claim_ids.add(claim_id)
+            normalized_claims.append(dict(claim))
+
         mgr = cls()
-        mgr.entries = data.get("entries", [])
-        mgr.claims = data.get("claims", [])
+        mgr.entries = normalized_entries
+        mgr.claims = normalized_claims
         return mgr
 
     def evidence_refs_for_claim(self, claim_id: str) -> list[dict[str, Any]]:

@@ -55,25 +55,73 @@ def run_git(
     return process.stdout.strip()
 
 
-def terminal_handles(value: Any) -> list[str]:
-    handles: list[str] = []
+TERMINAL_HANDLE_KEYS = {
+    "handle", "terminalHandle", "terminal_handle", "terminalId", "terminal_id",
+}
+
+
+def terminal_records(value: Any) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
     if isinstance(value, dict):
-        for key, child in value.items():
-            if key in {
-                "handle",
-                "terminalHandle",
-                "terminal_handle",
-                "terminalId",
-                "terminal_id",
-            } and isinstance(child, (str, int)):
-                rendered = str(child).strip()
-                if rendered:
-                    handles.append(rendered)
-            handles.extend(terminal_handles(child))
+        handle = next(
+            (
+                str(value[key]).strip()
+                for key in TERMINAL_HANDLE_KEYS
+                if key in value
+                and isinstance(value[key], (str, int))
+                and str(value[key]).strip()
+            ),
+            None,
+        )
+        if handle:
+            records.append({
+                "handle": handle,
+                "title": str(value.get("title") or "").strip(),
+                "worktree_path": str(
+                    value.get("worktreePath")
+                    or value.get("worktree_path")
+                    or ""
+                ).strip(),
+            })
+        for child in value.values():
+            records.extend(terminal_records(child))
     elif isinstance(value, list):
         for child in value:
-            handles.extend(terminal_handles(child))
-    return list(dict.fromkeys(handles))
+            records.extend(terminal_records(child))
+
+    unique: dict[str, dict[str, str]] = {}
+    for record in records:
+        unique.setdefault(record["handle"], record)
+    return list(unique.values())
+
+
+def terminal_handles(value: Any) -> list[str]:
+    return [record["handle"] for record in terminal_records(value)]
+
+
+def select_created_terminal(
+    value: Any,
+    *,
+    existing_handles: set[str],
+    expected_title: str,
+) -> str | None:
+    candidates = [
+        record for record in terminal_records(value)
+        if record["handle"] not in existing_handles
+    ]
+    exact = [
+        record["handle"] for record in candidates
+        if record.get("title") == expected_title
+    ]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        raise RuntimeError(
+            f"multiple new terminals have expected title {expected_title!r}"
+        )
+    if len(candidates) == 1:
+        return candidates[0]["handle"]
+    return None
 
 
 def resolve_parent_terminal(explicit: str | None) -> str:
@@ -372,7 +420,7 @@ Never execute unlisted work or expand scope without a discovery or question call
 5. Stop immediately on discovery outside scope, material ambiguity, ownership conflict, unsafe action, repeated failure, or parent interrupt.
 6. Write the final report only after every listed step and required verification are complete.
 7. After the report exists, send a `done` callback directly to the parent terminal."""
-    else:
+    elif approval_mode == "stepwise":
         approval_rules = """Every listed step requires its own explicit approval.
 Do not execute a step before receiving `CODEX APPROVED. Step <step-id>` for that exact step.
 A checkpoint is evidence, not approval; after each checkpoint, stop and wait for the matching approval."""
@@ -384,6 +432,8 @@ A checkpoint is evidence, not approval; after each checkpoint, stop and wait for
 6. Stop immediately on discovery outside scope, material ambiguity, ownership conflict, unsafe action, repeated failure, or parent interrupt.
 7. Write the final report only after every listed step and required verification are complete.
 8. After the report exists, send a `done` callback directly to the parent terminal."""
+    else:
+        raise ValueError(f"unsupported approval mode: {approval_mode!r}")
 
     return f"""# SIN WORKER CONTRACT
 
@@ -697,14 +747,12 @@ def dispatch_task(
                     ["terminal", "list", "--worktree", selector],
                     timeout=30,
                 )
-                candidates = [
-                    handle
-                    for handle in terminal_handles(after_result)
-                    if handle not in existing_handles
-                    and handle != parent_handle
-                ]
-                if candidates:
-                    terminal = candidates[-1]
+                terminal = select_created_terminal(
+                    after_result,
+                    existing_handles=existing_handles | {parent_handle},
+                    expected_title=task_id,
+                )
+                if terminal:
                     break
                 time.sleep(0.5)
 

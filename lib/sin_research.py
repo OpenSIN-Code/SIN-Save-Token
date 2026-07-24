@@ -10,6 +10,7 @@ Phasen:
 6. Strukturierte Synthese für Codex
 """
 
+import re
 from typing import Any, Optional
 
 from sin_citation import CitationManager, utc_now
@@ -115,7 +116,7 @@ class ResearchPipeline:
                 sq["synthesis"] = answer
                 sq["evidence"] = evidence
 
-                source_ids = []
+                source_ids: list[str] = []
                 for index, ev in enumerate(evidence):
                     source_id = f"{subquestion_id}-ev-{index}"
                     self.citations.add_source(
@@ -148,7 +149,21 @@ class ResearchPipeline:
         question: str,
         parent_id: Optional[str] = None,
     ) -> dict[str, Any]:
-        new_id = f"sq-{len(plan['subquestions']) + 1:02d}"
+        existing_ids = {
+            str(item.get("id", ""))
+            for item in plan.get("subquestions", [])
+            if isinstance(item, dict)
+        }
+        numeric_ids = [
+            int(match.group(1))
+            for existing_id in existing_ids
+            if (match := re.fullmatch(r"sq-(\d+)", existing_id))
+        ]
+        next_number = max(numeric_ids, default=0) + 1
+        new_id = f"sq-{next_number:02d}"
+        while new_id in existing_ids:
+            next_number += 1
+            new_id = f"sq-{next_number:02d}"
         new_sq = {
             "id": new_id,
             "question": question,

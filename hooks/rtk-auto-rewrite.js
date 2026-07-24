@@ -30,7 +30,7 @@ const path = require('path');
 const { tokenize } = require(path.join(__dirname, 'lib', 'git-cmd.js'));
 
 let input = '';
-const stdinTimeout = setTimeout(() => process.exit(0), 3000);
+const stdinTimeout = setTimeout(() => process.exit(0), 30000);
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => (input += chunk));
 process.stdin.on('end', () => {
@@ -67,7 +67,9 @@ process.stdin.on('end', () => {
     if (/[&|;`\n<>()]|\$\(/.test(trimmed)) process.exit(0);
 
     // Resolve the real program via git-cmd.tokenize: skip leading ENV=val
-    // assignments and accept full paths (/usr/bin/git → git).
+    // assignments and accept full paths (/usr/bin/git → git). Tokenization is
+    // used only for classification; rebuilding from tokens would destroy the
+    // caller's original quoting and escaping.
     const tokens = tokenize(trimmed);
     let i = 0;
     while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
@@ -83,9 +85,21 @@ process.stdin.on('end', () => {
       process.exit(0);
     }
 
-    // Insert `rtk` after any leading env assignments so
-    // `FOO=1 cargo build` → `FOO=1 rtk cargo build` (valid shell).
-    const rewritten = [...tokens.slice(0, i), 'rtk', ...tokens.slice(i)].join(' ');
+    // Preserve the original command byte-for-byte apart from inserting `rtk `.
+    // For leading environment assignments, only rewrite the simple unquoted
+    // form we can locate safely. Complex assignments are left unchanged.
+    let insertionOffset = 0;
+    for (let assignment = 0; assignment < i; assignment++) {
+      const match = trimmed.slice(insertionOffset).match(
+        /^[A-Za-z_][A-Za-z0-9_]*=[^\s'"`\\]+\s+/
+      );
+      if (!match) process.exit(0);
+      insertionOffset += match[0].length;
+    }
+    const rewritten =
+      trimmed.slice(0, insertionOffset) +
+      'rtk ' +
+      trimmed.slice(insertionOffset);
 
     const output = {
       hookSpecificOutput: {

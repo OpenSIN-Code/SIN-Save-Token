@@ -122,27 +122,6 @@ class TestCacheL1Exact(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result["content"], "Token is in src/auth.ts")
 
-    def test_put_update_preserves_hit_count(self):
-        key = self.cache.put(
-            "code_symbol", "graphify", "where is token", "repo1",
-            "first answer",
-        )
-        self.assertIsNotNone(
-            self.cache.get(
-                "code_symbol", "graphify", "where is token", "repo1"
-            )
-        )
-        self.cache.put(
-            "code_symbol", "graphify", "where is token", "repo1",
-            "updated answer",
-        )
-
-        hit_count = self.cache.conn.execute(
-            "SELECT hit_count FROM cache_entries WHERE cache_key = ?",
-            (key,),
-        ).fetchone()[0]
-        self.assertEqual(hit_count, 1)
-
     def test_invalidation_by_path(self):
         self.cache.put(
             "code_symbol", "graphify", "query", "repo1",
@@ -202,6 +181,37 @@ class TestCacheL1Exact(unittest.TestCase):
             ).fetchone()[0],
             0,
         )
+
+    def test_put_update_preserves_hit_count(self):
+        key = self.cache.put(
+            "code_symbol", "graphify", "where is token", "repo1",
+            "first answer",
+        )
+        for _ in range(2):
+            self.assertIsNotNone(
+                self.cache.get(
+                    "code_symbol", "graphify", "where is token", "repo1"
+                )
+            )
+        self.assertEqual(
+            self.cache.conn.execute(
+                "SELECT hit_count FROM cache_entries WHERE cache_key = ?", (key,)
+            ).fetchone()[0],
+            2,
+        )
+
+        self.cache.put(
+            "code_symbol", "graphify", "where is token", "repo1",
+            "updated answer",
+        )
+        row = self.cache.conn.execute(
+            "SELECT hit_count FROM cache_entries WHERE cache_key = ?", (key,)
+        ).fetchone()
+        self.assertEqual(row[0], 2)
+        result = self.cache.get(
+            "code_symbol", "graphify", "where is token", "repo1"
+        )
+        self.assertEqual(result["content"], "updated answer")
 
     def test_close_is_idempotent(self):
         for _ in range(2):

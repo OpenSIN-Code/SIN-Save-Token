@@ -11,8 +11,10 @@ CRG darf niemals allein über Annahme/Ablehnung entscheiden.
 Git-Diff, Tests, Typecheck, Linter, Blind Reviewer und Codex bleiben maßgeblich.
 """
 
+import ast
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Optional
@@ -342,7 +344,7 @@ class ReviewContextBuilder:
 
     def _get_changed_files(self, base_sha: str) -> list[dict[str, Any]]:
         result = run_command(
-            ["git", "diff", "--name-status", "--no-renames", base_sha, "--"],
+            ["git", "diff", "--name-status", "--find-renames", base_sha, "--"],
             cwd=self.worktree,
         )
 
@@ -360,9 +362,19 @@ class ReviewContextBuilder:
                 break
             if not line.strip():
                 continue
-            parts = line.split("\t", 1)
-            if len(parts) == 2:
-                status, path = parts
+            parts = line.split("\t")
+            status = parts[0] if parts else ""
+            if status.startswith("R") and len(parts) == 3:
+                _, old_path, new_path = parts
+                files.append({
+                    "path": new_path,
+                    "previous_path": old_path,
+                    "change_type": "renamed",
+                    "lines_added": 0,
+                    "lines_removed": 0,
+                })
+            elif len(parts) == 2:
+                _, path = parts
                 files.append({
                     "path": path,
                     "change_type": self._map_status(status),
@@ -473,6 +485,51 @@ class ReviewContextBuilder:
                 )
                 lines = lines[:MAX_SOURCE_LINES]
 
+            if file_path.suffix.lower() in {".py", ".pyi"}:
+                try:
+                    tree = ast.parse("\n".join(lines), filename=relative)
+                except SyntaxError:
+                    self._note_uncertainty(
+                        f"could not parse Python symbols: {relative}"
+                    )
+                    continue
+                for node in ast.walk(tree):
+                    if len(symbols) >= MAX_SYMBOLS:
+                        self._note_uncertainty(
+                            f"changed-symbol scan truncated at {MAX_SYMBOLS} symbols"
+                        )
+                        break
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        symbols.append({
+                            "name": node.name,
+                            "file": relative,
+                            "start_line": node.lineno,
+                            "end_line": getattr(node, "end_lineno", node.lineno),
+                            "type": "function",
+                        })
+                    elif isinstance(node, ast.ClassDef):
+                        symbols.append({
+                            "name": node.name,
+                            "file": relative,
+                            "start_line": node.lineno,
+                            "end_line": getattr(node, "end_lineno", node.lineno),
+                            "type": "class",
+                        })
+                continue
+
+            symbol_patterns = (
+                (re.compile(
+                    r"^(?:export\s+)?(?:async\s+)?function\s+"
+                    r"([A-Za-z_$][\w$]*)\s*\("
+                ), "function"),
+                (re.compile(
+                    r"^(?:export\s+)?class\s+([A-Za-z_$][\w$]*)"
+                ), "class"),
+                (re.compile(
+                    r"^(?:export\s+)?(?:const|let|var)\s+"
+                    r"([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(?.*=>"
+                ), "function"),
+            )
             for line_number, line in enumerate(lines, 1):
                 if len(symbols) >= MAX_SYMBOLS:
                     self._note_uncertainty(
@@ -480,25 +537,17 @@ class ReviewContextBuilder:
                     )
                     break
                 stripped = line.strip()
-                if stripped.startswith("def ") or stripped.startswith("function "):
-                    name = stripped.split("(")[0].split()[-1]
-                    symbols.append({
-                        "name": name,
-                        "file": relative,
-                        "start_line": line_number,
-                        "end_line": line_number,
-                        "type": "function",
-                    })
-                elif stripped.startswith("class "):
-                    rest = stripped[6:]
-                    name = rest.split("(")[0].split(":")[0].split()[0].rstrip(":")
-                    symbols.append({
-                        "name": name,
-                        "file": relative,
-                        "start_line": line_number,
-                        "end_line": line_number,
-                        "type": "class",
-                    })
+                for pattern, symbol_type in symbol_patterns:
+                    match = pattern.match(stripped)
+                    if match:
+                        symbols.append({
+                            "name": match.group(1),
+                            "file": relative,
+                            "start_line": line_number,
+                            "end_line": line_number,
+                            "type": symbol_type,
+                        })
+                        break
 
         return symbols
 
@@ -585,7 +634,10 @@ class ReviewContextBuilder:
         gaps: list[dict[str, Any]] = []
         for symbol in symbols:
             name = str(symbol.get("name", ""))
-            has_test = bool(name) and name in test_content
+            has_test = bool(name) and re.search(
+                rf"(?<![A-Za-z0-9_$]){re.escape(name)}(?![A-Za-z0-9_$])",
+                test_content,
+            ) is not None
             gaps.append({
                 "function": name,
                 "has_direct_test": has_test,

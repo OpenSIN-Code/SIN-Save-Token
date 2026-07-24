@@ -32,47 +32,61 @@ process.stdin.on("end", () => {
     process.exit(0);
   }
 
-  const command = String(
-    input.command ||
-    input.pattern ||
-    input.file_path ||
-    ""
-  ).trim();
+  const command = String(input.command || "").trim();
+  const filePath = String(input.file_path || "").trim();
+  const grepPattern = String(input.pattern || "").trim();
+  const grepPath = String(input.path || "").trim();
+  const displayValue = command || filePath || grepPattern;
 
-  if (!command) {
+  if (!displayValue) {
     process.exit(0);
   }
 
   // Broker calls must never block themselves.
-  if (/\bsin-context\b/.test(command)) {
+  if (toolName === "Bash" && /\bsin-context\b/.test(command)) {
     process.exit(0);
   }
 
-  const broadPatterns = [
-    /\bcat\s+.+(?:\*|\.|\/)$/i,
-    /\bfind\s+\.\s+(?:-type\s+f)?\s*$/i,
-    /\brg\s+(?:--files|\.)\s*$/i,
-    /\bgrep\s+-R\b/i,
-    /\btree(?:\s+-a)?\s*$/i,
-    /\bgit\s+log\b(?!.*-(?:n|max-count))/i,
-    /\b(?:pytest|npm\s+test|cargo\s+test)\b(?!.*(?:quiet|fail|short))/i
-  ];
+  const rootLikePath = value =>
+    value === "." || value === ".." || value === "/" || value.endsWith("/");
+  const containsGlob = value => /[*?\[\]]/.test(value);
 
-  const broadRead =
-    toolName === "Read" &&
-    !Number.isInteger(input.offset) &&
-    !Number.isInteger(input.limit);
+  let broadOperation = false;
 
-  const broadCommand = broadPatterns.some(pattern => pattern.test(command));
+  if (toolName === "Bash") {
+    const normalized = command.replace(/\s+/g, " ").trim();
+    const broadPatterns = [
+      /^(?:cat|sed|awk)\s+.*[*?\[]/i,
+      /^find\s+\.\s*(?:-type\s+f\s*)?$/i,
+      /^(?:rg|ripgrep)\s+(?:--files|\.)\s*$/i,
+      /^grep\s+.*(?:-R|-r|--recursive)(?:\s|$)/i,
+      /^tree(?:\s+-a)?\s*$/i,
+      /^git\s+log(?:\s+--all)?\s*$/i,
+      /^(?:python(?:3)?\s+-m\s+)?pytest(?:\s+(?:-q|--quiet))*\s*$/i,
+      /^npm\s+test\s*$/i,
+      /^cargo\s+test\s*$/i
+    ];
+    broadOperation = broadPatterns.some(pattern => pattern.test(normalized));
+  } else if (toolName === "Read") {
+    // A single named file is targeted even without offset/limit. Only directory
+    // or wildcard reads are broad enough to redirect through the broker.
+    broadOperation = rootLikePath(filePath) || containsGlob(filePath);
+  } else if (toolName === "Grep") {
+    // Grep's pattern is data, not a shell command. Scope using path/glob fields.
+    broadOperation =
+      (!grepPath || rootLikePath(grepPath)) &&
+      !String(input.glob || "").trim() &&
+      !Number.isInteger(input.head_limit);
+  }
 
-  if (!broadRead && !broadCommand) {
+  if (!broadOperation) {
     process.exit(0);
   }
 
   const reason = [
     "Broad context operation detected by SIN context budget.",
     "Use the smallest targeted query first:",
-    `sin-context ${JSON.stringify(command)}`,
+    `sin-context ${JSON.stringify(displayValue)}`,
     "Read raw files only when the broker result is insufficient."
   ].join("\n");
 

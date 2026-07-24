@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import subprocess
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -58,7 +59,8 @@ def repository_root() -> Path:
     )
     if process.returncode == 0 and process.stdout.strip():
         return Path(process.stdout.strip()).resolve()
-    return Path.cwd().resolve()
+    detail = process.stderr.strip() or process.stdout.strip() or "unknown git error"
+    raise RuntimeError(f"unable to determine repository root: {detail}")
 
 
 def repository_id(root: Path | None = None) -> str:
@@ -170,7 +172,7 @@ def ledger_path(task_id: str, root: Path | None = None) -> Path:
 
 def atomic_write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
     temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temporary.chmod(0o600)
     os.replace(temporary, path)
@@ -191,15 +193,27 @@ def load_task(task_id: str, root: Path | None = None) -> dict[str, Any]:
     return value
 
 
-def read_events(task_id: str, root: Path | None = None, *, verify: bool = True) -> list[dict[str, Any]]:
+def _read_events_unlocked(
+    task_id: str,
+    root: Path | None = None,
+    *,
+    verify: bool = True,
+) -> list[dict[str, Any]]:
     path = events_path(task_id, root)
     if not path.exists():
         return []
     events: list[dict[str, Any]] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
         if not line.strip():
             continue
-        event = json.loads(line)
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(
+                f"invalid JSON event at line {line_number}"
+            ) from error
         if not isinstance(event, dict):
             raise RuntimeError(f"invalid event at line {line_number}")
         events.append(event)
@@ -210,12 +224,43 @@ def read_events(task_id: str, root: Path | None = None, *, verify: bool = True) 
                 raise RuntimeError(f"invalid event sequence at {expected_sequence}")
             if event.get("previous_hash") != previous_hash:
                 raise RuntimeError(f"event chain broken at sequence {expected_sequence}")
-            material = {k: event[k] for k in ("sequence", "type", "timestamp", "actor", "payload", "previous_hash")}
+            try:
+                material = {
+                    key: event[key]
+                    for key in (
+                        "sequence", "type", "timestamp", "actor",
+                        "payload", "previous_hash",
+                    )
+                }
+            except KeyError as error:
+                raise RuntimeError(
+                    f"event missing required field at sequence {expected_sequence}"
+                ) from error
             expected_hash = sha256_json(material)
             if event.get("event_hash") != expected_hash:
                 raise RuntimeError(f"event hash mismatch at sequence {expected_sequence}")
             previous_hash = expected_hash
     return events
+
+
+def read_events(
+    task_id: str,
+    root: Path | None = None,
+    *,
+    verify: bool = True,
+) -> list[dict[str, Any]]:
+    directory = task_dir(task_id, root)
+    lock_path = directory / ".events.lock"
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        try:
+            os.fchmod(lock.fileno(), 0o600)
+        except OSError:
+            pass
+        fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+        try:
+            return _read_events_unlocked(task_id, root, verify=verify)
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def reduce_events(task_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -300,9 +345,20 @@ def reduce_events(task_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def rebuild_ledger(task_id: str, root: Path | None = None) -> dict[str, Any]:
-    ledger = reduce_events(task_id, read_events(task_id, root))
-    atomic_write_json(ledger_path(task_id, root), ledger)
-    return ledger
+    directory = task_dir(task_id, root)
+    lock_path = directory / ".events.lock"
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        try:
+            os.fchmod(lock.fileno(), 0o600)
+        except OSError:
+            pass
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            ledger = reduce_events(task_id, _read_events_unlocked(task_id, root))
+            atomic_write_json(ledger_path(task_id, root), ledger)
+            return ledger
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def append_event(
@@ -317,7 +373,7 @@ def append_event(
         except OSError:
             pass
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        events = read_events(task_id, root)
+        events = _read_events_unlocked(task_id, root)
         sequence = len(events) + 1
         previous_hash = events[-1]["event_hash"] if events else ZERO_HASH
         material = {

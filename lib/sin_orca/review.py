@@ -15,6 +15,7 @@ from .dispatch import (
     first_string,
     run_git,
     run_orca,
+    select_created_terminal,
     terminal_handles,
 )
 from .gates import execution_protocol_errors
@@ -106,8 +107,11 @@ def start_blind_review(
         raise RuntimeError("worker worktree selector/path missing")
     if worker.get("same_worktree") is not True:
         raise RuntimeError("worker was not dispatched in same-worktree mode")
-    expected_selector = f"path:{Path(task['repository_root']).resolve()}"
-    if worktree_selector != expected_selector:
+    selector_prefix = "path:"
+    if not worktree_selector.startswith(selector_prefix):
+        raise RuntimeError("worker selector is not a repository path selector")
+    selector_path = Path(worktree_selector[len(selector_prefix):]).resolve()
+    if selector_path != Path(task["repository_root"]).resolve():
         raise RuntimeError("worker selector does not match task repository")
 
     reviewer_agent = select_reviewer_agent(
@@ -357,12 +361,12 @@ Review packet:
                 ],
                 timeout=30,
             )
-            candidates = [
-                handle for handle in terminal_handles(term_result)
-                if handle not in existing_handles
-            ]
-            if candidates:
-                terminal = candidates[-1]
+            terminal = select_created_terminal(
+                term_result,
+                existing_handles=existing_handles,
+                expected_title=f"review-{task_id}",
+            )
+            if terminal:
                 break
             time.sleep(0.5)
 

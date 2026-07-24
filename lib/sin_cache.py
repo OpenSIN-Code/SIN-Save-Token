@@ -33,6 +33,7 @@ STOP_WORDS = frozenset({
 WORD_PATTERN = re.compile(r"[a-z0-9_]+")
 
 SCHEMA_VERSION = 1
+DEFAULT_TTL_SECONDS = 86400 * 30
 
 REVIEW_SCHEMA_VERSION = 2
 
@@ -101,16 +102,12 @@ def canonical_query(query: str) -> str:
 
 
 def query_similarity(a: str, b: str) -> float:
-    words_a = set(WORD_PATTERN.findall(a.lower()))
-    words_b = set(WORD_PATTERN.findall(b.lower()))
-
+    words_a = set(a.split())
+    words_b = set(b.split())
     if not words_a or not words_b:
         return 0.0
-
-    intersection = words_a & words_b
     union = words_a | words_b
-
-    return len(intersection) / len(union) if union else 0.0
+    return len(words_a & words_b) / len(union) if union else 0.0
 
 
 # ─── Evidence Validation ────────────────────────────────────────────────────
@@ -213,7 +210,19 @@ CREATE TABLE IF NOT EXISTS cache_stats (
 # ─── Cache-Klasse ───────────────────────────────────────────────────────────
 
 class SinCache:
-    def __init__(self, db_path: Optional[Path] = None):
+    def __init__(
+        self,
+        db_path: Optional[Path] = None,
+        *,
+        ttl_seconds: int = DEFAULT_TTL_SECONDS,
+    ):
+        if (
+            not isinstance(ttl_seconds, int)
+            or isinstance(ttl_seconds, bool)
+            or ttl_seconds < 0
+        ):
+            raise ValueError("ttl_seconds must be a non-negative integer")
+        self.ttl_seconds = ttl_seconds
         if db_path is None:
             db_path = Path.home() / ".local" / "state" / "sin-cache" / "cache.db"
 
@@ -305,6 +314,10 @@ class SinCache:
             return None
 
         entry = self._row_to_entry(row)
+        if int(entry.get("created_at", 0)) < utc_now() - self.ttl_seconds:
+            self.invalidate_by_key(key)
+            self._record_stat(route, "expired")
+            return None
         try:
             evidence = json.loads(entry.get("evidence_json", "[]"))
         except json.JSONDecodeError:
@@ -387,7 +400,8 @@ class SinCache:
             "policy_hash = excluded.policy_hash, "
             "provider_version = excluded.provider_version, "
             "created_at = excluded.created_at, "
-            "last_accessed_at = excluded.last_accessed_at",
+            "last_accessed_at = excluded.last_accessed_at, "
+            "hit_count = cache_entries.hit_count",
             (
                 key, repository_id, str(repository_path), route, provider, canonical_query(query),
                 canonical_query(query), blob_hash, evidence_json,
@@ -442,13 +456,15 @@ class SinCache:
             "FROM cache_entries ce "
             "JOIN cache_blobs cb ON ce.blob_hash = cb.content_hash "
             "WHERE ce.route = ? AND ce.provider = ? AND ce.repository_id = ? "
-            "AND ce.policy_hash = ? AND COALESCE(ce.provider_version, '') = ?",
+            "AND ce.policy_hash = ? AND COALESCE(ce.provider_version, '') = ? "
+            "AND ce.created_at >= ?",
             (
                 route,
                 provider,
                 repository_id,
                 policy_hash,
                 provider_version,
+                utc_now() - self.ttl_seconds,
             ),
         ).fetchall()
 
@@ -458,7 +474,7 @@ class SinCache:
         for row in rows:
             entry = self._row_to_entry(row)
             stored_canonical = entry.get("normalized_query", "")
-            score = _jaccard_similarity(canonical, stored_canonical)
+            score = query_similarity(canonical, stored_canonical)
 
             if score > best_score and score >= threshold:
                 best_score = score
@@ -582,10 +598,24 @@ class SinCache:
                     to_invalidate.append(key)
                     break
 
-        for key in to_invalidate:
-            self.invalidate_by_key(key)
-
-        return len(to_invalidate)
+        unique_keys = list(dict.fromkeys(to_invalidate))
+        if not unique_keys:
+            return 0
+        placeholders = ",".join("?" for _ in unique_keys)
+        with self.conn:
+            self.conn.execute(
+                f"DELETE FROM cache_entries WHERE cache_key IN ({placeholders})",
+                unique_keys,
+            )
+            self.conn.execute(
+                "DELETE FROM cache_views WHERE blob_hash NOT IN "
+                "(SELECT DISTINCT blob_hash FROM cache_entries)"
+            )
+            self.conn.execute(
+                "DELETE FROM cache_blobs WHERE content_hash NOT IN "
+                "(SELECT DISTINCT blob_hash FROM cache_entries)"
+            )
+        return len(unique_keys)
 
     def invalidate_by_key(self, key: str) -> None:
         row = self.conn.execute(
@@ -797,26 +827,36 @@ class SinCache:
 
     # ─── GC ──────────────────────────────────────────────────────────────
 
-    def gc(self, max_age_seconds: int = 86400 * 30) -> int:
+    def gc(self, max_age_seconds: int | None = None) -> int:
+        age = self.ttl_seconds if max_age_seconds is None else max_age_seconds
         if (
-            not isinstance(max_age_seconds, int)
-            or isinstance(max_age_seconds, bool)
-            or max_age_seconds < 0
+            not isinstance(age, int)
+            or isinstance(age, bool)
+            or age < 0
         ):
             raise ValueError("max_age_seconds must be a non-negative integer")
-        cutoff = utc_now() - max_age_seconds
-
+        cutoff = utc_now() - age
         stale = self.conn.execute(
-            "SELECT cache_key, blob_hash FROM cache_entries "
-            "WHERE last_accessed_at < ? AND hit_count < 2",
+            "SELECT cache_key FROM cache_entries WHERE created_at < ?",
             (cutoff,),
         ).fetchall()
-
-        for key, blob_hash in stale:
-            self.invalidate_by_key(key)
-
-        self.conn.commit()
-        return len(stale)
+        keys = [str(row[0]) for row in stale]
+        if keys:
+            placeholders = ",".join("?" for _ in keys)
+            with self.conn:
+                self.conn.execute(
+                    f"DELETE FROM cache_entries WHERE cache_key IN ({placeholders})",
+                    keys,
+                )
+                self.conn.execute(
+                    "DELETE FROM cache_views WHERE blob_hash NOT IN "
+                    "(SELECT DISTINCT blob_hash FROM cache_entries)"
+                )
+                self.conn.execute(
+                    "DELETE FROM cache_blobs WHERE content_hash NOT IN "
+                    "(SELECT DISTINCT blob_hash FROM cache_entries)"
+                )
+        return len(keys)
 
     # ─── Helper ──────────────────────────────────────────────────────────
 
@@ -829,13 +869,3 @@ class SinCache:
                 value = value.decode("utf-8")
             result[key] = value
         return result
-
-
-def _jaccard_similarity(a: str, b: str) -> float:
-    words_a = set(a.split())
-    words_b = set(b.split())
-    if not words_a or not words_b:
-        return 0.0
-    intersection = words_a & words_b
-    union = words_a | words_b
-    return len(intersection) / len(union) if union else 0.0

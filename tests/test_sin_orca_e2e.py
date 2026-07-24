@@ -491,8 +491,9 @@ class TestE2EDispatch(unittest.TestCase):
         self.assertTrue(
             any(
                 command[:2] == ["terminal", "create"]
-                and command[command.index("--worktree") + 1]
-                == f"path:{self.repository.resolve()}"
+                and command[command.index("--worktree") + 1].startswith("path:")
+                and Path(command[command.index("--worktree") + 1][5:]).resolve()
+                == self.repository.resolve()
                 for command in commands
             )
         )

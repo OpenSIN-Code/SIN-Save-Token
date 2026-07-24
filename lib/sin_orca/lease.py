@@ -200,10 +200,7 @@ class ControllerLease:
     def release(self, token: str) -> None:
         with self.lock_path.open("a+", encoding="utf-8") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-
             self.assert_owned(token)
-
-            try:
-                self.lease_path.unlink()
-            except FileNotFoundError:
-                pass
+            self.lease_path.unlink(missing_ok=True)
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        self.lock_path.unlink(missing_ok=True)

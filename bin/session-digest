@@ -210,9 +210,9 @@ def _detect(path):
         if isinstance(d, dict) and ("sessionId" in d or "session_id" in d or d.get("type") in (
                 "user", "assistant", "ai-title", "system")):
             return "claude"
-    except Exception:
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
         pass
-    return "claude"  # default; extend when mimo format confirmed
+    return None
 
 
 # --- digest -------------------------------------------------------------------

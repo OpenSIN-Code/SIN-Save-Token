@@ -99,7 +99,7 @@ def wrap_evidence(
         sha256=digest,
         content=content,
         suspicious=scan_instruction_patterns(content),
-        metadata=metadata or {},
+        metadata=_sanitize_metadata(metadata or {}),
     )
 
 
@@ -115,6 +115,28 @@ def _escape_evidence_boundaries(value: str) -> str:
         EVIDENCE_END,
         ESCAPED_END,
     )
+
+
+def _sanitize_metadata(value: Any, *, depth: int = 0) -> Any:
+    if depth > 20:
+        return "[metadata-depth-limit]"
+    if isinstance(value, str):
+        return _escape_evidence_boundaries(value)
+    if isinstance(value, dict):
+        return {
+            _escape_evidence_boundaries(str(key)): _sanitize_metadata(
+                child, depth=depth + 1
+            )
+            for key, child in list(value.items())[:200]
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _sanitize_metadata(child, depth=depth + 1)
+            for child in list(value)[:200]
+        ]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return _escape_evidence_boundaries(str(value))
 
 
 def render_for_model(
