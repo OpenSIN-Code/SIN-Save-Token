@@ -203,6 +203,37 @@ class TestCacheL1Exact(unittest.TestCase):
             0,
         )
 
+    def test_put_update_preserves_hit_count(self):
+        key = self.cache.put(
+            "code_symbol", "graphify", "where is token", "repo1",
+            "first answer",
+        )
+        for _ in range(2):
+            self.assertIsNotNone(
+                self.cache.get(
+                    "code_symbol", "graphify", "where is token", "repo1"
+                )
+            )
+        self.assertEqual(
+            self.cache.conn.execute(
+                "SELECT hit_count FROM cache_entries WHERE cache_key = ?", (key,)
+            ).fetchone()[0],
+            2,
+        )
+
+        self.cache.put(
+            "code_symbol", "graphify", "where is token", "repo1",
+            "updated answer",
+        )
+        row = self.cache.conn.execute(
+            "SELECT hit_count FROM cache_entries WHERE cache_key = ?", (key,)
+        ).fetchone()
+        self.assertEqual(row[0], 2)
+        result = self.cache.get(
+            "code_symbol", "graphify", "where is token", "repo1"
+        )
+        self.assertEqual(result["content"], "updated answer")
+
     def test_close_is_idempotent(self):
         for _ in range(2):
             self.cache.close()

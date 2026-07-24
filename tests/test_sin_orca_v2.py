@@ -633,6 +633,7 @@ class TestArtifactProtocol(unittest.TestCase):
             "task_hash": "sha256:checkpoint",
             "base_sha": "c" * 40,
             "role": "implementer",
+            "approval_mode": "stepwise",
             "objective": "two steps",
             "allowed_paths": ["README.md"],
             "steps": [

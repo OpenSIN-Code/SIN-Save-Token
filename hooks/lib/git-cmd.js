@@ -29,6 +29,7 @@ const path = require('path');
  */
 const ARGUMENT_TAKING_FLAGS = new Set([
   '-C',                // working directory
+  '-c', '--config',    // one-off config key/value (single following key=value)
   '--git-dir',         // path to git repository
   '--work-tree',       // path to working tree
   '--namespace',       // git namespace
@@ -78,10 +79,19 @@ function tokenize(cmd) {
         while (i < len && cmd[i] !== "'") token += cmd[i++];
         if (i < len) i++; // consume closing '
       } else if (cmd[i] === '"') {
-        // Double-quoted string: take everything until closing " (no escape handling)
         i++;
-        while (i < len && cmd[i] !== '"') token += cmd[i++];
+        while (i < len && cmd[i] !== '"') {
+          if (cmd[i] === '\\' && i + 1 < len) {
+            token += cmd[i + 1];
+            i += 2;
+          } else {
+            token += cmd[i++];
+          }
+        }
         if (i < len) i++; // consume closing "
+      } else if (cmd[i] === '\\' && i + 1 < len) {
+        token += cmd[i + 1];
+        i += 2;
       } else {
         token += cmd[i++];
       }

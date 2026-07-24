@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -181,6 +182,27 @@ class ProviderRuntimeTests(unittest.TestCase):
             self.assertEqual(second["status"], "failed")
             self.assertGreater(second["opened_until"], 0)
             self.assertEqual(third["status"], "circuit-open")
+
+    def test_concurrent_failures_are_counted_atomically(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "health.sqlite3"
+            spec = ProviderSpec(
+                name="parallel-broken",
+                argv=[sys.executable, "-c", "raise SystemExit(1)"],
+                failure_threshold=100,
+            )
+            runtimes = [ProviderRuntime(state_path=state) for _ in range(20)]
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                results = list(executor.map(
+                    lambda runtime: runtime._record_failure(spec, "failed"),
+                    runtimes,
+                ))
+
+            self.assertEqual(len(results), 20)
+            health = ProviderRuntime(state_path=state).health("parallel-broken")
+            self.assertEqual(health["consecutive_failures"], 20)
+            self.assertEqual(health["opened_until"], 0)
 
     def test_unresolved_placeholder_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

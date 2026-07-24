@@ -8,6 +8,7 @@ L3: dauerhafte, übergreifende Synthese (verifizierte Entscheidungen)
 
 import fcntl
 import hashlib
+import heapq
 import json
 import os
 import re
@@ -31,8 +32,15 @@ def _validated_identifier(value: str, field: str) -> str:
         )
     return value
 
+def _reject_symlink(path: Path) -> None:
+    if path.is_symlink():
+        raise ValueError(
+            f"memory path must not be a symbolic link: {path.name}"
+        )
+
 
 def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
+    _reject_symlink(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.",
@@ -84,10 +92,11 @@ class MemoryStore:
 
     def _l1_paths(self, task_id: str) -> tuple[Path, Path]:
         safe_task_id = _validated_identifier(task_id, "task_id")
-        return (
-            self.l1_dir / f"{safe_task_id}.jsonl",
-            self.l1_dir / f".{safe_task_id}.lock",
-        )
+        events_file = self.l1_dir / f"{safe_task_id}.jsonl"
+        lock_file = self.l1_dir / f".{safe_task_id}.lock"
+        _reject_symlink(events_file)
+        _reject_symlink(lock_file)
+        return events_file, lock_file
 
     @staticmethod
     def _read_l1_events_unlocked(events_file: Path) -> list[dict[str, Any]]:
@@ -186,6 +195,7 @@ class MemoryStore:
 
         safe_topic = _validated_identifier(topic, "topic")
         entry_file = self.l2_dir / f"{safe_topic}.json"
+        _reject_symlink(entry_file)
         _atomic_write_json(entry_file, entry)
 
         return entry
@@ -193,13 +203,17 @@ class MemoryStore:
     def read_l2_summary(self, topic: str) -> Optional[dict[str, Any]]:
         safe_topic = _validated_identifier(topic, "topic")
         entry_file = self.l2_dir / f"{safe_topic}.json"
+        _reject_symlink(entry_file)
         if not entry_file.exists():
             return None
         with open(entry_file, encoding="utf-8") as f:
             return json.load(f)
 
     def list_l2_topics(self) -> list[str]:
-        return [f.stem for f in self.l2_dir.glob("*.json")]
+        return sorted(
+            path.stem for path in self.l2_dir.glob("*.json")
+            if path.is_file() and not path.is_symlink()
+        )
 
     def search_l2(self, query: str) -> list[dict[str, Any]]:
         query_lower = query.lower()
@@ -234,6 +248,7 @@ class MemoryStore:
 
         safe_decision_id = _validated_identifier(decision_id, "decision_id")
         entry_file = self.l3_dir / f"{safe_decision_id}.json"
+        _reject_symlink(entry_file)
         _atomic_write_json(entry_file, entry)
 
         return entry
@@ -241,13 +256,17 @@ class MemoryStore:
     def read_l3_decision(self, decision_id: str) -> Optional[dict[str, Any]]:
         safe_decision_id = _validated_identifier(decision_id, "decision_id")
         entry_file = self.l3_dir / f"{safe_decision_id}.json"
+        _reject_symlink(entry_file)
         if not entry_file.exists():
             return None
         with open(entry_file, encoding="utf-8") as f:
             return json.load(f)
 
     def list_l3_decisions(self) -> list[str]:
-        return [f.stem for f in self.l3_dir.glob("*.json")]
+        return sorted(
+            path.stem for path in self.l3_dir.glob("*.json")
+            if path.is_file() and not path.is_symlink()
+        )
 
     def search_l3(self, query: str) -> list[dict[str, Any]]:
         query_lower = query.lower()
@@ -311,21 +330,48 @@ class MemoryStore:
     # ─── Context for Codex ──────────────────────────────────────────────
 
     def context_for_task(self, task: dict[str, Any]) -> dict[str, Any]:
-        relevant_l3 = []
-        for did in self.list_l3_decisions():
-            entry = self.read_l3_decision(did)
+        task_text = json.dumps(task, ensure_ascii=False, sort_keys=True).lower()
+        query_terms = set(re.findall(r"[a-z0-9_]{3,}", task_text))
+
+        def recent_files(directory: Path, limit: int) -> tuple[list[Path], int]:
+            candidates = [
+                path for path in directory.glob("*.json")
+                if path.is_file() and not path.is_symlink()
+            ]
+            selected = heapq.nlargest(
+                limit,
+                candidates,
+                key=lambda path: path.stat().st_mtime_ns,
+            )
+            return selected, len(candidates)
+
+        def score(entry: dict[str, Any], path: Path) -> tuple[int, int]:
+            value = json.dumps(
+                entry, ensure_ascii=False, sort_keys=True
+            ).lower()
+            overlap = sum(1 for term in query_terms if term in value)
+            return overlap, path.stat().st_mtime_ns
+
+        l3_files, total_l3 = recent_files(self.l3_dir, 200)
+        ranked_l3: list[tuple[tuple[int, int], dict[str, Any]]] = []
+        for path in l3_files:
+            entry = self.read_l3_decision(path.stem)
             if entry and entry.get("status") == "accepted":
-                relevant_l3.append(entry)
+                ranked_l3.append((score(entry, path), entry))
 
-        relevant_l2 = []
-        for topic in self.list_l2_topics():
-            entry = self.read_l2_summary(topic)
+        l2_files, total_l2 = recent_files(self.l2_dir, 200)
+        ranked_l2: list[tuple[tuple[int, int], dict[str, Any]]] = []
+        for path in l2_files:
+            entry = self.read_l2_summary(path.stem)
             if entry:
-                relevant_l2.append(entry)
+                ranked_l2.append((score(entry, path), entry))
 
+        ranked_l3.sort(key=lambda item: item[0], reverse=True)
+        ranked_l2.sort(key=lambda item: item[0], reverse=True)
         return {
-            "l3_decisions": relevant_l3[-20:],
-            "l2_summaries": relevant_l2[-10:],
-            "total_l3": len(relevant_l3),
-            "total_l2": len(relevant_l2),
+            "l3_decisions": [entry for _, entry in ranked_l3[:20]],
+            "l2_summaries": [entry for _, entry in ranked_l2[:10]],
+            "total_l3": total_l3,
+            "total_l2": total_l2,
+            "scan_limited": total_l3 > 200 or total_l2 > 200,
         }
