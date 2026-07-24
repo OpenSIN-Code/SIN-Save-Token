@@ -118,6 +118,10 @@ function isBroadGrep(ti) {
   if (typeof p !== 'string') return true;
   if (p.endsWith('/')) return true;
   const base = path.basename(p);
+  // Extensionless build files are concrete files, not directories.
+  if (new Set(['Makefile', 'Dockerfile', 'Jenkinsfile', 'Procfile']).has(base)) {
+    return false;
+  }
   // No dot in the basename → almost certainly a directory (src, lib, hooks).
   return !base.includes('.');
 }

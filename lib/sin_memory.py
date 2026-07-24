@@ -6,15 +6,55 @@ L2: verdichtete Zusammenfassungen pro Task/Topic
 L3: dauerhafte, übergreifende Synthese (verifizierte Entscheidungen)
 """
 
+import fcntl
 import hashlib
+import heapq
 import json
+import os
+import re
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 
 ZERO_HASH = "0" * 64
+IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
+
+
+def _safe_identifier(value: str, field: str) -> str:
+    if (
+        not isinstance(value, str)
+        or value in {".", ".."}
+        or IDENTIFIER_PATTERN.fullmatch(value) is None
+    ):
+        raise ValueError(
+            f"{field} must contain only letters, digits, dot, underscore, or hyphen"
+        )
+    return value
+
+
+def _reject_symlink(path: Path) -> None:
+    if path.is_symlink():
+        raise ValueError(f"memory path must not be a symbolic link: {path.name}")
+
+
+def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
+    _reject_symlink(path)
+    temporary = path.with_name(
+        f".{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
+    )
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            json.dump(value, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.chmod(0o600)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def sha256_text(text: str) -> str:
@@ -49,48 +89,72 @@ class MemoryStore:
         event_type: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
+        task_id = _safe_identifier(task_id, "task_id")
         events_file = self.l1_dir / f"{task_id}.jsonl"
+        _reject_symlink(events_file)
+        lock_file = self.l1_dir / f".{task_id}.lock"
 
-        existing = []
-        if events_file.exists():
-            with open(events_file, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        existing.append(json.loads(line))
+        with lock_file.open("a+", encoding="utf-8") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                existing: list[dict[str, Any]] = []
+                if events_file.exists():
+                    with events_file.open(encoding="utf-8") as handle:
+                        for line in handle:
+                            line = line.strip()
+                            if line:
+                                existing.append(json.loads(line))
 
-        sequence = len(existing) + 1
-        previous_hash = existing[-1]["event_hash"] if existing else ZERO_HASH
-
-        material = {
-            "sequence": sequence,
-            "type": event_type,
-            "timestamp": utc_now(),
-            "payload": payload,
-            "previous_hash": previous_hash,
-        }
-
-        event = {
-            **material,
-            "event_hash": sha256_text(json.dumps(material, sort_keys=True, separators=(",", ":"))),
-        }
-
-        with open(events_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
-
-        return event
+                sequence = len(existing) + 1
+                previous_hash = (
+                    existing[-1]["event_hash"] if existing else ZERO_HASH
+                )
+                material = {
+                    "sequence": sequence,
+                    "type": event_type,
+                    "timestamp": utc_now(),
+                    "payload": payload,
+                    "previous_hash": previous_hash,
+                }
+                event = {
+                    **material,
+                    "event_hash": sha256_text(
+                        json.dumps(
+                            material, sort_keys=True, separators=(",", ":")
+                        )
+                    ),
+                }
+                with events_file.open("a", encoding="utf-8") as handle:
+                    handle.write(
+                        json.dumps(
+                            event, ensure_ascii=False, separators=(",", ":")
+                        ) + "\n"
+                    )
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                return event
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
     def read_l1_events(self, task_id: str) -> list[dict[str, Any]]:
+        task_id = _safe_identifier(task_id, "task_id")
         events_file = self.l1_dir / f"{task_id}.jsonl"
+        _reject_symlink(events_file)
         if not events_file.exists():
             return []
-        events = []
-        with open(events_file, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    events.append(json.loads(line))
-        return events
+        lock_file = self.l1_dir / f".{task_id}.lock"
+        with lock_file.open("a+", encoding="utf-8") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+            try:
+                events: list[dict[str, Any]] = []
+                with events_file.open(encoding="utf-8") as handle:
+                    for line in handle:
+                        line = line.strip()
+                        if line:
+                            events.append(json.loads(line))
+                return events
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
     # ─── L2: Compressed Summaries ───────────────────────────────────────
 
@@ -102,6 +166,7 @@ class MemoryStore:
         source_tasks: Optional[list[str]] = None,
         confidence: str = "draft",
     ) -> dict[str, Any]:
+        topic = _safe_identifier(topic, "topic")
         entry = {
             "schema_version": 1,
             "level": "L2",
@@ -115,20 +180,24 @@ class MemoryStore:
         }
 
         entry_file = self.l2_dir / f"{topic}.json"
-        with open(entry_file, "w", encoding="utf-8") as f:
-            json.dump(entry, f, indent=2, ensure_ascii=False)
+        _atomic_write_json(entry_file, entry)
 
         return entry
 
     def read_l2_summary(self, topic: str) -> Optional[dict[str, Any]]:
+        topic = _safe_identifier(topic, "topic")
         entry_file = self.l2_dir / f"{topic}.json"
+        _reject_symlink(entry_file)
         if not entry_file.exists():
             return None
         with open(entry_file, encoding="utf-8") as f:
             return json.load(f)
 
     def list_l2_topics(self) -> list[str]:
-        return [f.stem for f in self.l2_dir.glob("*.json")]
+        return sorted(
+            f.stem for f in self.l2_dir.glob("*.json")
+            if f.is_file() and not f.is_symlink()
+        )
 
     def search_l2(self, query: str) -> list[dict[str, Any]]:
         query_lower = query.lower()
@@ -149,6 +218,7 @@ class MemoryStore:
         evidence: Optional[list[str]] = None,
         source_tasks: Optional[list[str]] = None,
     ) -> dict[str, Any]:
+        decision_id = _safe_identifier(decision_id, "decision_id")
         entry = {
             "schema_version": 1,
             "level": "L3",
@@ -162,20 +232,24 @@ class MemoryStore:
         }
 
         entry_file = self.l3_dir / f"{decision_id}.json"
-        with open(entry_file, "w", encoding="utf-8") as f:
-            json.dump(entry, f, indent=2, ensure_ascii=False)
+        _atomic_write_json(entry_file, entry)
 
         return entry
 
     def read_l3_decision(self, decision_id: str) -> Optional[dict[str, Any]]:
+        decision_id = _safe_identifier(decision_id, "decision_id")
         entry_file = self.l3_dir / f"{decision_id}.json"
+        _reject_symlink(entry_file)
         if not entry_file.exists():
             return None
         with open(entry_file, encoding="utf-8") as f:
             return json.load(f)
 
     def list_l3_decisions(self) -> list[str]:
-        return [f.stem for f in self.l3_dir.glob("*.json")]
+        return sorted(
+            f.stem for f in self.l3_dir.glob("*.json")
+            if f.is_file() and not f.is_symlink()
+        )
 
     def search_l3(self, query: str) -> list[dict[str, Any]]:
         query_lower = query.lower()
@@ -239,21 +313,46 @@ class MemoryStore:
     # ─── Context for Codex ──────────────────────────────────────────────
 
     def context_for_task(self, task: dict[str, Any]) -> dict[str, Any]:
-        relevant_l3 = []
-        for did in self.list_l3_decisions():
-            entry = self.read_l3_decision(did)
+        task_text = json.dumps(task, ensure_ascii=False, sort_keys=True).lower()
+        query_terms = set(re.findall(r"[a-z0-9_]{3,}", task_text))
+
+        def recent_files(directory: Path, limit: int) -> tuple[list[Path], int]:
+            candidates = [
+                path for path in directory.glob("*.json")
+                if path.is_file() and not path.is_symlink()
+            ]
+            selected = heapq.nlargest(
+                limit,
+                candidates,
+                key=lambda path: path.stat().st_mtime_ns,
+            )
+            return selected, len(candidates)
+
+        def score(entry: dict[str, Any], path: Path) -> tuple[int, int]:
+            text = json.dumps(entry, ensure_ascii=False, sort_keys=True).lower()
+            overlap = sum(1 for term in query_terms if term in text)
+            return overlap, path.stat().st_mtime_ns
+
+        l3_files, total_l3 = recent_files(self.l3_dir, 200)
+        ranked_l3: list[tuple[tuple[int, int], dict[str, Any]]] = []
+        for path in l3_files:
+            entry = self.read_l3_decision(path.stem)
             if entry and entry.get("status") == "accepted":
-                relevant_l3.append(entry)
+                ranked_l3.append((score(entry, path), entry))
 
-        relevant_l2 = []
-        for topic in self.list_l2_topics():
-            entry = self.read_l2_summary(topic)
+        l2_files, total_l2 = recent_files(self.l2_dir, 200)
+        ranked_l2: list[tuple[tuple[int, int], dict[str, Any]]] = []
+        for path in l2_files:
+            entry = self.read_l2_summary(path.stem)
             if entry:
-                relevant_l2.append(entry)
+                ranked_l2.append((score(entry, path), entry))
 
+        ranked_l3.sort(key=lambda item: item[0], reverse=True)
+        ranked_l2.sort(key=lambda item: item[0], reverse=True)
         return {
-            "l3_decisions": relevant_l3[-20:],
-            "l2_summaries": relevant_l2[-10:],
-            "total_l3": len(relevant_l3),
-            "total_l2": len(relevant_l2),
+            "l3_decisions": [entry for _, entry in ranked_l3[:20]],
+            "l2_summaries": [entry for _, entry in ranked_l2[:10]],
+            "total_l3": total_l3,
+            "total_l2": total_l2,
+            "scan_limited": total_l3 > 200 or total_l2 > 200,
         }

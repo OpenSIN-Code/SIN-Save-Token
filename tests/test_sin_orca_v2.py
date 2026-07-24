@@ -639,6 +639,7 @@ class TestArtifactProtocol(unittest.TestCase):
             "task_hash": "sha256:checkpoint",
             "base_sha": "c" * 40,
             "role": "implementer",
+            "approval_mode": "continuous-preauthorized",
             "objective": "two steps",
             "allowed_paths": ["README.md"],
             "steps": [
@@ -710,13 +711,6 @@ class TestArtifactProtocol(unittest.TestCase):
             filename="checkpoint.json",
         )
         self.assertTrue(result["ok"])
-
-    def test_symbolic_link_artifact_is_rejected(self):
-            task_id=task_id,
-            actor="worker",
-            outbox=outbox,
-            filename="checkpoint.json",
-        )["ok"])
 
     def test_symbolic_link_artifact_is_rejected(self):
         task_id = "protocol-symlink-001"

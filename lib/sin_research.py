@@ -11,6 +11,7 @@ Phasen:
 """
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -118,18 +119,21 @@ class ResearchPipeline:
                 sq["synthesis"] = answer
                 sq["evidence"] = evidence
 
-                for ev in evidence:
+                source_ids: list[str] = []
+                for index, ev in enumerate(evidence, start=1):
+                    source_id = f"{subquestion_id}-ev-{index}"
                     self.citations.add_source(
-                        source_id=f"{subquestion_id}-ev-{len(sq['evidence'])}",
+                        source_id=source_id,
                         path=ev.get("path", ""),
                         content_sha256=ev.get("content_sha256", ""),
                         lines=ev.get("lines"),
                     )
+                    source_ids.append(source_id)
 
                 self.citations.add_claim(
                     claim_id=subquestion_id,
                     text=answer,
-                    source_ids=[f"{subquestion_id}-ev-{i}" for i in range(len(evidence))],
+                    source_ids=source_ids,
                     confidence="stated",
                 )
                 break
@@ -148,7 +152,21 @@ class ResearchPipeline:
         question: str,
         parent_id: Optional[str] = None,
     ) -> dict[str, Any]:
-        new_id = f"sq-{len(plan['subquestions']) + 1:02d}"
+        existing_ids = {
+            str(item.get("id", ""))
+            for item in plan.get("subquestions", [])
+            if isinstance(item, dict)
+        }
+        numeric_ids = [
+            int(match.group(1))
+            for existing_id in existing_ids
+            if (match := re.fullmatch(r"sq-(\d+)", existing_id))
+        ]
+        next_number = max(numeric_ids, default=0) + 1
+        new_id = f"sq-{next_number:02d}"
+        while new_id in existing_ids:
+            next_number += 1
+            new_id = f"sq-{next_number:02d}"
         new_sq = {
             "id": new_id,
             "question": question,

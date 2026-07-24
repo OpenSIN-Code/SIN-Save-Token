@@ -225,9 +225,18 @@ def _load_config(task_id: str | None = None) -> dict[str, Any]:
         root = Path(task["repository_root"]).expanduser().resolve()
     config_path = root / "config" / "orca-orchestrator.json"
     if config_path.is_file():
-        return json.loads(
-            config_path.read_text(encoding="utf-8")
-        )
+        try:
+            value = json.loads(config_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise RuntimeError(
+                f"invalid orchestrator config {config_path}: "
+                f"line {error.lineno}, column {error.colno}"
+            ) from error
+        if not isinstance(value, dict):
+            raise RuntimeError(
+                f"invalid orchestrator config {config_path}: root must be an object"
+            )
+        return value
     return {}
 
 
@@ -522,6 +531,7 @@ def _cmd_dispatch(args: argparse.Namespace) -> int:
         parent_terminal=args.parent_terminal,
         parent_task_id=args.parent_task_id,
         allow_child_delegation=args.allow_child_delegation,
+        approval_mode=args.approval_mode,
         simone_task_id=args.simone_task_id,
     )
 
@@ -656,7 +666,7 @@ def _cmd_notify(args: argparse.Namespace) -> int:
 
     message = (
         f"SIN_CALLBACK task={args.task_id} actor={args.actor} type={args.type} "
-        f"step={json.dumps(step_id or 'none', ensure_ascii=False)} "
+        f"step={step_id or 'none'} "
         f"summary={json.dumps(summary, ensure_ascii=False)} "
         f"changed={json.dumps(rendered_changed, ensure_ascii=False)} "
         f"verify={json.dumps(verify or 'unknown', ensure_ascii=False)} "
@@ -1468,7 +1478,8 @@ def _cmd_sync_simone(args: argparse.Namespace) -> int:
         simone_task_id=args.simone_task_id,
         force=True,
     )
-    assert isinstance(result, dict)
+    if not isinstance(result, dict):
+        raise RuntimeError("Simone sync returned a non-object result")
     print(json.dumps(result, indent=2))
     return 0 if result.get("ok") is True else 1
 
@@ -1561,6 +1572,11 @@ def main() -> int:
     p.add_argument("--parent-terminal")
     p.add_argument("--parent-task-id")
     p.add_argument("--allow-child-delegation", action="store_true")
+    p.add_argument(
+        "--approval-mode",
+        choices=["continuous-preauthorized", "stepwise"],
+        default="continuous-preauthorized",
+    )
     p.add_argument("--simone-task-id")
 
     p = sub.add_parser("notify", help="Push a worker callback to its parent terminal")

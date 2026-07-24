@@ -55,25 +55,73 @@ def run_git(
     return process.stdout.strip()
 
 
-def terminal_handles(value: Any) -> list[str]:
-    handles: list[str] = []
+TERMINAL_HANDLE_KEYS = {
+    "handle", "terminalHandle", "terminal_handle", "terminalId", "terminal_id",
+}
+
+
+def terminal_records(value: Any) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
     if isinstance(value, dict):
-        for key, child in value.items():
-            if key in {
-                "handle",
-                "terminalHandle",
-                "terminal_handle",
-                "terminalId",
-                "terminal_id",
-            } and isinstance(child, (str, int)):
-                rendered = str(child).strip()
-                if rendered:
-                    handles.append(rendered)
-            handles.extend(terminal_handles(child))
+        handle = next(
+            (
+                str(value[key]).strip()
+                for key in TERMINAL_HANDLE_KEYS
+                if key in value
+                and isinstance(value[key], (str, int))
+                and str(value[key]).strip()
+            ),
+            None,
+        )
+        if handle:
+            records.append({
+                "handle": handle,
+                "title": str(value.get("title") or "").strip(),
+                "worktree_path": str(
+                    value.get("worktreePath")
+                    or value.get("worktree_path")
+                    or ""
+                ).strip(),
+            })
+        for child in value.values():
+            records.extend(terminal_records(child))
     elif isinstance(value, list):
         for child in value:
-            handles.extend(terminal_handles(child))
-    return list(dict.fromkeys(handles))
+            records.extend(terminal_records(child))
+
+    unique: dict[str, dict[str, str]] = {}
+    for record in records:
+        unique.setdefault(record["handle"], record)
+    return list(unique.values())
+
+
+def terminal_handles(value: Any) -> list[str]:
+    return [record["handle"] for record in terminal_records(value)]
+
+
+def select_created_terminal(
+    value: Any,
+    *,
+    existing_handles: set[str],
+    expected_title: str,
+) -> str | None:
+    candidates = [
+        record for record in terminal_records(value)
+        if record["handle"] not in existing_handles
+    ]
+    exact = [
+        record["handle"] for record in candidates
+        if record.get("title") == expected_title
+    ]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        raise RuntimeError(
+            f"multiple new terminals have expected title {expected_title!r}"
+        )
+    if len(candidates) == 1:
+        return candidates[0]["handle"]
+    return None
 
 
 def resolve_parent_terminal(explicit: str | None) -> str:
@@ -357,17 +405,34 @@ def render_worker_prompt(
         )
     ) or "(none)"
 
-    approval_mode = "stepwise"
-    approval_rules = """Do not execute any ordered step before receiving `CODEX APPROVED. Step <step-id>` for that exact step.
-A checkpoint is evidence, never approval. Every checkpoint requires a stop and a fresh explicit approval."""
-    protocol_steps = """1. Before inspecting or changing repository files, send an `ack` callback directly to the parent terminal.
-2. Atomically write the checkpoint for the exact next step, emit its ready marker, send a `checkpoint` callback with that step ID, and stop.
-3. Wait for Codex approval naming the exact next step ID.
-4. Execute only that approved step.
-5. Prepare the next checkpoint and stop again before any later step.
+    approval_mode = str(
+        task.get("approval_mode", "continuous-preauthorized")
+    )
+    if approval_mode == "continuous-preauthorized":
+        approval_rules = """All listed ordered steps are approved in advance.
+Send the required acknowledgement and checkpoint callbacks, then continue automatically through the listed steps unless a stop condition or parent interrupt applies.
+A checkpoint is informational evidence, not a permission request.
+Never execute unlisted work or expand scope without a discovery or question callback."""
+        protocol_steps = """1. Before inspecting or changing repository files, send an `ack` callback directly to the parent terminal.
+2. Execute only the listed ordered steps in sequence.
+3. After each step, atomically write its required checkpoint, emit its ready marker, and send a `checkpoint` callback.
+4. Continue automatically after a healthy checkpoint; do not wait for routine parent approval.
+5. Stop immediately on discovery outside scope, material ambiguity, ownership conflict, unsafe action, repeated failure, or parent interrupt.
+6. Write the final report only after every listed step and required verification are complete.
+7. After the report exists, send a `done` callback directly to the parent terminal."""
+    elif approval_mode == "stepwise":
+        approval_rules = """Do not execute a protected step before receiving `CODEX APPROVED. Step <step-id>` for its explicit high-risk boundary.
+A checkpoint is evidence, not approval. Stop only at the explicit high-risk boundaries named in the task packet."""
+        protocol_steps = """1. Before inspecting or changing repository files, send an `ack` callback directly to the parent terminal.
+2. Execute preauthorized work until the next explicitly named high-risk boundary.
+3. Atomically write the boundary checkpoint, emit its ready marker, send a `checkpoint` callback, and stop.
+4. Wait for Codex approval naming the exact protected step ID.
+5. Execute only that approved protected step, then continue until the next named boundary.
 6. Stop immediately on discovery outside scope, material ambiguity, ownership conflict, unsafe action, repeated failure, or parent interrupt.
 7. Write the final report only after every listed step and required verification are complete.
 8. After the report exists, send a `done` callback directly to the parent terminal."""
+    else:
+        raise ValueError(f"unsupported approval mode: {approval_mode!r}")
 
     return f"""# SIN WORKER CONTRACT
 
@@ -478,10 +543,15 @@ def dispatch_task(
     parent_terminal: str | None = None,
     parent_task_id: str | None = None,
     allow_child_delegation: bool = False,
+    approval_mode: str = "continuous-preauthorized",
     simone_task_id: str | None = None,
 ) -> dict[str, Any]:
     if role not in {"explorer", "librarian", "implementer", "reviewer"}:
         raise ValueError(f"unsupported worker role: {role}")
+    if approval_mode not in {"continuous-preauthorized", "stepwise"}:
+        raise ValueError(
+            "approval_mode must be continuous-preauthorized or stepwise"
+        )
     if not isinstance(agent, str) or not agent.strip():
         raise ValueError("agent must be a non-empty string")
     agent = agent.strip()
@@ -596,7 +666,7 @@ def dispatch_task(
         "required_checkpoints": required_checkpoints,
         "allow_edits": allow_edits,
         "allow_child_delegation": bool(allow_child_delegation),
-        "approval_mode": "stepwise",
+        "approval_mode": approval_mode,
         "writer_reservation": writer_reservation,
     }
     if simone_task_id:
@@ -621,7 +691,7 @@ def dispatch_task(
                 "workspace_mode": "same-worktree",
                 "worktree_selector": selector,
                 "parent_terminal_handle": parent_handle,
-                "approval_mode": "stepwise",
+                "approval_mode": approval_mode,
                 "role": role,
             },
             actor="codex",
@@ -676,14 +746,12 @@ def dispatch_task(
                     ["terminal", "list", "--worktree", selector],
                     timeout=30,
                 )
-                candidates = [
-                    handle
-                    for handle in terminal_handles(after_result)
-                    if handle not in existing_handles
-                    and handle != parent_handle
-                ]
-                if candidates:
-                    terminal = candidates[-1]
+                terminal = select_created_terminal(
+                    after_result,
+                    existing_handles=existing_handles | {parent_handle},
+                    expected_title=task_id,
+                )
+                if terminal:
                     break
                 time.sleep(0.5)
 
@@ -756,7 +824,7 @@ def dispatch_task(
             "terminal_handle": terminal,
             "parent_terminal_handle": parent_handle,
             "same_worktree": True,
-            "approval_mode": "stepwise",
+            "approval_mode": approval_mode,
             "outbox_path": str(outbox),
         },
         actor="worker",
@@ -782,7 +850,7 @@ def dispatch_task(
         "parent_terminal": parent_handle,
         "worktree_path": str(root),
         "same_worktree": True,
-        "approval_mode": "stepwise",
+        "approval_mode": approval_mode,
         "artifact_outbox": str(outbox),
         "status": "awaiting-ack",
         "simone_task_id": task.get("simone_task_id"),

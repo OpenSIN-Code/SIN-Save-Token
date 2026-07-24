@@ -300,7 +300,7 @@ def _validate_report_protocol(
     if approval_mode == "stepwise":
         if approved_steps != expected_steps:
             raise ArtifactValidationError(
-                "worker report arrived before every protected step was approved in order"
+                "worker report arrived before every step was approved in order"
             )
     elif approval_mode == "continuous-preauthorized":
         if approved_steps:

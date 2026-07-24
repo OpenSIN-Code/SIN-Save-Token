@@ -211,8 +211,8 @@ class ExecutionProtocolOrderTests(unittest.TestCase):
         )
 
     def test_duplicate_ack_is_rejected(self) -> None:
-        self.callback("ack")
-        self.callback("ack")
+        for _ in range(2):
+            self.callback("ack")
         self.checkpoint(1, "first-ready", "S01")
         self.callback("checkpoint", step_id="S01")
         self.approve("S01")

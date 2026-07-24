@@ -32,19 +32,16 @@ with --write. Exit 0 ok, 2 not found, 1 usage error.
 import os
 import re
 import sys
-import importlib.util
-from importlib.machinery import SourceFileLoader
+import runpy
+from types import SimpleNamespace
 
 
 # --- reuse session-digest's adapters (same repo, sibling file) ----------------
 def _load_digest():
     here = os.path.dirname(os.path.abspath(__file__))
     path = os.path.join(here, "session-digest")
-    loader = SourceFileLoader("session_digest", path)
-    spec = importlib.util.spec_from_loader("session_digest", loader)
-    mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
-    return mod
+    namespace = runpy.run_path(path, run_name="session_digest")
+    return SimpleNamespace(**namespace)
 
 
 # --- memory dir discovery (mirrors memory-scope's probe order) ----------------

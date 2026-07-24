@@ -6,7 +6,6 @@ import json
 import os
 import selectors
 import shutil
-import signal
 import sqlite3
 import subprocess
 import time
@@ -215,22 +214,12 @@ class ProviderRuntime:
         spec: ProviderSpec,
         error: str,
     ) -> dict[str, Any]:
-        current = self._health(spec.name)
-        failures = (
-            int(current.get("consecutive_failures", 0))
-            + 1
-        )
-
-        opened_until = 0
-
-        if failures >= spec.failure_threshold:
-            opened_until = int(
-                time.time() + float(spec.cooldown_seconds)
-            )
-
+        now = int(time.time())
+        cooldown_until = int(now + float(spec.cooldown_seconds))
         connection = self._connect()
 
         try:
+            connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
                 INSERT INTO provider_health(
@@ -241,34 +230,46 @@ class ProviderRuntime:
                     last_success_at,
                     last_failure_at
                 )
-                VALUES (?, ?, ?, ?, NULL, ?)
+                VALUES (?, 1, ?, ?, NULL, ?)
                 ON CONFLICT(provider)
                 DO UPDATE SET
                     consecutive_failures =
-                        excluded.consecutive_failures,
-                    opened_until =
-                        excluded.opened_until,
-                    last_error =
-                        excluded.last_error,
-                    last_failure_at =
-                        excluded.last_failure_at
+                        provider_health.consecutive_failures + 1,
+                    opened_until = CASE
+                        WHEN provider_health.consecutive_failures + 1 >= ?
+                        THEN ?
+                        ELSE 0
+                    END,
+                    last_error = excluded.last_error,
+                    last_failure_at = excluded.last_failure_at
                 """,
                 (
                     spec.name,
-                    failures,
-                    opened_until,
+                    cooldown_until if spec.failure_threshold <= 1 else 0,
                     error[:2000],
-                    int(time.time()),
+                    now,
+                    spec.failure_threshold,
+                    cooldown_until,
                 ),
             )
+            row = connection.execute(
+                "SELECT consecutive_failures, opened_until "
+                "FROM provider_health WHERE provider = ?",
+                (spec.name,),
+            ).fetchone()
             connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
         finally:
             connection.close()
 
+        assert row is not None
         return {
-            "consecutive_failures": failures,
-            "opened_until": opened_until,
+            "consecutive_failures": int(row["consecutive_failures"]),
+            "opened_until": int(row["opened_until"]),
         }
+
 
     @staticmethod
     def _render_argv(
@@ -299,14 +300,11 @@ class ProviderRuntime:
     def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
         if process.poll() is not None:
             return
+        process.terminate()
         try:
-            os.killpg(process.pid, signal.SIGTERM)
             process.wait(timeout=1)
-        except (ProcessLookupError, subprocess.TimeoutExpired):
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+        except subprocess.TimeoutExpired:
+            process.kill()
             process.wait()
 
     @classmethod
@@ -326,7 +324,7 @@ class ProviderRuntime:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=environment,
-            start_new_session=True,
+            start_new_session=False,
         )
         if process.stdout is None or process.stderr is None:
             cls._terminate_process_group(process)
