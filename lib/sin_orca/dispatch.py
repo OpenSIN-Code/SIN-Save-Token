@@ -357,13 +357,29 @@ def render_worker_prompt(
         )
     ) or "(none)"
 
-    approval_mode = "stepwise"
-    approval_rules = """Do not execute any ordered step before receiving `CODEX APPROVED. Step <step-id>` for that exact step.
-A checkpoint is evidence, never approval. Every checkpoint requires a stop and a fresh explicit approval."""
-    protocol_steps = """1. Before inspecting or changing repository files, send an `ack` callback directly to the parent terminal.
+    approval_mode = str(
+        task.get("approval_mode", "continuous-preauthorized")
+    )
+    if approval_mode == "continuous-preauthorized":
+        approval_rules = """All listed ordered steps are approved in advance.
+Send the required acknowledgement and checkpoint callbacks, then continue automatically through the listed steps unless a stop condition or parent interrupt applies.
+A checkpoint is informational evidence, not a permission request.
+Never execute unlisted work or expand scope without a discovery or question callback."""
+        protocol_steps = """1. Before inspecting or changing repository files, send an `ack` callback directly to the parent terminal.
+2. Execute only the listed ordered steps in sequence.
+3. After each step, atomically write its required checkpoint, emit its ready marker, and send a `checkpoint` callback.
+4. Continue automatically after a healthy checkpoint; do not wait for routine parent approval.
+5. Stop immediately on discovery outside scope, material ambiguity, ownership conflict, unsafe action, repeated failure, or parent interrupt.
+6. Write the final report only after every listed step and required verification are complete.
+7. After the report exists, send a `done` callback directly to the parent terminal."""
+    else:
+        approval_rules = """Every listed step requires its own explicit approval.
+Do not execute a step before receiving `CODEX APPROVED. Step <step-id>` for that exact step.
+A checkpoint is evidence, not approval; after each checkpoint, stop and wait for the matching approval."""
+        protocol_steps = """1. Before inspecting or changing repository files, send an `ack` callback directly to the parent terminal.
 2. Atomically write the checkpoint for the exact next step, emit its ready marker, send a `checkpoint` callback with that step ID, and stop.
-3. Wait for Codex approval naming the exact next step ID.
-4. Execute only that approved step.
+3. Wait for Codex approval naming that exact next step ID.
+4. Execute only the approved step.
 5. Prepare the next checkpoint and stop again before any later step.
 6. Stop immediately on discovery outside scope, material ambiguity, ownership conflict, unsafe action, repeated failure, or parent interrupt.
 7. Write the final report only after every listed step and required verification are complete.
@@ -478,10 +494,15 @@ def dispatch_task(
     parent_terminal: str | None = None,
     parent_task_id: str | None = None,
     allow_child_delegation: bool = False,
+    approval_mode: str = "continuous-preauthorized",
     simone_task_id: str | None = None,
 ) -> dict[str, Any]:
     if role not in {"explorer", "librarian", "implementer", "reviewer"}:
         raise ValueError(f"unsupported worker role: {role}")
+    if approval_mode not in {"continuous-preauthorized", "stepwise"}:
+        raise ValueError(
+            "approval_mode must be continuous-preauthorized or stepwise"
+        )
     if not isinstance(agent, str) or not agent.strip():
         raise ValueError("agent must be a non-empty string")
     agent = agent.strip()
@@ -596,7 +617,7 @@ def dispatch_task(
         "required_checkpoints": required_checkpoints,
         "allow_edits": allow_edits,
         "allow_child_delegation": bool(allow_child_delegation),
-        "approval_mode": "stepwise",
+        "approval_mode": approval_mode,
         "writer_reservation": writer_reservation,
     }
     if simone_task_id:
@@ -621,7 +642,7 @@ def dispatch_task(
                 "workspace_mode": "same-worktree",
                 "worktree_selector": selector,
                 "parent_terminal_handle": parent_handle,
-                "approval_mode": "stepwise",
+                "approval_mode": approval_mode,
                 "role": role,
             },
             actor="codex",
@@ -756,7 +777,7 @@ def dispatch_task(
             "terminal_handle": terminal,
             "parent_terminal_handle": parent_handle,
             "same_worktree": True,
-            "approval_mode": "stepwise",
+            "approval_mode": approval_mode,
             "outbox_path": str(outbox),
         },
         actor="worker",
@@ -782,7 +803,7 @@ def dispatch_task(
         "parent_terminal": parent_handle,
         "worktree_path": str(root),
         "same_worktree": True,
-        "approval_mode": "stepwise",
+        "approval_mode": approval_mode,
         "artifact_outbox": str(outbox),
         "status": "awaiting-ack",
         "simone_task_id": task.get("simone_task_id"),

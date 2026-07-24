@@ -10,12 +10,9 @@ Phasen:
 6. Strukturierte Synthese für Codex
 """
 
-import json
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Optional
 
-from sin_citation import CitationManager, sha256_text, utc_now
+from sin_citation import CitationManager, utc_now
 
 
 class ResearchDecomposer:
@@ -118,18 +115,21 @@ class ResearchPipeline:
                 sq["synthesis"] = answer
                 sq["evidence"] = evidence
 
-                for ev in evidence:
+                source_ids = []
+                for index, ev in enumerate(evidence):
+                    source_id = f"{subquestion_id}-ev-{index}"
                     self.citations.add_source(
-                        source_id=f"{subquestion_id}-ev-{len(sq['evidence'])}",
+                        source_id=source_id,
                         path=ev.get("path", ""),
                         content_sha256=ev.get("content_sha256", ""),
                         lines=ev.get("lines"),
                     )
+                    source_ids.append(source_id)
 
                 self.citations.add_claim(
                     claim_id=subquestion_id,
                     text=answer,
-                    source_ids=[f"{subquestion_id}-ev-{i}" for i in range(len(evidence))],
+                    source_ids=source_ids,
                     confidence="stated",
                 )
                 break

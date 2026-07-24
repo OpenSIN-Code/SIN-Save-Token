@@ -215,22 +215,21 @@ class ProviderRuntime:
         spec: ProviderSpec,
         error: str,
     ) -> dict[str, Any]:
-        current = self._health(spec.name)
-        failures = (
-            int(current.get("consecutive_failures", 0))
-            + 1
-        )
-
-        opened_until = 0
-
-        if failures >= spec.failure_threshold:
-            opened_until = int(
-                time.time() + float(spec.cooldown_seconds)
-            )
-
         connection = self._connect()
 
         try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT consecutive_failures FROM provider_health WHERE provider = ?",
+                (spec.name,),
+            ).fetchone()
+            failures = (int(row[0]) if row is not None else 0) + 1
+            now = int(time.time())
+            opened_until = (
+                int(now + float(spec.cooldown_seconds))
+                if failures >= spec.failure_threshold
+                else 0
+            )
             connection.execute(
                 """
                 INSERT INTO provider_health(
@@ -244,24 +243,23 @@ class ProviderRuntime:
                 VALUES (?, ?, ?, ?, NULL, ?)
                 ON CONFLICT(provider)
                 DO UPDATE SET
-                    consecutive_failures =
-                        excluded.consecutive_failures,
-                    opened_until =
-                        excluded.opened_until,
-                    last_error =
-                        excluded.last_error,
-                    last_failure_at =
-                        excluded.last_failure_at
+                    consecutive_failures = excluded.consecutive_failures,
+                    opened_until = excluded.opened_until,
+                    last_error = excluded.last_error,
+                    last_failure_at = excluded.last_failure_at
                 """,
                 (
                     spec.name,
                     failures,
                     opened_until,
                     error[:2000],
-                    int(time.time()),
+                    now,
                 ),
             )
             connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
         finally:
             connection.close()
 

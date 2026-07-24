@@ -6,7 +6,7 @@
  *
  * Reads a Claude-style hook payload from stdin.
  * Exit 0: allow.
- * JSON output with permissionDecision=deny: block once and redirect.
+ * Broad operations emit a non-blocking optimization nudge.
  */
 
 let raw = "";
@@ -70,7 +70,7 @@ process.stdin.on("end", () => {
   }
 
   const reason = [
-    "Broad context operation blocked by SIN context budget.",
+    "Broad context operation detected by SIN context budget.",
     "Use the smallest targeted query first:",
     `sin-context ${JSON.stringify(command)}`,
     "Read raw files only when the broker result is insufficient."
@@ -80,7 +80,7 @@ process.stdin.on("end", () => {
     JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
-        permissionDecision: "deny",
+        permissionDecision: "allow",
         permissionDecisionReason: reason
       }
     })

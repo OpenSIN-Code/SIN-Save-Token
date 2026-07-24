@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import sys
 import unittest
 from pathlib import Path
 
@@ -62,13 +61,16 @@ class SameWorktreeContractTests(unittest.TestCase):
         self.assertIn('"terminal",\n            "create"', self.dispatch)
         self.assertIn('selector = f"path:{root}"', self.dispatch)
         self.assertNotIn("--setup", self.dispatch)
-        self.assertNotIn("continuous-preauthorized", self.dispatch)
-        self.assertNotIn("--approval-mode", self.cli)
+        self.assertIn("continuous-preauthorized", self.dispatch)
+        self.assertIn("--approval-mode", self.cli)
 
     def test_worker_prompt_requires_direct_callbacks(self) -> None:
         self.assertIn("sin-orca notify", self.dispatch)
         self.assertIn("Do not use sleep or polling", self.dispatch)
-        self.assertIn("Every checkpoint requires a stop", self.dispatch)
+        self.assertIn(
+            "Continue automatically after a healthy checkpoint",
+            self.dispatch,
+        )
         self.assertIn('root / ".sin-worker" / "tasks"', self.dispatch)
         self.assertIn("parent_terminal_handle", self.dispatch)
 

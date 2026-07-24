@@ -230,7 +230,7 @@ class TestE2EDispatch(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("Approval mode: stepwise", prompt)
-        self.assertIn("explicit high-risk boundary", prompt)
+        self.assertIn("Every listed step requires its own explicit approval", prompt)
 
     def test_discovery_callback_reaches_parent_and_event_log(self):
         dispatched = subprocess.run(
@@ -492,7 +492,7 @@ class TestE2EDispatch(unittest.TestCase):
             any(
                 command[:2] == ["terminal", "create"]
                 and command[command.index("--worktree") + 1]
-                == f"path:{self.repository}"
+                == f"path:{self.repository.resolve()}"
                 for command in commands
             )
         )
@@ -934,7 +934,7 @@ class TestE2EDispatch(unittest.TestCase):
             "baseline_ref": baseline_ref,
             "repository_root": str(repo),
             "repository_head_sha": base_sha,
-            "worktree_selector": f"path:{repo}",
+            "worktree_selector": f"path:{repo.resolve()}",
             "parent_terminal_handle": "parent-terminal",
             "artifact_outbox": ".sin-worker/tasks/review-terminal-001/outbox",
             "role": "implementer",
@@ -968,7 +968,7 @@ class TestE2EDispatch(unittest.TestCase):
                     "terminal_handle": "worker-terminal",
                     "parent_terminal_handle": "parent-terminal",
                     "worktree_path": str(repo),
-                    "worktree_selector": f"path:{repo}",
+                    "worktree_selector": f"path:{repo.resolve()}",
                     "same_worktree": True,
                     "outbox_path": str(
                         repo / ".sin-worker/tasks/review-terminal-001/outbox"

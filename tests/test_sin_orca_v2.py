@@ -16,19 +16,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 from sin_orca.state import (
     append_event,
-    atomic_write_json,
     events_path,
     load_task,
     read_events,
     rebuild_ledger,
     save_task,
-    sha256_json,
-    state_root,
     task_dir,
     ZERO_HASH,
 )
 from sin_orca.verification import (
-    actual_changed_files,
     controller_environment,
     path_allowed,
     redact_argv,
@@ -38,8 +34,6 @@ from sin_orca.verification import (
 from sin_orca.lease import (
     ControllerLease,
     LeaseConflictError,
-    LeaseLostError,
-    controller_identity,
 )
 from sin_orca.artifacts import (
     ArtifactValidationError,
@@ -703,6 +697,23 @@ class TestArtifactProtocol(unittest.TestCase):
         )["ok"])
 
         write_checkpoint("second-ready", 2, "S02")
+        with self.assertRaisesRegex(
+            ArtifactValidationError,
+            "before the preceding step approval",
+        ):
+            ingest_artifact(
+                task_id=task_id,
+                actor="worker",
+                outbox=outbox,
+                filename="checkpoint.json",
+            )
+
+        append_event(
+            task_id,
+            "codex.approved",
+            {"step_id": "S01", "instruction": "continue"},
+            actor="codex",
+        )
         result = ingest_artifact(
             task_id=task_id,
             actor="worker",
@@ -710,13 +721,6 @@ class TestArtifactProtocol(unittest.TestCase):
             filename="checkpoint.json",
         )
         self.assertTrue(result["ok"])
-
-    def test_symbolic_link_artifact_is_rejected(self):
-            task_id=task_id,
-            actor="worker",
-            outbox=outbox,
-            filename="checkpoint.json",
-        )["ok"])
 
     def test_symbolic_link_artifact_is_rejected(self):
         task_id = "protocol-symlink-001"
@@ -974,7 +978,7 @@ class TestControllerLease(unittest.TestCase):
         import time
 
         lease1 = ControllerLease(self.tmpdir, owner="controller-A")
-        lease_a = lease1.acquire(ttl_seconds=30)
+        lease1.acquire(ttl_seconds=30)
 
         # Manually expire the lease by writing an expired timestamp
         lease_data = json.loads(

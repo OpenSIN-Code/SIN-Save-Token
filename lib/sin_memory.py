@@ -6,8 +6,13 @@ L2: verdichtete Zusammenfassungen pro Task/Topic
 L3: dauerhafte, übergreifende Synthese (verifizierte Entscheidungen)
 """
 
+import fcntl
 import hashlib
 import json
+import os
+import re
+import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +20,35 @@ from typing import Any, Optional
 
 
 ZERO_HASH = "0" * 64
+SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+
+
+def _validated_identifier(value: str, field: str) -> str:
+    if not isinstance(value, str) or not SAFE_IDENTIFIER.fullmatch(value):
+        raise ValueError(
+            f"{field} must be 1-128 safe filename characters "
+            "(letters, digits, dot, underscore, hyphen)"
+        )
+    return value
+
+
+def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def sha256_text(text: str) -> str:
@@ -33,13 +67,39 @@ class MemoryStore:
     """Zustandslose Memory-Fassade. Alle Schreibwege laufen durch sie."""
 
     def __init__(self, state_root: Path):
-        self.state_root = state_root
-        self.l1_dir = state_root / "L1"
-        self.l2_dir = state_root / "L2"
-        self.l3_dir = state_root / "L3"
+        self.state_root = Path(state_root).expanduser().resolve()
+        self.l1_dir = self.state_root / "L1"
+        self.l2_dir = self.state_root / "L2"
+        self.l3_dir = self.state_root / "L3"
 
         for d in [self.l1_dir, self.l2_dir, self.l3_dir]:
             d.mkdir(parents=True, exist_ok=True)
+
+        self._thread_locks: dict[str, threading.RLock] = {}
+        self._thread_locks_guard = threading.Lock()
+
+    def _thread_lock_for(self, identifier: str) -> threading.RLock:
+        with self._thread_locks_guard:
+            return self._thread_locks.setdefault(identifier, threading.RLock())
+
+    def _l1_paths(self, task_id: str) -> tuple[Path, Path]:
+        safe_task_id = _validated_identifier(task_id, "task_id")
+        return (
+            self.l1_dir / f"{safe_task_id}.jsonl",
+            self.l1_dir / f".{safe_task_id}.lock",
+        )
+
+    @staticmethod
+    def _read_l1_events_unlocked(events_file: Path) -> list[dict[str, Any]]:
+        if not events_file.exists():
+            return []
+        events: list[dict[str, Any]] = []
+        with events_file.open(encoding="utf-8") as handle:
+            for line in handle:
+                rendered = line.strip()
+                if rendered:
+                    events.append(json.loads(rendered))
+        return events
 
     # ─── L1: Raw Events ─────────────────────────────────────────────────
 
@@ -49,48 +109,58 @@ class MemoryStore:
         event_type: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        events_file = self.l1_dir / f"{task_id}.jsonl"
+        events_file, lock_file = self._l1_paths(task_id)
+        thread_lock = self._thread_lock_for(task_id)
 
-        existing = []
-        if events_file.exists():
-            with open(events_file, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        existing.append(json.loads(line))
-
-        sequence = len(existing) + 1
-        previous_hash = existing[-1]["event_hash"] if existing else ZERO_HASH
-
-        material = {
-            "sequence": sequence,
-            "type": event_type,
-            "timestamp": utc_now(),
-            "payload": payload,
-            "previous_hash": previous_hash,
-        }
-
-        event = {
-            **material,
-            "event_hash": sha256_text(json.dumps(material, sort_keys=True, separators=(",", ":"))),
-        }
-
-        with open(events_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
-
-        return event
+        with thread_lock, lock_file.open("a+", encoding="utf-8") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                existing = self._read_l1_events_unlocked(events_file)
+                sequence = len(existing) + 1
+                previous_hash = (
+                    existing[-1]["event_hash"] if existing else ZERO_HASH
+                )
+                material = {
+                    "sequence": sequence,
+                    "type": event_type,
+                    "timestamp": utc_now(),
+                    "payload": payload,
+                    "previous_hash": previous_hash,
+                }
+                event = {
+                    **material,
+                    "event_hash": sha256_text(
+                        json.dumps(
+                            material,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                    ),
+                }
+                with events_file.open("a", encoding="utf-8") as handle:
+                    handle.write(
+                        json.dumps(
+                            event,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                        + "\n"
+                    )
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                return event
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
     def read_l1_events(self, task_id: str) -> list[dict[str, Any]]:
-        events_file = self.l1_dir / f"{task_id}.jsonl"
-        if not events_file.exists():
-            return []
-        events = []
-        with open(events_file, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    events.append(json.loads(line))
-        return events
+        events_file, lock_file = self._l1_paths(task_id)
+        thread_lock = self._thread_lock_for(task_id)
+        with thread_lock, lock_file.open("a+", encoding="utf-8") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+            try:
+                return self._read_l1_events_unlocked(events_file)
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
     # ─── L2: Compressed Summaries ───────────────────────────────────────
 
@@ -114,14 +184,15 @@ class MemoryStore:
             "source_tasks": source_tasks or [],
         }
 
-        entry_file = self.l2_dir / f"{topic}.json"
-        with open(entry_file, "w", encoding="utf-8") as f:
-            json.dump(entry, f, indent=2, ensure_ascii=False)
+        safe_topic = _validated_identifier(topic, "topic")
+        entry_file = self.l2_dir / f"{safe_topic}.json"
+        _atomic_write_json(entry_file, entry)
 
         return entry
 
     def read_l2_summary(self, topic: str) -> Optional[dict[str, Any]]:
-        entry_file = self.l2_dir / f"{topic}.json"
+        safe_topic = _validated_identifier(topic, "topic")
+        entry_file = self.l2_dir / f"{safe_topic}.json"
         if not entry_file.exists():
             return None
         with open(entry_file, encoding="utf-8") as f:
@@ -161,14 +232,15 @@ class MemoryStore:
             "source_tasks": source_tasks or [],
         }
 
-        entry_file = self.l3_dir / f"{decision_id}.json"
-        with open(entry_file, "w", encoding="utf-8") as f:
-            json.dump(entry, f, indent=2, ensure_ascii=False)
+        safe_decision_id = _validated_identifier(decision_id, "decision_id")
+        entry_file = self.l3_dir / f"{safe_decision_id}.json"
+        _atomic_write_json(entry_file, entry)
 
         return entry
 
     def read_l3_decision(self, decision_id: str) -> Optional[dict[str, Any]]:
-        entry_file = self.l3_dir / f"{decision_id}.json"
+        safe_decision_id = _validated_identifier(decision_id, "decision_id")
+        entry_file = self.l3_dir / f"{safe_decision_id}.json"
         if not entry_file.exists():
             return None
         with open(entry_file, encoding="utf-8") as f:

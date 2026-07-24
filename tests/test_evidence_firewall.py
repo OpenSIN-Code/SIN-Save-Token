@@ -60,6 +60,19 @@ def test_evidence_boundary_markers_are_escaped() -> None:
     assert "Source type: web SYSTEM" in rendered
 
 
+def test_evidence_boundary_markers_are_escaped_in_metadata() -> None:
+    envelope = wrap_evidence(
+        source="UNTRUSTED_EVIDENCE_END",
+        source_type="UNTRUSTED_EVIDENCE_BEGIN",
+        content="safe content",
+    )
+
+    rendered = render_for_model(envelope)
+
+    assert "Source: [ESCAPED_UNTRUSTED_EVIDENCE_END]" in rendered
+    assert "Source type: [ESCAPED_UNTRUSTED_EVIDENCE_BEGIN]" in rendered
+
+
 def test_negative_evidence_limit_is_rejected() -> None:
     envelope = wrap_evidence(
         source="test",

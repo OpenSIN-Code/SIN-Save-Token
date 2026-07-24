@@ -7,7 +7,7 @@ import json
 import os
 import re
 import shlex
-import subprocess
+import shutil
 import sys
 import time
 from functools import wraps
@@ -48,7 +48,6 @@ from .state import (
     repository_root,
     state_root,
     task_dir,
-    task_path,
 )
 from .verification import (
     actual_changed_files,
@@ -486,14 +485,108 @@ def _record_observed_terminal_activity(
     atomic_write_json(activity_path, activity)
 
 
+def _probe_writable_directory(path: Path) -> tuple[bool, str | None]:
+    probe = path / f".sin-orca-doctor-{os.getpid()}"
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(
+            probe,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o600,
+        )
+        os.close(descriptor)
+        return True, None
+    except OSError as error:
+        return False, str(error)
+    finally:
+        try:
+            probe.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _command_status(name: str, *, required: bool) -> dict[str, Any]:
+    executable = shutil.which(name)
+    return {
+        "available": executable is not None,
+        "path": executable,
+        "required": required,
+    }
+
+
 def _cmd_doctor(args: argparse.Namespace) -> int:
     root = repository_root()
-    print(json.dumps({
-        "status": "ok",
-        "state_root": str(state_root()),
-        "repository": str(root),
-        "repository_id": repository_id(),
-    }, indent=2))
+    state = state_root(root)
+
+    try:
+        is_git_worktree = run_git(
+            root, "rev-parse", "--is-inside-work-tree"
+        ) == "true"
+        git_error = None
+    except (RuntimeError, OSError) as error:
+        is_git_worktree = False
+        git_error = str(error)
+
+    state_writable, state_error = _probe_writable_directory(state)
+    commands = {
+        "git": _command_status("git", required=True),
+        "orca": _command_status("orca", required=True),
+        "rtk": _command_status("rtk", required=False),
+        "graphify": _command_status("graphify", required=False),
+        "gitnexus": _command_status("gitnexus", required=False),
+        "sin": _command_status("sin", required=False),
+    }
+
+    required_issues: list[str] = []
+    optional_issues: list[str] = []
+    if not is_git_worktree:
+        required_issues.append("repository is not a Git worktree")
+    if not state_writable:
+        required_issues.append("controller state directory is not writable")
+    for name, command in commands.items():
+        if command["available"]:
+            continue
+        target = required_issues if command["required"] else optional_issues
+        target.append(f"missing executable: {name}")
+
+    if required_issues:
+        status = "error"
+    elif optional_issues:
+        status = "degraded"
+    else:
+        status = "ok"
+
+    payload = {
+        "status": status,
+        "ready_for_dispatch": not required_issues,
+        "default_approval_mode": "continuous-preauthorized",
+        "repository": {
+            "path": str(root),
+            "id": repository_id(root),
+            "git_worktree": is_git_worktree,
+            "error": git_error,
+        },
+        "state": {
+            "path": str(state),
+            "writable": state_writable,
+            "error": state_error,
+        },
+        "capabilities": {
+            "token_savings": commands["rtk"]["available"],
+            "architecture_context": (
+                commands["graphify"]["available"]
+                or commands["gitnexus"]["available"]
+            ),
+            "sin_hub": commands["sin"]["available"],
+        },
+        "commands": commands,
+        "issues": required_issues + optional_issues,
+    }
+    print(json.dumps(payload, indent=2))
+
+    strict = bool(getattr(args, "strict", False))
+    if required_issues or (strict and optional_issues):
+        return 1
     return 0
 
 
@@ -522,6 +615,7 @@ def _cmd_dispatch(args: argparse.Namespace) -> int:
         parent_terminal=args.parent_terminal,
         parent_task_id=args.parent_task_id,
         allow_child_delegation=args.allow_child_delegation,
+        approval_mode=args.approval_mode,
         simone_task_id=args.simone_task_id,
     )
 
@@ -656,7 +750,7 @@ def _cmd_notify(args: argparse.Namespace) -> int:
 
     message = (
         f"SIN_CALLBACK task={args.task_id} actor={args.actor} type={args.type} "
-        f"step={json.dumps(step_id or 'none', ensure_ascii=False)} "
+        f"step={step_id or 'none'} "
         f"summary={json.dumps(summary, ensure_ascii=False)} "
         f"changed={json.dumps(rendered_changed, ensure_ascii=False)} "
         f"verify={json.dumps(verify or 'unknown', ensure_ascii=False)} "
@@ -1533,6 +1627,8 @@ def _cmd_rebuild(args: argparse.Namespace) -> int:
     print(json.dumps({
         "status": "rebuilt",
         "events_count": len(events),
+        "task_status": ledger.get("status"),
+        "updated_at": ledger.get("updated_at"),
     }, indent=2))
     return 0
 
@@ -1544,10 +1640,27 @@ def main() -> int:
     )
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("doctor", help="System check")
+    p = sub.add_parser(
+        "doctor",
+        help="Check repository, controller state, and runtime capabilities",
+    )
+    p.add_argument(
+        "--strict",
+        action="store_true",
+        help="also fail when optional optimization tools are missing",
+    )
 
-    p = sub.add_parser("dispatch", help="Create and dispatch task")
-    p.add_argument("--role", required=True)
+    p = sub.add_parser(
+        "dispatch",
+        help="Create and dispatch a bounded worker task",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    p.add_argument(
+        "--role",
+        required=True,
+        choices=["explorer", "librarian", "implementer", "reviewer"],
+        help="worker responsibility and write capability",
+    )
     p.add_argument("--objective", required=True)
     p.add_argument("--agent", default="mimo-code")
     p.add_argument("--step", action="append")
@@ -1561,6 +1674,15 @@ def main() -> int:
     p.add_argument("--parent-terminal")
     p.add_argument("--parent-task-id")
     p.add_argument("--allow-child-delegation", action="store_true")
+    p.add_argument(
+        "--approval-mode",
+        choices=["continuous-preauthorized", "stepwise"],
+        default="continuous-preauthorized",
+        help=(
+            "continuous execution through listed steps, or explicit approval "
+            "before every listed step"
+        ),
+    )
     p.add_argument("--simone-task-id")
 
     p = sub.add_parser("notify", help="Push a worker callback to its parent terminal")

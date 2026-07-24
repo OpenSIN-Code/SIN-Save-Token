@@ -109,11 +109,11 @@ class CitationManager:
         words2 = set(c2["text"].lower().split())
 
         if words1 & negations and not (words2 & negations):
-            overlap = len(words1 - negations & words2) / max(len(words1 | words2), 1)
+            overlap = len((words1 - negations) & words2) / max(len(words1 | words2), 1)
             return overlap > 0.5
 
         if words2 & negations and not (words1 & negations):
-            overlap = len(words1 & words2 - negations) / max(len(words1 | words2), 1)
+            overlap = len(words1 & (words2 - negations)) / max(len(words1 | words2), 1)
             return overlap > 0.5
 
         return False

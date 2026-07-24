@@ -233,7 +233,7 @@ def _validate_checkpoint_order(
     if approval_mode == "stepwise":
         if len(approved_steps) != index:
             raise ArtifactValidationError(
-                "checkpoint arrived before the preceding protected step approval"
+                "checkpoint arrived before the preceding step approval"
             )
     elif approval_mode == "continuous-preauthorized":
         if approved_steps:
@@ -300,7 +300,7 @@ def _validate_report_protocol(
     if approval_mode == "stepwise":
         if approved_steps != expected_steps:
             raise ArtifactValidationError(
-                "worker report arrived before every protected step was approved in order"
+                "worker report arrived before every step was approved in order"
             )
     elif approval_mode == "continuous-preauthorized":
         if approved_steps:

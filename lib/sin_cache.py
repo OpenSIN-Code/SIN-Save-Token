@@ -370,11 +370,24 @@ class SinCache:
         evidence_json = json.dumps(evidence or [], ensure_ascii=False)
 
         self.conn.execute(
-            "INSERT OR REPLACE INTO cache_entries "
+            "INSERT INTO cache_entries "
             "(cache_key, repository_id, repository_path, route, provider, normalized_query, "
             "semantic_signature, blob_hash, evidence_json, policy_hash, "
             "provider_version, created_at, last_accessed_at, hit_count) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0) "
+            "ON CONFLICT(cache_key) DO UPDATE SET "
+            "repository_id = excluded.repository_id, "
+            "repository_path = excluded.repository_path, "
+            "route = excluded.route, "
+            "provider = excluded.provider, "
+            "normalized_query = excluded.normalized_query, "
+            "semantic_signature = excluded.semantic_signature, "
+            "blob_hash = excluded.blob_hash, "
+            "evidence_json = excluded.evidence_json, "
+            "policy_hash = excluded.policy_hash, "
+            "provider_version = excluded.provider_version, "
+            "created_at = excluded.created_at, "
+            "last_accessed_at = excluded.last_accessed_at",
             (
                 key, repository_id, str(repository_path), route, provider, canonical_query(query),
                 canonical_query(query), blob_hash, evidence_json,

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Tests für sin_capability, sin_memory, sin_research, sin_citation, sin_review_context."""
 
-import json
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 from sin_capability import (
     load_capabilities, get_capability, list_capabilities,
-    build_tool_list, build_prompt_context,
+    build_tool_list,
 )
 from sin_memory import MemoryStore
 from sin_citation import CitationManager
@@ -63,6 +63,36 @@ class TestMemoryStore(unittest.TestCase):
         self.assertEqual(events[0]["sequence"], 1)
         self.assertEqual(events[1]["sequence"], 2)
         self.assertEqual(events[1]["previous_hash"], events[0]["event_hash"])
+
+    def test_concurrent_l1_appends_preserve_sequence_and_hash_chain(self):
+        def append(index: int) -> None:
+            self.store.append_l1_event(
+                "task-concurrent",
+                "worker.event",
+                {"index": index},
+            )
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            list(executor.map(append, range(32)))
+
+        events = self.store.read_l1_events("task-concurrent")
+        self.assertEqual([event["sequence"] for event in events], list(range(1, 33)))
+        self.assertEqual(events[0]["previous_hash"], "0" * 64)
+        for previous, current in zip(events, events[1:]):
+            self.assertEqual(current["previous_hash"], previous["event_hash"])
+
+    def test_memory_identifiers_reject_path_traversal(self):
+        unsafe = "../outside"
+        with self.assertRaises(ValueError):
+            self.store.append_l1_event(unsafe, "task.created", {})
+        with self.assertRaises(ValueError):
+            self.store.write_l2_summary(unsafe, "summary")
+        with self.assertRaises(ValueError):
+            self.store.read_l2_summary(unsafe)
+        with self.assertRaises(ValueError):
+            self.store.write_l3_decision(unsafe, "decision", "rationale")
+        with self.assertRaises(ValueError):
+            self.store.read_l3_decision(unsafe)
 
     def test_l2_summary_write_and_read(self):
         self.store.write_l2_summary("auth-flow", "Token refresh uses cookies")
@@ -138,6 +168,12 @@ class TestCitationManager(unittest.TestCase):
         contradictions = self.mgr.detect_contradictions()
         self.assertEqual(len(contradictions), 1)
 
+    def test_contradiction_detection_with_negated_claim_first(self):
+        self.mgr.add_claim("c1", "Token is not valid for 7 days", [])
+        self.mgr.add_claim("c2", "Token is valid for 7 days", [])
+        contradictions = self.mgr.detect_contradictions()
+        self.assertEqual(len(contradictions), 1)
+
     def test_no_contradiction(self):
         self.mgr.add_claim("c1", "Token uses cookies", [])
         self.mgr.add_claim("c2", "Session uses headers", [])
@@ -182,6 +218,35 @@ class TestResearchPipeline(unittest.TestCase):
 
         answered = [s for s in plan["subquestions"] if s["status"] == "answered"]
         self.assertEqual(len(answered), 1)
+
+    def test_answer_subquestion_tracks_every_evidence_source(self):
+        plan = self.pipeline.start_research("How does auth work?")
+        sq_id = plan["subquestions"][0]["id"]
+        evidence = [
+            {"path": "src/auth.ts", "content_sha256": "abc"},
+            {"path": "src/token.ts", "content_sha256": "def"},
+        ]
+
+        plan = self.pipeline.answer_subquestion(
+            plan,
+            sq_id,
+            "Auth uses JWT tokens",
+            evidence,
+        )
+
+        expected_ids = [f"{sq_id}-ev-0", f"{sq_id}-ev-1"]
+        self.assertEqual(
+            [entry["source_id"] for entry in plan["citations"]["entries"]],
+            expected_ids,
+        )
+        self.assertEqual(
+            plan["citations"]["claims"][0]["source_ids"],
+            expected_ids,
+        )
+        self.assertEqual(
+            len(self.pipeline.citations.evidence_refs_for_claim(sq_id)),
+            2,
+        )
 
     def test_add_dynamic_subquestion(self):
         plan = self.pipeline.start_research("How does auth work?")

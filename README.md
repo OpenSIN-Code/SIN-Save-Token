@@ -1,11 +1,21 @@
 # SIN-Save-Token
 
-**Der 4-Layer Token-Sparstandard für die gesamte SIN-Agenten-Flotte.**
-Ein Setup, das jeder Agent (Claude Code, opencode, Codex, Orca) **automatisch selbst nutzt** —
-niemand muss je einen Agenten daran erinnern.
+**Ein Effizienz- und Verlässlichkeitsstandard für die gesamte SIN-Agenten-Flotte.**
+Das Repository reduziert unnötigen Kontext und Shell-Output, verbindet diese
+Einsparungen aber mit überprüfbarer Delegation, sicherer Evidenzverarbeitung,
+geteiltem Memory und reproduzierbaren Qualitäts-Gates. Claude Code, opencode,
+Codex und Orca sollen den Standard automatisch nutzen, ohne manuelle Erinnerung.
 
-> Ziel: **so viele Tokens wie möglich sparen, ohne dass Agenten dümmer werden.**
-> Architekturentscheidungen sind durch Gates und vorhandene Evidenz begründet. Eine weltweite Bestplatzierung oder garantiert minimale Kosten gelten erst nach einem reproduzierbaren lokalen A/B-Benchmark als belegt.
+> Ziel: **weniger Tokens und Kosten bei mindestens gleicher Arbeitsqualität.**
+> Token-Reduktion ist kein Selbstzweck: Änderungen müssen nachvollziehbar,
+> testbar und gegen den tatsächlichen Repository-Zustand verifiziert bleiben.
+
+Der praktische Nutzen:
+
+- weniger wiederholte Repository-Lektüre durch Cache, Memory und gezielte Suche,
+- weniger Kontextverschwendung durch komprimierte Tool-Ausgaben,
+- sicherere Agentenarbeit durch Evidence Firewall, Scope-Gates und Hash-Ketten,
+- kontrollierte Parallelisierung über `sin-orca` mit direktem Rückkanal.
 
 ---
 
@@ -25,7 +35,15 @@ das Ein-Zeilen-Snippet unten macht es idempotent. Ab dann ist es **selbsterhalte
 
 Prüfen:
 ```bash
-./bin/install.sh --check     # Compliance-Report, exit 1 bei Regression
+./bin/install.sh --check       # Token-/Hook-Compliance
+./bin/sin-orca doctor --strict # Repository- und Runtime-Bereitschaft
+python3 -m pytest -q           # hermetische Regressionstests
+```
+
+Alternativ lässt sich die Orca-CLI ohne Launcher als Python-Modul starten:
+
+```bash
+PYTHONPATH=lib python3 -m sin_orca --help
 ```
 
 ---
@@ -43,17 +61,23 @@ gegen den Zustand bei Dispatch verglichen werden kann.
 
 Nur ein editierender Task darf gleichzeitig die externe Repository-Writer-
 Reservation besitzen. Parallel laufende Explorer, Reviewer und delegierte
-Kinder bleiben read-only. Jeder Schritt ist explizit freigabepflichtig:
+Kinder bleiben read-only. Neue Tasks verwenden standardmäßig
+`continuous-preauthorized`: Alle ausdrücklich gelisteten Schritte sind im Voraus
+freigegeben, Checkpoints bleiben sichtbar und der Worker stoppt bei Scope-
+Erweiterung, Unsicherheit, Konflikten oder Fehlern. Für riskante Abläufe kann
+`--approval-mode stepwise` gewählt werden; dann braucht jeder gelistete
+Schritt vor seiner Ausführung eine konkrete Freigabe.
+
+Standardablauf:
 
 ```text
 ack callback
+→ gelisteten Step ausführen
 → checkpoint artifact + checkpoint callback
-→ explizite Freigabe für genau einen Step
-→ Ausführung dieses Steps
-→ nächster Checkpoint und Stop
+→ automatisch mit dem nächsten gelisteten Step fortfahren
 → finaler Report + done callback
 → Controller-Verifikation
-→ unabhängiger Reviewer in neuem Terminal desselben Worktrees
+→ unabhängiger Reviewer im selben Worktree
 → Completion Manifest
 ```
 
@@ -93,6 +117,7 @@ Controller-Befehle:
 
 ```bash
 sin-orca status <task-id>
+# Nur bei --approval-mode stepwise:
 sin-orca approve <task-id> --step S01 --instruction "Nur S01 ausführen"
 sin-orca mailbox <task-id> --actor worker
 sin-orca verify <task-id>
