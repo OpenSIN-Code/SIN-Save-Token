@@ -11,6 +11,7 @@
 #   - session-start protocol (surface non-compliance as a warning)
 
 set -uo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 QUIET="${1:-}"
 FAIL=0
 say()  { [ "$QUIET" = "--quiet" ] || echo -e "$1"; }
@@ -97,6 +98,26 @@ if [ -f "$HOME/.claude/.claudeignore" ]; then
   pass ".claudeignore present (blocks node_modules/logs/graphs from context)"
 else
   warn ".claudeignore missing — add one to block node_modules/*.log/graphs (BEST-PRACTICES §7)"
+fi
+
+# ── Token optimizer stack: minimal code/output + explicit lossy input ──
+say "\n[L4+] token optimizer stack"
+STACK_CLI="$(command -v sin-token-stack 2>/dev/null || true)"
+[ -n "$STACK_CLI" ] || [ ! -x "$SCRIPT_DIR/sin-token-stack" ] || STACK_CLI="$SCRIPT_DIR/sin-token-stack"
+if [ -n "$STACK_CLI" ]; then
+  if command -v sin-token-stack >/dev/null 2>&1; then
+    pass "sin-token-stack on PATH"
+  else
+    pass "sin-token-stack available from repository bin/ (PATH link pending install)"
+  fi
+  STACK_JSON="$("$STACK_CLI" status --json 2>/dev/null || true)"
+  if [ -n "$STACK_JSON" ] && python3 -c 'import json,sys; d=json.load(sys.stdin); s=d.get("sources",[]); assert len(s) == 4 and all(x.get("assessed") for x in s)' <<<"$STACK_JSON" 2>/dev/null; then
+    pass "Ponytail/Caveman/pxpipe/Gigatoken manifest readable; all sources pinned to assessed commits"
+  else
+    fail "sin-token-stack status invalid — run bin/install.sh"
+  fi
+else
+  fail "sin-token-stack missing from PATH and repository bin/ — run bin/install.sh"
 fi
 
 # ── Global L1: rtk present + transparent rewrite path ────────────────

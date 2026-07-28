@@ -118,7 +118,8 @@ if [ "$MODE" != "--check" ]; then
   # dream (mimo /dream, ported): mines durable lessons from a session into shared
   # memory. Reuses session-digest's adapters, so it reads Claude + opencode.
   ln -sfn "$REPO_DIR/bin/dream" "$BIN_DEST/dream"
-  say "✅ memory-scope + session-digest + dream linked -> $BIN_DEST/"
+  ln -sfn "$REPO_DIR/bin/sin-token-stack" "$BIN_DEST/sin-token-stack"
+  say "✅ memory-scope + session-digest + dream + sin-token-stack linked -> $BIN_DEST/"
 
   if [ -f "$CC_SETTINGS" ] && command -v python3 >/dev/null 2>&1; then
     AGN="$REPO_DIR/hooks/agent-grep-nudge.js"
