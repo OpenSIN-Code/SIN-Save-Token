@@ -153,6 +153,38 @@ Release-Blocker. Ohne `--live` werden keine echten Orca-Agenten gestartet.
 | **L3 Memory** | Geteiltes Gedächtnis | claude-mem (Session) + **Cognee fleet** (Domain-Graph, multi-agent CLI) | kein Doppel-Spend |
 | **L4 Output** | Knappe Antworten | terse-Kontrakt in jeder Instruktionsdatei | Output-Tokens sind die teuersten |
 
+### Token Optimizer Stack: Ponytail + Caveman + pxpipe + Gigatoken
+
+`sin-token-stack` verbindet vier komplementäre Hebel ohne deren globale Hooks
+blind übereinanderzustapeln:
+
+- **Ponytail-Prinzipien** laufen als kleine, flotteweite Minimal-Code-Regel:
+  zuerst YAGNI, Wiederverwendung, Standardbibliothek, native Plattform und
+  vorhandene Abhängigkeiten; erst danach minimaler neuer Code.
+- **Caveman** verstärkt den bestehenden terse-Kontrakt. Wiederkehrende
+  Memory-Dateien werden nur explizit und mit Backup komprimiert:
+  `sin-token-stack memory-compress FILE --yes`.
+- **pxpipe** bleibt standardmäßig aus. Für große semantische Kontextmengen gibt
+  es `pxpipe-export` und einen isolierten `pxpipe-run`. Exakte IDs, Hashes,
+  Secrets, Patch-Anker und Protokollzustand bleiben Text. Sol benötigt bewusst
+  `--accept-lossy`.
+- **Gigatoken** ist ein expliziter, modellgebundener Hochleistungs-Tokenizer für
+  große Korpora, exakte Tokenmessung, Chunk-Planung und Paritätsbenchmarks. Es
+  läuft nicht automatisch bei API-Calls und ersetzt weder RTK noch den
+  serverseitigen Provider-Tokenizer.
+
+```bash
+sin-token-stack status
+sin-token-stack sync
+sin-token-stack token-count --tokenizer openai-community/gpt2 --chunk-size 120000 --chunk-overlap 4000 README.md docs/*.md
+sin-token-stack token-bench --tokenizer openai-community/gpt2 --validate-hf README.md
+sin-token-stack pxpipe-export --git
+OPENAI_API_KEY="${OPENAI_API_KEY}" sin-token-stack pxpipe-run --model gpt-5.6-sol --accept-lossy --route openai -- claude --model gpt-5.6-sol
+```
+
+Details, Sicherheitsgrenzen und Attribution:
+[`docs/TOKEN-OPTIMIZER-STACK.md`](docs/TOKEN-OPTIMIZER-STACK.md).
+
 **Layer-übergreifende Hebel (Session 3 & 4, alles gated/mandatory):**
 
 **[L0] Baseline-Messung + Modell-Routing** (`verify-tokens` [L0]-Gate):
