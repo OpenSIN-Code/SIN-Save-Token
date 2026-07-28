@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "managed_home": "~/.local/share/sin-save-token/upstream",
+  "upstreams": {
+    "ponytail": {
+      "url": "https://github.com/DietrichGebert/ponytail.git",
+      "license": "MIT",
+      "role": "minimal-code-policy",
+      "integration": "policy-adapter",
+      "assessed_commit": "16f29800fd2681bdf24f3eb4ccffe38be3baec6b"
+    },
+    "caveman": {
+      "url": "https://github.com/JuliusBrussee/caveman.git",
+      "license": "MIT",
+      "role": "output-and-memory-compression",
+      "integration": "policy-adapter-and-explicit-cli",
+      "assessed_commit": "0d95a81d35a9f2d123a5e9430d1cfc43d55f1bb0"
+    },
+    "pxpipe": {
+      "url": "https://github.com/teamchong/pxpipe.git",
+      "license": "MIT",
+      "role": "dense-input-image-compression",
+      "integration": "explicit-lossy-proxy-or-export",
+      "assessed_commit": "8a9175d55054048b88c0d29aee05231d765e67f2",
+      "npm_package": "pxpipe-proxy@0.10.0"
+    },
+    "gigatoken": {
+      "url": "https://github.com/marcelroed/gigatoken.git",
+      "license": "MIT",
+      "role": "high-throughput-exact-tokenization",
+      "integration": "explicit-model-bound-measurement-and-benchmark",
+      "assessed_commit": "0d9765fa7312af7534535e6315a5c49d74807b2a",
+      "python_package": "gigatoken==0.9.0",
+      "validation_package": "tokenizers==0.22.2",
+      "runtime_project": "runtime/gigatoken",
+      "validation_group": "validation"
+    }
+  },
+  "policy": {
+    "always_on": [
+      "minimal-solution-ladder",
+      "terse-decision-relevant-output"
+    ],
+    "explicit_only": [
+      "memory-file-rewrite",
+      "visual-context-compression",
+      "model-bound-token-measurement"
+    ],
+    "pxpipe": {
+      "default_mode": "off",
+      "validated_default_models": [
+        "claude-fable-5",
+        "gemini-3.6-flash"
+      ],
+      "lossy_opt_in_models": [
+        "gpt-5.6-sol",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "grok-4.5"
+      ],
+      "never_image": [
+        "secrets",
+        "credentials",
+        "hashes",
+        "opaque-identifiers",
+        "patch-anchors",
+        "exact-error-strings",
+        "byte-exact-protocol-state"
+      ]
+    },
+    "gigatoken": {
+      "default_mode": "off",
+      "require_explicit_tokenizer": true,
+      "never_assume_provider_parity": true,
+      "scope": [
+        "large-corpus-token-counting",
+        "chunk-budget-planning",
+        "tokenizer-parity-validation",
+        "tokenization-throughput-benchmarking"
+      ]
+    }
+  }
+}
