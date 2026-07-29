@@ -1,0 +1,11 @@
+# RTK is mandatory
+
+Always prefix every shell command with `rtk`.
+
+- `rtk git ...` instead of raw `git ...`
+- `rtk pytest ...` instead of raw `pytest ...`
+- `rtk curl ...` instead of raw `curl ...`
+- In command chains, prefix each command separately.
+- Use absolute paths; do not use `cd`.
+
+See `CLAUDE.md` and `AGENTS.md` for the repository-wide agent policy.
