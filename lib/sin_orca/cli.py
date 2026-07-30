@@ -62,6 +62,7 @@ from .web_callbacks import (
     callback_status,
     cancel_callback,
     open_callback,
+    resolve_callback_token,
     send_callback,
 )
 from .writer_reservation import release_writer, reservation_status
@@ -1679,9 +1680,18 @@ def _cmd_web_callback_bind(args: argparse.Namespace) -> int:
 
 
 def _cmd_web_callback_send(args: argparse.Namespace) -> int:
+    token = args.callback
+    if token is None:
+        if args.task_id is None or args.round is None:
+            raise ValueError("--task-id requires --round for callback resolution")
+        token = resolve_callback_token(
+            args.repo,
+            task_id=args.task_id,
+            round_number=args.round,
+        )
     result = send_callback(
         repository=args.repo,
-        token=args.callback,
+        token=token,
         final_status=args.status,
         summary=args.summary,
         changed=args.changed,
@@ -1873,7 +1883,10 @@ def main() -> int:
         help="Send ChatGPT Web completion to the exact originating OpenCode terminal",
     )
     p.add_argument("--repo", required=True)
-    p.add_argument("--callback", required=True)
+    selector = p.add_mutually_exclusive_group(required=True)
+    selector.add_argument("--callback")
+    selector.add_argument("--task-id")
+    p.add_argument("--round", type=int)
     p.add_argument("--status", required=True, choices=["done", "blocked", "failed"])
     p.add_argument("--summary", required=True)
     p.add_argument("--changed", action="append")

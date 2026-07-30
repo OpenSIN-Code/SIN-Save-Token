@@ -83,6 +83,73 @@ def callback_lock(repository: Path, token: str) -> Iterator[None]:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+def resolve_callback_token(
+    repository: str | Path,
+    *,
+    task_id: str,
+    round_number: int,
+) -> str:
+    """Resolve one repository-local callback without exposing its opaque token.
+
+    The task/round selector is intentionally exact and refuses ambiguity. It is
+    suitable for ChatGPT Web tool calls where an opaque capability value may be
+    treated as sensitive by the connector safety layer.
+    """
+    root = resolve_repository(repository)
+    rendered_task = task_id.strip()
+    if not TASK_PATTERN.fullmatch(rendered_task):
+        raise ValueError("invalid callback task ID")
+    if round_number < 1 or round_number > 500:
+        raise ValueError("callback round must be between 1 and 500")
+
+    matches: list[str] = []
+    for path in sorted(callback_directory(root).glob("*.json")):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        token = record.get("token")
+        if (
+            record.get("schema_version") == CALLBACK_SCHEMA_VERSION
+            and record.get("task_id") == rendered_task
+            and record.get("round") == round_number
+            and Path(str(record.get("repository_root", ""))).resolve() == root
+            and isinstance(token, str)
+            and TOKEN_PATTERN.fullmatch(token)
+        ):
+            matches.append(token)
+
+    if not matches:
+        raise RuntimeError(
+            f"no callback capability found for task {rendered_task} round {round_number}"
+        )
+
+    open_matches = [
+        token
+        for token in matches
+        if load_callback(root, token).get("status") == "open"
+    ]
+    if len(open_matches) == 1:
+        # A retry may coexist with an earlier cancelled capability for the same
+        # task/round. Only the unique live capability is eligible for dispatch.
+        return open_matches[0]
+    if len(open_matches) > 1:
+        raise RuntimeError(
+            f"ambiguous open callback capabilities for task {rendered_task} "
+            f"round {round_number}: " + ", ".join(open_matches)
+        )
+    if len(matches) == 1:
+        # Preserve one-shot replay diagnostics: resolving a sole sent capability
+        # lets send_callback return the precise already-sent error.
+        return matches[0]
+    raise RuntimeError(
+        f"ambiguous callback capabilities for task {rendered_task} round {round_number}: "
+        + ", ".join(matches)
+    )
+
+
 def load_callback(repository: Path, token: str) -> dict[str, Any]:
     path = callback_path(repository, token)
     if not path.is_file():
@@ -400,14 +467,21 @@ def _validate_task_id(task_id: str) -> str:
     return rendered
 
 
-def _command_template(repository: Path, token: str) -> str:
+def _command_template(
+    repository: Path,
+    *,
+    task_id: str,
+    round_number: int,
+) -> str:
     return shlex.join([
         "sin-orca",
         "web-callback-send",
         "--repo",
         str(repository),
-        "--callback",
-        token,
+        "--task-id",
+        task_id,
+        "--round",
+        str(round_number),
         "--status",
         "done",
         "--summary",
@@ -476,20 +550,29 @@ def open_callback(
         "round": round_number,
         "max_rounds": max_rounds,
         "record": str(path),
-        "callback_command_template": _command_template(root, token),
+        "callback_command_template": _command_template(
+            root,
+            task_id=task,
+            round_number=round_number,
+        ),
     }
 
 
 def _valid_chatgpt_url(value: str) -> str:
     rendered = value.strip()
     parsed = urlparse(rendered)
+    parts = [part for part in parsed.path.split("/") if part]
+    conversation_id = parts[1] if len(parts) >= 2 and parts[0] == "c" else ""
     if (
         parsed.scheme != "https"
         or parsed.hostname not in {"chatgpt.com", "www.chatgpt.com"}
-        or "/c/" not in parsed.path
+        or not conversation_id
+        or conversation_id.casefold().startswith("web:")
+        or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", conversation_id)
     ):
         raise ValueError(
-            "conversation URL must be an https://chatgpt.com conversation URL containing /c/"
+            "conversation URL must be a canonical https://chatgpt.com/c/<id> URL; "
+            "synthetic WEB aliases are not accepted"
         )
     return rendered
 

@@ -18,6 +18,7 @@ from sin_orca.web_callbacks import (  # noqa: E402
     callback_status,
     cancel_callback,
     open_callback,
+    resolve_callback_token,
     resolve_origin_session,
     resolve_origin_terminal,
     send_callback,
@@ -95,7 +96,11 @@ def test_open_binds_exact_terminal_and_session(tmp_path: Path) -> None:
     assert record["status"] == "open"
     assert record["repository_root"] == str(repository)
     assert Path(result["record"]).stat().st_mode & 0o777 == 0o600
-    assert "web-callback-send" in result["callback_command_template"]
+    template = result["callback_command_template"]
+    assert "web-callback-send" in template
+    assert "--task-id T-0020" in template
+    assert "--round 3" in template
+    assert result["callback"] not in template
 
 
 def test_multiple_opencode_terminals_require_explicit_handle(
@@ -329,13 +334,119 @@ def test_binding_rejects_non_conversation_chatgpt_url(tmp_path: Path) -> None:
             origin_session_id="ses_ABC123",
         )
 
-    with pytest.raises(ValueError, match="containing /c/"):
+    with pytest.raises(ValueError, match="canonical"):
         bind_callback(
             repository=repository,
             token=opened["callback"],
             page_id="page-123",
             conversation_url="https://chatgpt.com/",
         )
+
+    with pytest.raises(ValueError, match="synthetic WEB aliases"):
+        bind_callback(
+            repository=repository,
+            token=opened["callback"],
+            page_id="page-123",
+            conversation_url=(
+                "https://chatgpt.com/c/WEB:e4b50e11-47b2-40d7-beec-2cac6981ecdf"
+            ),
+        )
+
+
+def test_resolve_callback_token_by_exact_task_and_round(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    payload = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build · model",
+        lastOutputAt=100,
+    )
+    with patch("sin_orca.web_callbacks.run_orca", return_value=payload):
+        first = open_callback(
+            repository=repository,
+            task_id="T-0025",
+            origin_terminal="term-origin",
+            origin_session_id="ses_ABC123",
+            round_number=1,
+            max_rounds=2,
+        )
+        second = open_callback(
+            repository=repository,
+            task_id="T-0025",
+            origin_terminal="term-origin",
+            origin_session_id="ses_ABC123",
+            round_number=2,
+            max_rounds=2,
+        )
+
+    assert resolve_callback_token(
+        repository, task_id="T-0025", round_number=1
+    ) == first["callback"]
+    assert resolve_callback_token(
+        repository, task_id="T-0025", round_number=2
+    ) == second["callback"]
+
+
+def test_resolve_callback_token_prefers_unique_open_retry(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    payload = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build · model",
+        lastOutputAt=100,
+    )
+    with patch("sin_orca.web_callbacks.run_orca", return_value=payload):
+        cancelled = open_callback(
+            repository=repository,
+            task_id="T-0025",
+            origin_terminal="term-origin",
+            origin_session_id="ses_ABC123",
+            round_number=2,
+            max_rounds=2,
+        )
+        cancel_callback(
+            repository=repository,
+            token=cancelled["callback"],
+            reason="delegation UI unavailable before submission",
+        )
+        retry = open_callback(
+            repository=repository,
+            task_id="T-0025",
+            origin_terminal="term-origin",
+            origin_session_id="ses_ABC123",
+            round_number=2,
+            max_rounds=2,
+        )
+
+    assert resolve_callback_token(
+        repository, task_id="T-0025", round_number=2
+    ) == retry["callback"]
+
+
+def test_resolve_callback_token_refuses_ambiguity(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    payload = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build · model",
+        lastOutputAt=100,
+    )
+    with patch("sin_orca.web_callbacks.run_orca", return_value=payload):
+        for _ in range(2):
+            open_callback(
+                repository=repository,
+                task_id="T-0025",
+                origin_terminal="term-origin",
+                origin_session_id="ses_ABC123",
+                round_number=1,
+                max_rounds=2,
+            )
+
+    with pytest.raises(RuntimeError, match="ambiguous"):
+        resolve_callback_token(repository, task_id="T-0025", round_number=1)
 
 
 def test_dry_run_does_not_consume_callback(tmp_path: Path) -> None:
