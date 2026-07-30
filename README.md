@@ -132,6 +132,69 @@ Cancel gibt die Repository-Writer-Reservation wieder frei. `sleep`, blindes
 Terminal-Polling, Commits, Branches und zusätzliche Git-Worktrees sind für
 Worker verboten.
 
+### ChatGPT Web → laufende OpenCode-TUI
+
+`sin-orca` stellt zusätzlich einen capability-basierten Rückkanal für
+`sin-gpt-web` bereit. Vor der Browserdelegation wird ein zufälliges, ablaufendes
+Einmal-Token an das exakte Orca-Terminal der aufrufenden OpenCode-TUI gebunden.
+Die OpenCode-Session-ID dient als Korrelation, nicht als unsicherer Ersatz für
+das konkrete Terminalziel. Fehlt sie, korreliert die Runtime Orcas exakte
+`tabId`, `leafId`, `ptyId` und Worktree-Identität mit Orcas
+OpenCode-Provider-Session-Zuordnung. Sie liest dabei ausschließlich diese
+Struktur-IDs. Ist keine exakte Zuordnung möglich, wird nur eine eindeutig einzige
+Repository-Session akzeptiert; aus mehreren Sessions wird niemals anhand der
+Aktualitätszeit geraten.
+
+```bash
+sin-orca web-callback-open \
+  --repo "$REPO" \
+  --task-id "$TASK_ID" \
+  --origin-terminal "$ORIGIN_TERMINAL" \
+  --origin-session "$ORIGIN_SESSION" \
+  --ttl-minutes 1440 \
+  --round 1 --max-rounds 50
+
+sin-orca web-callback-bind \
+  --repo "$REPO" --callback "$CALLBACK" \
+  --page-id "$PAGE_ID" \
+  --conversation-url "$CHATGPT_CONVERSATION_URL" \
+  --profile OpenSIN
+```
+
+Nach Abschluss ruft ChatGPT Web den Rückkanal über den Mac-i9-Tunnel auf:
+
+```bash
+sin-orca web-callback-send \
+  --repo "$REPO" --callback "$CALLBACK" \
+  --status done \
+  --summary "Implementierung abgeschlossen" \
+  --changed "src/example.ts,tests/example.test.ts" \
+  --verify "Tests bestanden"
+```
+
+Erlaubte Terminalzustände sind `done`, `blocked` und `failed`. Vor dem Senden
+prüft die Runtime Token, Ablaufzeit, Replay, Repository-Zuordnung sowie, ob das
+exakte Terminal weiterhin verbunden und beschreibbar ist. Danach wird ein
+strukturiertes `SIN_GPT_WEB_CALLBACK` direkt in die ursprüngliche OpenCode-TUI
+eingefügt. Die Nachricht enthält Task, Status, Session-Korrelation,
+Verifikationszusammenfassung, ChatGPT-Page/URL und die verpflichtende nächste
+CEO-Loop-Aktion. OpenCode muss den Claim selbst verifizieren und darf ihn nicht
+blind als Completion akzeptieren.
+
+```bash
+sin-orca web-callback-status --repo "$REPO" --callback "$CALLBACK"
+sin-orca web-callback-send \
+  --repo "$REPO" --callback "$CALLBACK" \
+  --status blocked --summary "Externe Freigabe fehlt" --dry-run
+sin-orca web-callback-cancel \
+  --repo "$REPO" --callback "$CALLBACK" \
+  --reason "Browserdelegation vor dem Senden abgebrochen"
+```
+
+Die Callback-Datensätze liegen repository-lokal unter
+`.sin-gpt-web/callbacks/`, enthalten keine Transkripte oder Secrets und werden
+mit Verzeichnis-/Dateirechten `0700`/`0600` geschrieben.
+
 Lokale statische Gates und der echte Live-Smoke:
 
 ```bash

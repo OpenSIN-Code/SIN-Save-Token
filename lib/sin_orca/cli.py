@@ -57,6 +57,13 @@ from .verification import (
     validate_diff,
     validate_scope,
 )
+from .web_callbacks import (
+    bind_callback,
+    callback_status,
+    cancel_callback,
+    open_callback,
+    send_callback,
+)
 from .writer_reservation import release_writer, reservation_status
 
 READY_PATTERN = re.compile(r"SIN_ARTIFACT_READY\s+(\S+\.json)")
@@ -1643,6 +1650,65 @@ def _cmd_rebuild(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_web_callback_open(args: argparse.Namespace) -> int:
+    result = open_callback(
+        repository=args.repo,
+        task_id=args.task_id,
+        origin_terminal=args.origin_terminal,
+        origin_session_id=args.origin_session,
+        ttl_minutes=args.ttl_minutes,
+        round_number=args.round,
+        max_rounds=args.max_rounds,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_web_callback_bind(args: argparse.Namespace) -> int:
+    result = bind_callback(
+        repository=args.repo,
+        token=args.callback,
+        page_id=args.page_id,
+        conversation_url=args.conversation_url,
+        title=args.title,
+        profile=args.profile,
+        chatgpt_project=args.chatgpt_project,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_web_callback_send(args: argparse.Namespace) -> int:
+    result = send_callback(
+        repository=args.repo,
+        token=args.callback,
+        final_status=args.status,
+        summary=args.summary,
+        changed=args.changed,
+        verification=args.verify,
+        next_action=args.next_action,
+        dry_run=args.dry_run,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_web_callback_status(args: argparse.Namespace) -> int:
+    result = callback_status(repository=args.repo, token=args.callback)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_web_callback_cancel(args: argparse.Namespace) -> int:
+    result = cancel_callback(
+        repository=args.repo,
+        token=args.callback,
+        reason=args.reason,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="sin-orca",
@@ -1778,6 +1844,58 @@ def main() -> int:
     p = sub.add_parser("rebuild", help="Rebuild ledger")
     p.add_argument("task_id")
 
+    p = sub.add_parser(
+        "web-callback-open",
+        help="Create an expiring one-shot ChatGPT Web callback capability",
+    )
+    p.add_argument("--repo", required=True)
+    p.add_argument("--task-id", required=True)
+    p.add_argument("--origin-terminal")
+    p.add_argument("--origin-session")
+    p.add_argument("--ttl-minutes", type=int, default=24 * 60)
+    p.add_argument("--round", type=int, default=1)
+    p.add_argument("--max-rounds", type=int, default=50)
+
+    p = sub.add_parser(
+        "web-callback-bind",
+        help="Bind an open callback to its ChatGPT page and conversation URL",
+    )
+    p.add_argument("--repo", required=True)
+    p.add_argument("--callback", required=True)
+    p.add_argument("--page-id", required=True)
+    p.add_argument("--conversation-url", required=True)
+    p.add_argument("--title")
+    p.add_argument("--profile", default="OpenSIN")
+    p.add_argument("--chatgpt-project")
+
+    p = sub.add_parser(
+        "web-callback-send",
+        help="Send ChatGPT Web completion to the exact originating OpenCode terminal",
+    )
+    p.add_argument("--repo", required=True)
+    p.add_argument("--callback", required=True)
+    p.add_argument("--status", required=True, choices=["done", "blocked", "failed"])
+    p.add_argument("--summary", required=True)
+    p.add_argument("--changed", action="append")
+    p.add_argument("--verify", default="unknown")
+    p.add_argument("--next-action")
+    p.add_argument("--dry-run", action="store_true")
+
+    p = sub.add_parser(
+        "web-callback-status",
+        help="Show callback binding, expiry, and delivery state",
+    )
+    p.add_argument("--repo", required=True)
+    p.add_argument("--callback", required=True)
+
+    p = sub.add_parser(
+        "web-callback-cancel",
+        help="Cancel an unused ChatGPT Web callback capability",
+    )
+    p.add_argument("--repo", required=True)
+    p.add_argument("--callback", required=True)
+    p.add_argument("--reason", required=True)
+
     args = parser.parse_args()
 
     if not args.command:
@@ -1803,6 +1921,11 @@ def main() -> int:
         "status": _cmd_status,
         "sync-simone": _cmd_sync_simone,
         "rebuild": _cmd_rebuild,
+        "web-callback-open": _cmd_web_callback_open,
+        "web-callback-bind": _cmd_web_callback_bind,
+        "web-callback-send": _cmd_web_callback_send,
+        "web-callback-status": _cmd_web_callback_status,
+        "web-callback-cancel": _cmd_web_callback_cancel,
     }
 
     try:
