@@ -24,7 +24,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install verification tools
-        run: python -m pip install --disable-pip-version-check pytest ruff jsonschema
+        run: python -m pip install --disable-pip-version-check pytest ruff mypy jsonschema
 
       - name: Validate JSON configuration and schemas
         run: |
@@ -72,6 +72,9 @@ jobs:
 
       - name: Ruff critical rules
         run: ruff check --select E9,F63,F7,F82 bin lib tests scripts
+
+      - name: Mypy type check
+        run: mypy lib/sin_orca/ lib/sin_context/ --show-error-codes --pretty
 
       - name: Run complete test suite
         run: python -m pytest -q
