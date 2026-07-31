@@ -353,7 +353,7 @@ class ReviewContextBuilder:
                 result.stderr.strip() or "git diff --name-status failed"
             )
 
-        files = []
+        files: list[dict[str, Any]] = []
         for line in result.stdout.strip().splitlines():
             if len(files) >= MAX_CHANGED_FILES:
                 self.scan_uncertainties.append(
@@ -586,7 +586,9 @@ class ReviewContextBuilder:
             else:
                 for uf in unique_flows:
                     if uf["flow"] == key:
-                        uf["functions"].extend(f["functions"])
+                        uf_funcs: list[Any] = list(uf["functions"])
+                        uf_funcs.extend(f["functions"])
+                        uf["functions"] = uf_funcs
                         break
 
         return unique_flows

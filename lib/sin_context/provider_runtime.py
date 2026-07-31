@@ -355,7 +355,9 @@ class ProviderRuntime:
                     ]
 
                 for key, _ in events:
-                    chunk = os.read(key.fileobj.fileno(), 65536)
+                    fileobj = key.fileobj
+                    fd = fileobj if isinstance(fileobj, int) else fileobj.fileno()
+                    chunk = os.read(fd, 65536)
                     if not chunk:
                         selector.unregister(key.fileobj)
                         continue
