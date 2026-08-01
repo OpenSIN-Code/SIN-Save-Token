@@ -560,6 +560,23 @@ for pf in \
   fi
 done
 
+# ── Token Optimizer Stack ────────────────────────────────────────────
+# Fresh installs intentionally have no upstream checkouts. The stack gate only
+# fails when a committed manifest is invalid or an installed source/runtime
+# drifts from its reviewed immutable pin.
+say "\n[Token Optimizer Stack]"
+if [ ! -x "$SCRIPT_DIR/sin-token-stack" ]; then
+  fail "sin-token-stack CLI missing or not executable"
+else
+  TOKEN_STACK_RESULT="$($SCRIPT_DIR/sin-token-stack status --check --json 2>&1)"
+  TOKEN_STACK_RC=$?
+  if [ "$TOKEN_STACK_RC" -eq 0 ]; then
+    pass "token optimizer manifest valid; installed sources/runtimes assessed"
+  else
+    fail "token optimizer stack drift (exit $TOKEN_STACK_RC): $TOKEN_STACK_RESULT"
+  fi
+fi
+
 # ── Verdict ──────────────────────────────────────────────────────────
 say "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ "$FAIL" -eq 0 ]; then

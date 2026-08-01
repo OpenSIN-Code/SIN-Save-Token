@@ -62,6 +62,7 @@ jobs:
             bin/gitnexus-query \
             bin/benchmark-context \
             bin/audit-token-architecture.py \
+            bin/sin-token-stack \
             scripts/verify-local-integration.py \
             scripts/live-orca-smoke.py
 

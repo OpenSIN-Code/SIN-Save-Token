@@ -1,0 +1,12 @@
+{
+  "name": "sin-pxpipe-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Locked isolated runtime for SIN pxpipe adapters",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "pxpipe-proxy": "0.10.0"
+  }
+}

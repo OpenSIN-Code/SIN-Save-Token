@@ -64,6 +64,7 @@ jobs:
             bin/gitnexus-query \
             bin/benchmark-context \
             bin/audit-token-architecture.py \
+            bin/sin-token-stack \
             scripts/verify-local-integration.py \
             scripts/live-orca-smoke.py
 
@@ -86,6 +87,8 @@ jobs:
           test -x bin/brain-sync.py
           test -x bin/sin-orca
           test -x bin/gitnexus-query
+          test -x bin/sin-token-stack
+          test -x bin/verify-tokens
 
       - name: Enforce orchestration invariants
         run: |

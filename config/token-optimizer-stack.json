@@ -22,7 +22,12 @@
       "role": "dense-input-image-compression",
       "integration": "explicit-lossy-proxy-or-export",
       "assessed_commit": "8a9175d55054048b88c0d29aee05231d765e67f2",
-      "npm_package": "pxpipe-proxy@0.10.0"
+      "npm_package": "pxpipe-proxy@0.10.0",
+      "runtime_project": "runtime/pxpipe",
+      "npm_integrity": "sha512-lcaP7JOq51wdx+7DXd3lcZGTS2R2AZjBs65+Y7ADGjzVZm19BJmnGn2vYv8BB9xk/sqWML8S8UdQy+aXf4THnQ==",
+      "transitive_integrity": {
+        "gpt-tokenizer@3.4.0": "sha512-wxFLnhIXTDjYebd9A9pGl3e31ZpSypbpIJSOswbgop5jLte/AsZVDvjlbEuVFlsqZixVKqbcoNmRlFDf6pz/UQ=="
+      }
     },
     "gigatoken": {
       "url": "https://github.com/marcelroed/gigatoken.git",

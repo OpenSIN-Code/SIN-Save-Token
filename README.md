@@ -218,34 +218,35 @@ Release-Blocker. Ohne `--live` werden keine echten Orca-Agenten gestartet.
 
 ### Token Optimizer Stack: Ponytail + Caveman + pxpipe + Gigatoken
 
-`sin-token-stack` verbindet vier komplementäre Hebel ohne deren globale Hooks
-blind übereinanderzustapeln:
+`sin-token-stack` verbindet vier komplementäre Hebel, ohne globale Upstream-Hooks
+zu installieren oder verlustbehaftete Verarbeitung still einzuschalten:
 
-- **Ponytail-Prinzipien** laufen als kleine, flotteweite Minimal-Code-Regel:
-  zuerst YAGNI, Wiederverwendung, Standardbibliothek, native Plattform und
-  vorhandene Abhängigkeiten; erst danach minimaler neuer Code.
-- **Caveman** verstärkt den bestehenden terse-Kontrakt. Wiederkehrende
-  Memory-Dateien werden nur explizit und mit Backup komprimiert:
-  `sin-token-stack memory-compress FILE --yes`.
-- **pxpipe** bleibt standardmäßig aus. Für große semantische Kontextmengen gibt
-  es `pxpipe-export` und einen isolierten `pxpipe-run`. Exakte IDs, Hashes,
-  Secrets, Patch-Anker und Protokollzustand bleiben Text. Sol benötigt bewusst
-  `--accept-lossy`.
-- **Gigatoken** ist ein expliziter, modellgebundener Hochleistungs-Tokenizer für
-  große Korpora, exakte Tokenmessung, Chunk-Planung und Paritätsbenchmarks. Es
-  läuft nicht automatisch bei API-Calls und ersetzt weder RTK noch den
-  serverseitigen Provider-Tokenizer.
+- **Ponytail** liefert die Minimal-Lösungsleiter: Wiederverwendung,
+  Standardbibliothek, native Plattform, vorhandene Abhängigkeit und erst danach
+  minimaler neuer Code.
+- **Caveman** verstärkt den terse-Kontrakt. Ein Memory-Rewrite ist explizit,
+  überträgt den ausgewählten Text an Claude/Anthropic, verlangt zwei
+  Bestätigungen, besitzt ein hartes Zeitlimit und akzeptiert Erfolg nur mit
+  bytegleichem externem Original-Backup.
+- **pxpipe** bleibt aus. Export und Proxy nutzen ausschließlich eine isolierte,
+  per `package-lock.json` und npm-SRI gesperrte Runtime; `npx` und globale
+  Pakete werden nicht verwendet. Verlustbehaftete Modelle benötigen
+  `--accept-lossy`, unbekannte Modelle werden blockiert.
+- **Gigatoken** liefert explizite, tokenizergebundene Zählung, Chunk-Planung,
+  Paritätsprüfung und Benchmarks in einer eingefrorenen `uv`-Runtime. Ergebnisse
+  werden nie mit Provider-Abrechnung oder versteckten Tokens gleichgesetzt.
 
 ```bash
-sin-token-stack status
+sin-token-stack status --check
 sin-token-stack sync
-sin-token-stack token-count --tokenizer openai-community/gpt2 --chunk-size 120000 --chunk-overlap 4000 README.md docs/*.md
+sin-token-stack token-count --tokenizer openai-community/gpt2 --json README.md docs/*.md
 sin-token-stack token-bench --tokenizer openai-community/gpt2 --validate-hf README.md
 sin-token-stack pxpipe-export --git
+sin-token-stack memory-compress /absolute/path/CLAUDE.md --yes --allow-third-party-upload
 OPENAI_API_KEY="${OPENAI_API_KEY}" sin-token-stack pxpipe-run --model gpt-5.6-sol --accept-lossy --route openai -- claude --model gpt-5.6-sol
 ```
 
-Details, Sicherheitsgrenzen und Attribution:
+Details, Sicherheitsgrenzen, immutable Pins und Update-Prozess:
 [`docs/TOKEN-OPTIMIZER-STACK.md`](docs/TOKEN-OPTIMIZER-STACK.md).
 
 **Layer-übergreifende Hebel (Session 3 & 4, alles gated/mandatory):**
