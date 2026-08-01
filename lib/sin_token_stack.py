@@ -465,7 +465,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
         state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.is_file() else {}
     except (OSError, json.JSONDecodeError):
         state = {}
-    sources = state.get("sources") if isinstance(state.get("sources"), dict) else {}
+    sources_raw = state.get("sources")
+    sources: dict = sources_raw if isinstance(sources_raw, dict) else {}
     sources.update({row["name"]: row for row in results})
     state = {"updated_at": int(time.time()), "sources": sources}
     state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")

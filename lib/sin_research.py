@@ -164,7 +164,7 @@ class ResearchPipeline:
         while new_id in existing_ids:
             next_number += 1
             new_id = f"sq-{next_number:02d}"
-        new_sq = {
+        new_sq: dict = {
             "id": new_id,
             "question": question,
             "status": "pending",
