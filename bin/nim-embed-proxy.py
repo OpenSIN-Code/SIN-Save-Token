@@ -7,6 +7,7 @@ the requested dimensions (default 1024) so gbrain accepts them.
 
 Listens on :8012 (replaces the old Gemini embed-proxy).
 """
+
 import json
 import os
 import sys
@@ -27,10 +28,17 @@ stats = {"ok": 0, "errors": 0, "truncated": 0}
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
-            self._json(200, {"status": "ok", "backend": "nvidia-nim",
-                             "model": "nemotron-3-embed-1b", "dims": NIM_FULL_DIMS,
-                             "target_dims": TARGET_DIMS,
-                             "stats": stats})
+            self._json(
+                200,
+                {
+                    "status": "ok",
+                    "backend": "nvidia-nim",
+                    "model": "nemotron-3-embed-1b",
+                    "dims": NIM_FULL_DIMS,
+                    "target_dims": TARGET_DIMS,
+                    "stats": stats,
+                },
+            )
         else:
             self._json(404, {"error": "not found"})
 
@@ -43,9 +51,14 @@ class Handler(BaseHTTPRequestHandler):
         # Always override model name to match NIM's expected format
         body["model"] = MODEL
 
-        req = Request(NIM_URL, data=json.dumps(body).encode(),
-                      headers={"Authorization": f"Bearer {NVIDIA_API_KEY}",
-                               "Content-Type": "application/json"})
+        req = Request(
+            NIM_URL,
+            data=json.dumps(body).encode(),
+            headers={
+                "Authorization": f"Bearer {NVIDIA_API_KEY}",
+                "Content-Type": "application/json",
+            },
+        )
         try:
             with urlopen(req, timeout=30) as resp:
                 data = json.loads(resp.read())
@@ -81,5 +94,7 @@ if not NVIDIA_API_KEY:
     print("error: NVIDIA_API_KEY not set", file=sys.stderr)
     sys.exit(1)
 
-print(f"nim-embed-proxy on :{PORT} → {NIM_URL} (model={MODEL}, target_dims={TARGET_DIMS})")
+print(
+    f"nim-embed-proxy on :{PORT} → {NIM_URL} (model={MODEL}, target_dims={TARGET_DIMS})"
+)
 HTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

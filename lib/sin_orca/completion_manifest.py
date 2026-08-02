@@ -63,10 +63,7 @@ def run_git(
     )
 
     if process.returncode != 0:
-        raise RuntimeError(
-            process.stderr.strip()
-            or process.stdout.strip()
-        )
+        raise RuntimeError(process.stderr.strip() or process.stdout.strip())
 
     return process.stdout
 
@@ -86,10 +83,7 @@ def tool_version(
     except (OSError, subprocess.TimeoutExpired):
         return None
 
-    output = (
-        process.stdout
-        or process.stderr
-    ).strip()
+    output = (process.stdout or process.stderr).strip()
 
     return output[:500] or None
 
@@ -128,9 +122,7 @@ def build_manifest(
         key=str,
     ):
         if not path.is_file():
-            raise RuntimeError(
-                f"manifest artifact missing: {path}"
-            )
+            raise RuntimeError(f"manifest artifact missing: {path}")
 
         artifact_entries.append(
             {
@@ -151,21 +143,15 @@ def build_manifest(
         "repository_head_sha": task.get("repository_head_sha"),
         "head_sha": head_sha,
         "changed_files": changed_files,
-        "diff_sha256": sha256_bytes(
-            diff.encode("utf-8")
-        ),
+        "diff_sha256": sha256_bytes(diff.encode("utf-8")),
         "events": {
             "path": str(events_file.resolve()),
             "sha256": sha256_file(events_file),
         },
         "artifacts": artifact_entries,
-        "verification_sha256": sha256_bytes(
-            canonical_bytes(verification)
-        ),
+        "verification_sha256": sha256_bytes(canonical_bytes(verification)),
         "review_sha256": (
-            sha256_bytes(canonical_bytes(review))
-            if review is not None
-            else None
+            sha256_bytes(canonical_bytes(review)) if review is not None else None
         ),
         "environment": {
             "python": platform.python_version(),
@@ -175,16 +161,12 @@ def build_manifest(
             "codex": tool_version("codex"),
             "graphify": tool_version("graphify"),
             "gitnexus": tool_version("gitnexus"),
-            "code_review_graph": tool_version(
-                "code-review-graph"
-            ),
+            "code_review_graph": tool_version("code-review-graph"),
             "oracle": tool_version("oracle"),
         },
     }
 
-    integrity_hash = sha256_bytes(
-        canonical_bytes(body)
-    )
+    integrity_hash = sha256_bytes(canonical_bytes(body))
 
     signature: str | None = None
     key = os.getenv("SIN_MANIFEST_HMAC_KEY")
@@ -221,9 +203,7 @@ def write_manifest(
     except OSError:
         pass
 
-    temporary = path.with_suffix(
-        path.suffix + ".tmp"
-    )
+    temporary = path.with_suffix(path.suffix + ".tmp")
 
     temporary.write_text(
         json.dumps(
@@ -263,9 +243,7 @@ def verify_manifest(
     if not isinstance(authenticated, bool):
         errors.append("manifest authenticated flag is invalid")
 
-    expected_hash = sha256_bytes(
-        canonical_bytes(body)
-    )
+    expected_hash = sha256_bytes(canonical_bytes(body))
 
     if integrity.get("hash") != expected_hash:
         errors.append("manifest integrity hash mismatch")
@@ -293,9 +271,7 @@ def verify_manifest(
                 stored_signature,
                 expected_signature,
             ):
-                errors.append(
-                    "manifest HMAC signature mismatch"
-                )
+                errors.append("manifest HMAC signature mismatch")
 
     events = body.get("events")
 
@@ -328,15 +304,11 @@ def verify_manifest(
         path = Path(str(artifact.get("path", "")))
 
         if not path.is_file():
-            errors.append(
-                f"artifact missing: {path}"
-            )
+            errors.append(f"artifact missing: {path}")
             continue
 
         if sha256_file(path) != artifact.get("sha256"):
-            errors.append(
-                f"artifact changed: {path}"
-            )
+            errors.append(f"artifact changed: {path}")
 
     repository_value = body.get("repository_root")
     base_sha = body.get("base_sha")

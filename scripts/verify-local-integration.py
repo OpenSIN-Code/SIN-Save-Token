@@ -57,9 +57,7 @@ def safe_environment(extra: dict[str, str] | None = None) -> dict[str, str]:
 def redact(value: str) -> str:
     redacted: list[str] = []
     for line in value.splitlines():
-        redacted.append(
-            "<redacted sensitive line>" if SENSITIVE.search(line) else line
-        )
+        redacted.append("<redacted sensitive line>" if SENSITIVE.search(line) else line)
     return "\n".join(redacted)
 
 
@@ -216,10 +214,7 @@ def main() -> int:
         print(json.dumps({"ok": False, "missing_repositories": missing}, indent=2))
         return 2
 
-    statuses = {
-        name: repository_status(root)
-        for name, root in repositories.items()
-    }
+    statuses = {name: repository_status(root) for name, root in repositories.items()}
     dirty_blockers = [
         name
         for name, status in statuses.items()
@@ -238,7 +233,16 @@ def main() -> int:
         CheckSpec(
             "sst: ruff critical",
             sst,
-            ["ruff", "check", "--select", "E9,F63,F7,F82", "bin", "lib", "tests", "scripts"],
+            [
+                "ruff",
+                "check",
+                "--select",
+                "E9,F63,F7,F82",
+                "bin",
+                "lib",
+                "tests",
+                "scripts",
+            ],
             300,
         ),
         CheckSpec(
@@ -324,11 +328,13 @@ def main() -> int:
             wow,
             ["bash", "doctor.sh"],
             300,
-            safe_environment({
-                "WOW_HOME": str(wow),
-                "WOW_MCP_PROFILE": "minimal",
-                "WOW_DOCTOR_DEEP": "1" if args.deep_doctor else "0",
-            }),
+            safe_environment(
+                {
+                    "WOW_HOME": str(wow),
+                    "WOW_MCP_PROFILE": "minimal",
+                    "WOW_DOCTOR_DEEP": "1" if args.deep_doctor else "0",
+                }
+            ),
         ),
         CheckSpec(
             "simone: compileall",
@@ -411,9 +417,7 @@ def main() -> int:
     expected_runtime = (sst / "bin" / "sin-orca").resolve()
     installed_runtime_raw = shutil.which("sin-orca")
     installed_runtime = (
-        Path(installed_runtime_raw).resolve()
-        if installed_runtime_raw
-        else None
+        Path(installed_runtime_raw).resolve() if installed_runtime_raw else None
     )
     runtime_ok = installed_runtime == expected_runtime
     checks_ok = all(result.ok for result in results)
@@ -460,15 +464,20 @@ def main() -> int:
     except OSError:
         pass
 
-    print(json.dumps({
-        "ok": report["ok"],
-        "report": str(report_path),
-        "passed": sum(1 for result in results if result.ok),
-        "failed": sum(1 for result in results if not result.ok),
-        "dirty_blockers": dirty_blockers,
-        "canonical_sin_orca": runtime_ok,
-        "live_requested": args.live,
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "ok": report["ok"],
+                "report": str(report_path),
+                "passed": sum(1 for result in results if result.ok),
+                "failed": sum(1 for result in results if not result.ok),
+                "dirty_blockers": dirty_blockers,
+                "canonical_sin_orca": runtime_ok,
+                "live_requested": args.live,
+            },
+            indent=2,
+        )
+    )
     return 0 if report["ok"] else 1
 
 

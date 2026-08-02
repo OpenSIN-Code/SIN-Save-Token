@@ -56,7 +56,9 @@ def test_doctor_strict_fails_for_missing_optional_tools(tmp_path: Path) -> None:
         patch("sin_orca.cli._probe_writable_directory", return_value=(True, None)),
         patch(
             "sin_orca.cli.shutil.which",
-            side_effect=lambda name: f"/bin/{name}" if name in {"git", "orca"} else None,
+            side_effect=lambda name: f"/bin/{name}"
+            if name in {"git", "orca"}
+            else None,
         ),
         redirect_stdout(output),
     ):

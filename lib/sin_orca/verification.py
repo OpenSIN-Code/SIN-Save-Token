@@ -26,9 +26,7 @@ SECRET_OUTPUT = re.compile(
     r"(?i)\b(token|secret|password|passwd|api[-_]?key|authorization|cookie)"
     r"\s*[:=]\s*([^\s,;]+)"
 )
-AUTHORIZATION_HEADER = re.compile(
-    r"(?im)\bAuthorization\s*:\s*[^\r\n]+"
-)
+AUTHORIZATION_HEADER = re.compile(r"(?im)\bAuthorization\s*:\s*[^\r\n]+")
 BEARER_OUTPUT = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 URL_CREDENTIALS = re.compile(r"(https?://[^:/\s]+:)[^@/\s]+(@)")
 
@@ -81,8 +79,13 @@ def run(
 ) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
-            argv, cwd=cwd, text=True, capture_output=True, check=False,
-            timeout=timeout, env=env or controller_environment(),
+            argv,
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=timeout,
+            env=env or controller_environment(),
         )
     except subprocess.TimeoutExpired as error:
         return subprocess.CompletedProcess(
@@ -95,20 +98,14 @@ def run(
 
 def output_hash(process: subprocess.CompletedProcess[str]) -> str:
     material = (
-        ensure_text(process.stdout)
-        + "\n"
-        + ensure_text(process.stderr)
+        ensure_text(process.stdout) + "\n" + ensure_text(process.stderr)
     ).encode("utf-8")
     return hashlib.sha256(material).hexdigest()
 
 
 def output_tail(process: subprocess.CompletedProcess[str], *, limit: int = 2000) -> str:
     text = redact_text(
-        (
-            ensure_text(process.stdout)
-            + "\n"
-            + ensure_text(process.stderr)
-        ).strip()
+        (ensure_text(process.stdout) + "\n" + ensure_text(process.stderr)).strip()
     )
     if len(text) <= limit:
         return text
@@ -161,8 +158,14 @@ def snapshot_index(
         # baseline state inside the temporary index only.
         reset_runtime = run(
             [
-                "git", "rm", "-r", "-q", "--cached", "--ignore-unmatch",
-                "--", ".sin-worker",
+                "git",
+                "rm",
+                "-r",
+                "-q",
+                "--cached",
+                "--ignore-unmatch",
+                "--",
+                ".sin-worker",
             ],
             cwd=worktree,
             timeout=60,
@@ -183,8 +186,13 @@ def actual_changed_files(*, worktree: Path, base_sha: str) -> list[str]:
     with snapshot_index(worktree=worktree, base_sha=base_sha) as environment:
         changed = run(
             [
-                "git", "diff", "--cached", "--name-only", "--no-renames",
-                base_sha, "--",
+                "git",
+                "diff",
+                "--cached",
+                "--name-only",
+                "--no-renames",
+                base_sha,
+                "--",
             ],
             cwd=worktree,
             timeout=60,
@@ -192,11 +200,13 @@ def actual_changed_files(*, worktree: Path, base_sha: str) -> list[str]:
         )
     if changed.returncode != 0:
         raise RuntimeError(changed.stderr.strip() or "git snapshot diff failed")
-    return sorted({
-        line.strip()
-        for line in changed.stdout.splitlines()
-        if line.strip() and not line.strip().startswith(".sin-worker/")
-    })
+    return sorted(
+        {
+            line.strip()
+            for line in changed.stdout.splitlines()
+            if line.strip() and not line.strip().startswith(".sin-worker/")
+        }
+    )
 
 
 def path_allowed(path: str, allowed_patterns: list[str]) -> bool:
@@ -213,8 +223,11 @@ def path_allowed(path: str, allowed_patterns: list[str]) -> bool:
 
 
 def validate_scope(
-    *, changed_files: list[str], allowed_paths: list[str],
-    forbidden_paths: list[str], allow_edits: bool,
+    *,
+    changed_files: list[str],
+    allowed_paths: list[str],
+    forbidden_paths: list[str],
+    allow_edits: bool,
 ) -> list[str]:
     errors: list[str] = []
     if not allow_edits and changed_files:
@@ -257,8 +270,15 @@ def full_worktree_diff(*, worktree: Path, base_sha: str) -> str:
     with snapshot_index(worktree=worktree, base_sha=base_sha) as environment:
         diff = run(
             [
-                "git", "diff", "--cached", "--no-ext-diff", "--no-renames",
-                "--binary", "--unified=4", base_sha, "--",
+                "git",
+                "diff",
+                "--cached",
+                "--no-ext-diff",
+                "--no-renames",
+                "--binary",
+                "--unified=4",
+                base_sha,
+                "--",
             ],
             cwd=worktree,
             timeout=180,
@@ -269,22 +289,40 @@ def full_worktree_diff(*, worktree: Path, base_sha: str) -> str:
     return diff.stdout
 
 
-def bounded_diff(*, worktree: Path, base_sha: str, maximum_chars: int = 60000) -> dict[str, Any]:
+def bounded_diff(
+    *, worktree: Path, base_sha: str, maximum_chars: int = 60000
+) -> dict[str, Any]:
     full = full_worktree_diff(worktree=worktree, base_sha=base_sha)
     clipped = full[:maximum_chars]
     if len(full) > maximum_chars:
         clipped += "\n...[bounded diff truncated]"
-    return {"text": clipped, "full_sha256": hashlib.sha256(full.encode("utf-8")).hexdigest(), "full_chars": len(full), "truncated": len(full) > maximum_chars}
+    return {
+        "text": clipped,
+        "full_sha256": hashlib.sha256(full.encode("utf-8")).hexdigest(),
+        "full_chars": len(full),
+        "truncated": len(full) > maximum_chars,
+    }
 
 
-def run_controller_commands(*, worktree: Path, commands: list[list[str]], timeout: int = 600) -> dict[str, Any]:
+def run_controller_commands(
+    *, worktree: Path, commands: list[list[str]], timeout: int = 600
+) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     for argv in commands:
         if not argv or not all(isinstance(item, str) for item in argv):
             raise ValueError(f"invalid verification command: {argv!r}")
         process = run(argv, cwd=worktree, timeout=timeout)
-        result = {"argv": redact_argv(argv), "exit_code": process.returncode, "ok": process.returncode == 0, "output_tail": output_tail(process), "output_sha256": output_hash(process)}
+        result = {
+            "argv": redact_argv(argv),
+            "exit_code": process.returncode,
+            "ok": process.returncode == 0,
+            "output_tail": output_tail(process),
+            "output_sha256": output_hash(process),
+        }
         results.append(result)
         if process.returncode != 0:
             break
-    return {"ok": bool(results) and all(item["ok"] for item in results), "results": results}
+    return {
+        "ok": bool(results) and all(item["ok"] for item in results),
+        "results": results,
+    }

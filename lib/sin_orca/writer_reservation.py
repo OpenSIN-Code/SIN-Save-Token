@@ -68,13 +68,9 @@ def read_reservation(repository: Path) -> dict[str, Any] | None:
         )
     owner = value.get("task_id")
     if not isinstance(owner, str) or not owner:
-        raise WriterReservationConflict(
-            "writer reservation owner is invalid"
-        )
+        raise WriterReservationConflict("writer reservation owner is invalid")
     if value.get("mode") != "exclusive-writer":
-        raise WriterReservationConflict(
-            "writer reservation mode is invalid"
-        )
+        raise WriterReservationConflict("writer reservation mode is invalid")
     return value
 
 
@@ -105,8 +101,7 @@ def acquire_writer(
                 return current
             if isinstance(owner, str) and owner and not _owner_is_terminal(owner):
                 raise WriterReservationConflict(
-                    "repository writer is already reserved by live task "
-                    f"{owner!r}"
+                    f"repository writer is already reserved by live task {owner!r}"
                 )
 
         reservation = {

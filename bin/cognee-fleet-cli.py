@@ -11,6 +11,7 @@ Usage:
   cognee-fleet-cli remember "short fact text"
   cognee-fleet-cli status
 """
+
 from __future__ import annotations
 
 import argparse
@@ -48,7 +49,9 @@ def _dataset() -> str:
     return (os.environ.get("COGNEE_PLUGIN_DATASET") or "sin-fleet").strip()
 
 
-def _req(method: str, path: str, *, data: bytes | None = None, headers: dict | None = None):
+def _req(
+    method: str, path: str, *, data: bytes | None = None, headers: dict | None = None
+):
     h = {"X-Api-Key": _api_key()}
     if headers:
         h.update(headers)
@@ -67,7 +70,9 @@ def cmd_status(_: argparse.Namespace) -> int:
     code, body = _req("GET", "/health")
     print(f"health HTTP {code}: {body[:300]}")
     key = _api_key()
-    print(f"api_key: {'set' if key else 'MISSING'}  base={_base()}  dataset={_dataset()}")
+    print(
+        f"api_key: {'set' if key else 'MISSING'}  base={_base()}  dataset={_dataset()}"
+    )
     if not key:
         return 1
     code, body = _req("GET", "/api/v1/datasets")

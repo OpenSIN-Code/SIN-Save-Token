@@ -113,14 +113,17 @@ class GitNexusAdapterTests(unittest.TestCase):
             stdout="graph result\n",
             stderr="",
         )
-        with patch.dict(
-            os.environ,
-            {"SIN_MANIFEST_HMAC_KEY": "controller-only"},
-        ), patch.object(
-            ADAPTER.subprocess,
-            "run",
-            return_value=completed,
-        ) as runner:
+        with (
+            patch.dict(
+                os.environ,
+                {"SIN_MANIFEST_HMAC_KEY": "controller-only"},
+            ),
+            patch.object(
+                ADAPTER.subprocess,
+                "run",
+                return_value=completed,
+            ) as runner,
+        ):
             output = ADAPTER.query_gitnexus(
                 "/usr/local/bin/gitnexus",
                 "auth flow",

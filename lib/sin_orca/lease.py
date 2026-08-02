@@ -43,18 +43,12 @@ def controller_identity() -> str:
         or str(os.getppid())
     )
 
-    return (
-        f"{socket.gethostname()}:"
-        f"{os.getuid()}:"
-        f"{session}"
-    )
+    return f"{socket.gethostname()}:{os.getuid()}:{session}"
 
 
 def _atomic_write(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(
-        f".{path.name}.tmp-{os.getpid()}"
-    )
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
 
     with temporary.open("w", encoding="utf-8") as handle:
         json.dump(value, handle, sort_keys=True)
@@ -82,9 +76,7 @@ class ControllerLease:
             return None
 
         try:
-            value = json.loads(
-                self.lease_path.read_text(encoding="utf-8")
-            )
+            value = json.loads(self.lease_path.read_text(encoding="utf-8"))
 
             return Lease(
                 owner=str(value["owner"]),
@@ -161,9 +153,7 @@ class ControllerLease:
             raise LeaseLostError("controller lease has expired")
 
         if current.owner != self.owner:
-            raise LeaseLostError(
-                f"controller lease belongs to {current.owner!r}"
-            )
+            raise LeaseLostError(f"controller lease belongs to {current.owner!r}")
 
         if current.token != token:
             raise LeaseLostError("controller lease token changed")

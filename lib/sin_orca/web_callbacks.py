@@ -127,9 +127,7 @@ def resolve_callback_token(
         )
 
     open_matches = [
-        token
-        for token in matches
-        if load_callback(root, token).get("status") == "open"
+        token for token in matches if load_callback(root, token).get("status") == "open"
     ]
     if len(open_matches) == 1:
         # A retry may coexist with an earlier cancelled capability for the same
@@ -202,8 +200,7 @@ def terminal_records(value: dict[str, Any], repository: Path) -> list[dict[str, 
 
 def _looks_like_opencode(record: dict[str, Any]) -> bool:
     material = "\n".join(
-        str(record.get(key) or "")
-        for key in ("title", "preview")
+        str(record.get(key) or "") for key in ("title", "preview")
     ).casefold()
     return any(
         marker in material
@@ -473,24 +470,26 @@ def _command_template(
     task_id: str,
     round_number: int,
 ) -> str:
-    return shlex.join([
-        "sin-orca",
-        "web-callback-send",
-        "--repo",
-        str(repository),
-        "--task-id",
-        task_id,
-        "--round",
-        str(round_number),
-        "--status",
-        "done",
-        "--summary",
-        "<short factual completion summary>",
-        "--changed",
-        "<comma-separated changed files or none>",
-        "--verify",
-        "<tests and verification status>",
-    ])
+    return shlex.join(
+        [
+            "sin-orca",
+            "web-callback-send",
+            "--repo",
+            str(repository),
+            "--task-id",
+            task_id,
+            "--round",
+            str(round_number),
+            "--status",
+            "done",
+            "--summary",
+            "<short factual completion summary>",
+            "--changed",
+            "<comma-separated changed files or none>",
+            "--verify",
+            "<tests and verification status>",
+        ]
+    )
 
 
 def open_callback(
@@ -589,7 +588,11 @@ def bind_callback(
 ) -> dict[str, Any]:
     root = resolve_repository(repository)
     rendered_page = page_id.strip()
-    if not rendered_page or len(rendered_page) > 256 or any(c.isspace() for c in rendered_page):
+    if (
+        not rendered_page
+        or len(rendered_page) > 256
+        or any(c.isspace() for c in rendered_page)
+    ):
         raise ValueError("invalid browser page ID")
     rendered_url = _valid_chatgpt_url(conversation_url)
     with callback_lock(root, token):
@@ -690,15 +693,13 @@ def _default_next_action(record: dict[str, Any]) -> str:
         "CEO loop with the next highest-priority bounded task. Re-delegate to "
         "ChatGPT Web without waiting for human input unless a genuine external "
         "authority blocker exists. Stop only when the definition of done and all "
-        "acceptance gates pass."
-        + binding
+        "acceptance gates pass." + binding
     )
 
 
 def _terminal_is_still_bound(repository: Path, handle: str) -> bool:
     return any(
-        item.get("handle") == handle
-        for item in list_repository_terminals(repository)
+        item.get("handle") == handle for item in list_repository_terminals(repository)
     )
 
 
@@ -717,26 +718,26 @@ def render_callback_message(
     conversation_url = (
         conversation.get("url") if isinstance(conversation, dict) else None
     )
-    page_id = (
-        conversation.get("page_id") if isinstance(conversation, dict) else None
-    )
+    page_id = conversation.get("page_id") if isinstance(conversation, dict) else None
     header = (
         "SIN_GPT_WEB_CALLBACK "
         f"task={record['task_id']} status={final_status} token={record['token']} "
         f"session={session_id or 'unresolved'} "
         f"round={record.get('round', 1)}/{record.get('max_rounds', DEFAULT_MAX_ROUNDS)}"
     )
-    return "\n".join([
-        header,
-        f"SUMMARY: {summary}",
-        f"CHANGED: {json.dumps(changed or ['none'], ensure_ascii=False)}",
-        f"VERIFY: {verification or 'unknown'}",
-        f"CHATGPT_PAGE_ID: {page_id or 'unresolved'}",
-        f"CHATGPT_CONVERSATION_URL: {conversation_url or 'unresolved'}",
-        f"REQUIRED_ACTION: {next_action}",
-        "Treat this callback as a wake-up event, not as proof of completion. "
-        "Inspect repository state, taskplan evidence, diff, and tests before accepting it.",
-    ])
+    return "\n".join(
+        [
+            header,
+            f"SUMMARY: {summary}",
+            f"CHANGED: {json.dumps(changed or ['none'], ensure_ascii=False)}",
+            f"VERIFY: {verification or 'unknown'}",
+            f"CHATGPT_PAGE_ID: {page_id or 'unresolved'}",
+            f"CHATGPT_CONVERSATION_URL: {conversation_url or 'unresolved'}",
+            f"REQUIRED_ACTION: {next_action}",
+            "Treat this callback as a wake-up event, not as proof of completion. "
+            "Inspect repository state, taskplan evidence, diff, and tests before accepting it.",
+        ]
+    )
 
 
 def send_callback(
@@ -796,39 +797,48 @@ def send_callback(
             }
 
         message_sha256 = hashlib.sha256(message.encode("utf-8")).hexdigest()
-        record.update({
-            "status": "dispatching",
-            "callback_status": final_status,
-            "dispatch_started_at": isoformat(utc_now()),
-            "summary": rendered_summary,
-            "changed_files": rendered_changed,
-            "verification": rendered_verification,
-            "next_action": action,
-            "message_sha256": message_sha256,
-        })
+        record.update(
+            {
+                "status": "dispatching",
+                "callback_status": final_status,
+                "dispatch_started_at": isoformat(utc_now()),
+                "summary": rendered_summary,
+                "changed_files": rendered_changed,
+                "verification": rendered_verification,
+                "next_action": action,
+                "message_sha256": message_sha256,
+            }
+        )
         atomic_write_json(callback_path(root, token), record)
         try:
-            run_orca([
-                "terminal",
-                "send",
-                "--terminal",
-                terminal,
-                "--text",
-                message,
-                "--enter",
-            ], timeout=30)
+            run_orca(
+                [
+                    "terminal",
+                    "send",
+                    "--terminal",
+                    terminal,
+                    "--text",
+                    message,
+                    "--enter",
+                ],
+                timeout=30,
+            )
         except Exception as error:
-            record.update({
-                "status": "delivery-failed",
-                "delivery_failed_at": isoformat(utc_now()),
-                "delivery_error": _compact(str(error), 700) or type(error).__name__,
-            })
+            record.update(
+                {
+                    "status": "delivery-failed",
+                    "delivery_failed_at": isoformat(utc_now()),
+                    "delivery_error": _compact(str(error), 700) or type(error).__name__,
+                }
+            )
             atomic_write_json(callback_path(root, token), record)
             raise
-        record.update({
-            "status": "sent",
-            "sent_at": isoformat(utc_now()),
-        })
+        record.update(
+            {
+                "status": "sent",
+                "sent_at": isoformat(utc_now()),
+            }
+        )
         atomic_write_json(callback_path(root, token), record)
 
     return {
@@ -870,11 +880,13 @@ def cancel_callback(
             raise RuntimeError(
                 f"a {status} callback cannot be cancelled; capabilities are one-shot"
             )
-        record.update({
-            "status": "cancelled",
-            "cancelled_at": isoformat(utc_now()),
-            "cancel_reason": rendered_reason,
-        })
+        record.update(
+            {
+                "status": "cancelled",
+                "cancelled_at": isoformat(utc_now()),
+                "cancel_reason": rendered_reason,
+            }
+        )
         atomic_write_json(callback_path(root, token), record)
     return {
         "ok": True,

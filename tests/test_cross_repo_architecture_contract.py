@@ -15,7 +15,9 @@ AUDIT_PATH = ROOT / "bin" / "audit-token-architecture.py"
 
 
 def load_audit_module():
-    spec = importlib.util.spec_from_file_location("token_architecture_audit_contract", AUDIT_PATH)
+    spec = importlib.util.spec_from_file_location(
+        "token_architecture_audit_contract", AUDIT_PATH
+    )
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {AUDIT_PATH}")
     module = importlib.util.module_from_spec(spec)
@@ -120,7 +122,10 @@ class CrossRepositoryArchitectureContractTests(unittest.TestCase):
                 {
                     "routes": [
                         {"name": "code_symbol", "providers": ["simone", "graphify"]},
-                        {"name": "code_architecture", "providers": ["graphify", "gitnexus"]},
+                        {
+                            "name": "code_architecture",
+                            "providers": ["graphify", "gitnexus"],
+                        },
                     ],
                     "context_maximum_tokens": 1600,
                 },
@@ -131,14 +136,38 @@ class CrossRepositoryArchitectureContractTests(unittest.TestCase):
                 {
                     "version": 1,
                     "providers": {
-                        "simone": {"argv": ["simone"], "timeout_seconds": 120, "failure_threshold": 3, "cooldown_seconds": 300},
-                        "agent-grep": {"argv": ["agent-grep"], "timeout_seconds": 30, "failure_threshold": 3, "cooldown_seconds": 120},
-                        "graphify": {"argv": ["graphify"], "timeout_seconds": 120, "failure_threshold": 3, "cooldown_seconds": 300},
-                        "gitnexus": {"argv": ["gitnexus-query"], "timeout_seconds": 120, "failure_threshold": 2, "cooldown_seconds": 300},
+                        "simone": {
+                            "argv": ["simone"],
+                            "timeout_seconds": 120,
+                            "failure_threshold": 3,
+                            "cooldown_seconds": 300,
+                        },
+                        "agent-grep": {
+                            "argv": ["agent-grep"],
+                            "timeout_seconds": 30,
+                            "failure_threshold": 3,
+                            "cooldown_seconds": 120,
+                        },
+                        "graphify": {
+                            "argv": ["graphify"],
+                            "timeout_seconds": 120,
+                            "failure_threshold": 3,
+                            "cooldown_seconds": 300,
+                        },
+                        "gitnexus": {
+                            "argv": ["gitnexus-query"],
+                            "timeout_seconds": 120,
+                            "failure_threshold": 2,
+                            "cooldown_seconds": 300,
+                        },
                     },
                 },
             )
-            write_text(fixture, "bin/sin-context", "from sin_context.provider_runtime import ProviderRuntime\nruntime.call\noutcome.cache_negative\n")
+            write_text(
+                fixture,
+                "bin/sin-context",
+                "from sin_context.provider_runtime import ProviderRuntime\nruntime.call\noutcome.cache_negative\n",
+            )
 
             audit = AUDIT.Audit()
             AUDIT.audit_sst(audit, ROOT)

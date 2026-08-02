@@ -46,12 +46,7 @@ def terminal_payload(
         combined.append(record_fields)
     return {
         "ok": True,
-        "result": {
-            "terminals": [
-                {**defaults, **record}
-                for record in combined
-            ]
-        },
+        "result": {"terminals": [{**defaults, **record} for record in combined]},
     }
 
 
@@ -118,26 +113,28 @@ def test_multiple_opencode_terminals_require_explicit_handle(
         preview="zsh prompt",
         lastOutputAt=999,
     )
-    payload["result"]["terminals"].extend([
-        {
-            "handle": "term-old-agent",
-            "worktreePath": str(repository),
-            "connected": True,
-            "writable": True,
-            "title": "OC | old",
-            "preview": "Build · model",
-            "lastOutputAt": 100,
-        },
-        {
-            "handle": "term-current-agent",
-            "worktreePath": str(repository),
-            "connected": True,
-            "writable": True,
-            "title": "Terminal 2",
-            "preview": "Build · GPT-5.6\nctrl+p commands",
-            "lastOutputAt": 200,
-        },
-    ])
+    payload["result"]["terminals"].extend(
+        [
+            {
+                "handle": "term-old-agent",
+                "worktreePath": str(repository),
+                "connected": True,
+                "writable": True,
+                "title": "OC | old",
+                "preview": "Build · model",
+                "lastOutputAt": 100,
+            },
+            {
+                "handle": "term-current-agent",
+                "worktreePath": str(repository),
+                "connected": True,
+                "writable": True,
+                "title": "Terminal 2",
+                "preview": "Build · GPT-5.6\nctrl+p commands",
+                "lastOutputAt": 200,
+            },
+        ]
+    )
     with patch("sin_orca.web_callbacks.run_orca", return_value=payload):
         with pytest.raises(RuntimeError, match="ambiguous"):
             resolve_origin_terminal(repository)
@@ -158,15 +155,17 @@ def test_ambiguous_origin_requires_explicit_handle(
         preview="Build · model",
         lastOutputAt=100,
     )
-    payload["result"]["terminals"].append({
-        "handle": "term-b",
-        "worktreePath": str(repository),
-        "connected": True,
-        "writable": True,
-        "title": "OpenCode",
-        "preview": "Build · model",
-        "lastOutputAt": 100,
-    })
+    payload["result"]["terminals"].append(
+        {
+            "handle": "term-b",
+            "worktreePath": str(repository),
+            "connected": True,
+            "writable": True,
+            "title": "OpenCode",
+            "preview": "Build · model",
+            "lastOutputAt": 100,
+        }
+    )
     with patch("sin_orca.web_callbacks.run_orca", return_value=payload):
         with pytest.raises(RuntimeError, match="ambiguous"):
             resolve_origin_terminal(repository)
@@ -186,26 +185,28 @@ def test_session_resolves_exactly_from_orca_pane_state(
         "worktreeId": f"repo::{repository}",
     }
     state_path.write_text(
-        json.dumps({
-            "workspaceSession": {
-                "terminalLayoutsByTabId": {
-                    "tab-1": {
-                        "ptyIdsByLeafId": {"leaf-2": "pty-exact"},
+        json.dumps(
+            {
+                "workspaceSession": {
+                    "terminalLayoutsByTabId": {
+                        "tab-1": {
+                            "ptyIdsByLeafId": {"leaf-2": "pty-exact"},
+                        },
                     },
-                },
-                "sleepingAgentSessionsByPaneKey": {
-                    "tab-1:leaf-2": {
-                        "tabId": "tab-1",
-                        "worktreeId": f"repo::{repository}",
-                        "agent": "opencode",
-                        "providerSession": {
-                            "key": "session_id",
-                            "id": "ses_EXACT123",
+                    "sleepingAgentSessionsByPaneKey": {
+                        "tab-1:leaf-2": {
+                            "tabId": "tab-1",
+                            "worktreeId": f"repo::{repository}",
+                            "agent": "opencode",
+                            "providerSession": {
+                                "key": "session_id",
+                                "id": "ses_EXACT123",
+                            },
                         },
                     },
                 },
-            },
-        }),
+            }
+        ),
         encoding="utf-8",
     )
     monkeypatch.setenv("SIN_ORCA_STATE_FILE", str(state_path))
@@ -231,10 +232,12 @@ def test_multiple_repository_sessions_are_never_guessed(
         "leafId": "leaf-1",
         "ptyId": "pty-1",
     }
-    stdout = json.dumps([
-        {"id": "ses_OLD123", "directory": str(repository), "updated": 1},
-        {"id": "ses_NEW123", "directory": str(repository), "updated": 999},
-    ])
+    stdout = json.dumps(
+        [
+            {"id": "ses_OLD123", "directory": str(repository), "updated": 1},
+            {"id": "ses_NEW123", "directory": str(repository), "updated": 999},
+        ]
+    )
     completed = subprocess.CompletedProcess(
         args=["opencode"],
         returncode=0,
@@ -380,12 +383,14 @@ def test_resolve_callback_token_by_exact_task_and_round(tmp_path: Path) -> None:
             max_rounds=2,
         )
 
-    assert resolve_callback_token(
-        repository, task_id="T-0025", round_number=1
-    ) == first["callback"]
-    assert resolve_callback_token(
-        repository, task_id="T-0025", round_number=2
-    ) == second["callback"]
+    assert (
+        resolve_callback_token(repository, task_id="T-0025", round_number=1)
+        == first["callback"]
+    )
+    assert (
+        resolve_callback_token(repository, task_id="T-0025", round_number=2)
+        == second["callback"]
+    )
 
 
 def test_resolve_callback_token_prefers_unique_open_retry(tmp_path: Path) -> None:
@@ -420,9 +425,10 @@ def test_resolve_callback_token_prefers_unique_open_retry(tmp_path: Path) -> Non
             max_rounds=2,
         )
 
-    assert resolve_callback_token(
-        repository, task_id="T-0025", round_number=2
-    ) == retry["callback"]
+    assert (
+        resolve_callback_token(repository, task_id="T-0025", round_number=2)
+        == retry["callback"]
+    )
 
 
 def test_resolve_callback_token_refuses_ambiguity(tmp_path: Path) -> None:
@@ -479,10 +485,13 @@ def test_dry_run_does_not_consume_callback(tmp_path: Path) -> None:
 
     assert result["status"] == "callback-dry-run"
     assert sent == []
-    assert callback_status(
-        repository=repository,
-        token=opened["callback"],
-    )["status"] == "open"
+    assert (
+        callback_status(
+            repository=repository,
+            token=opened["callback"],
+        )["status"]
+        == "open"
+    )
 
 
 def test_delivery_failure_consumes_capability_without_replay(tmp_path: Path) -> None:

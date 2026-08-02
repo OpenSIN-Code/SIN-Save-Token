@@ -134,7 +134,9 @@ class TokenOptimizerStackTests(unittest.TestCase):
         )
         self.assertEqual(
             lock["packages"]["node_modules/gpt-tokenizer"]["integrity"],
-            self.config["upstreams"]["pxpipe"]["transitive_integrity"]["gpt-tokenizer@3.4.0"],
+            self.config["upstreams"]["pxpipe"]["transitive_integrity"][
+                "gpt-tokenizer@3.4.0"
+            ],
         )
 
     def test_pxpipe_runtime_rejects_integrity_drift(self) -> None:
@@ -144,19 +146,28 @@ class TokenOptimizerStackTests(unittest.TestCase):
                 json.dumps({"dependencies": {"pxpipe-proxy": "0.10.0"}}),
                 encoding="utf-8",
             )
-            lock = json.loads((ROOT / "runtime" / "pxpipe" / "package-lock.json").read_text())
-            lock["packages"]["node_modules/pxpipe-proxy"]["integrity"] = "sha512-tampered"
-            (runtime / "package-lock.json").write_text(json.dumps(lock), encoding="utf-8")
+            lock = json.loads(
+                (ROOT / "runtime" / "pxpipe" / "package-lock.json").read_text()
+            )
+            lock["packages"]["node_modules/pxpipe-proxy"]["integrity"] = (
+                "sha512-tampered"
+            )
+            (runtime / "package-lock.json").write_text(
+                json.dumps(lock), encoding="utf-8"
+            )
             with mock.patch.object(STACK, "_safe_project_path", return_value=runtime):
                 with self.assertRaisesRegex(STACK.StackError, "SRI"):
                     STACK.validate_pxpipe_runtime_project(self.config)
 
     def test_pxpipe_argv_never_falls_back_to_global_or_npx(self) -> None:
-        with mock.patch.object(
-            STACK,
-            "pxpipe_runtime_state",
-            return_value={"ready": False, "binary": "/tmp/not-ready"},
-        ), mock.patch.object(STACK.shutil, "which", return_value="/usr/local/bin/npx"):
+        with (
+            mock.patch.object(
+                STACK,
+                "pxpipe_runtime_state",
+                return_value={"ready": False, "binary": "/tmp/not-ready"},
+            ),
+            mock.patch.object(STACK.shutil, "which", return_value="/usr/local/bin/npx"),
+        ):
             with self.assertRaisesRegex(STACK.StackError, "sync --source pxpipe"):
                 STACK.pxpipe_argv(self.config)
 
@@ -173,15 +184,22 @@ class TokenOptimizerStackTests(unittest.TestCase):
             new_node.write_text("#!/bin/sh\necho v24.16.0\n", encoding="utf-8")
             old_node.chmod(0o755)
             new_node.chmod(0o755)
-            with mock.patch.dict(os.environ, {"PATH": f"{old_bin}{os.pathsep}{new_bin}"}):
+            with mock.patch.dict(
+                os.environ, {"PATH": f"{old_bin}{os.pathsep}{new_bin}"}
+            ):
                 self.assertEqual(STACK.compatible_node(), new_node.resolve())
 
     def test_pxpipe_argv_binds_explicit_compatible_node(self) -> None:
-        with mock.patch.object(
-            STACK,
-            "pxpipe_runtime_state",
-            return_value={"ready": True, "binary": "/managed/pxpipe/bin/cli.js"},
-        ), mock.patch.object(STACK, "compatible_node", return_value=Path("/opt/node-v24")):
+        with (
+            mock.patch.object(
+                STACK,
+                "pxpipe_runtime_state",
+                return_value={"ready": True, "binary": "/managed/pxpipe/bin/cli.js"},
+            ),
+            mock.patch.object(
+                STACK, "compatible_node", return_value=Path("/opt/node-v24")
+            ),
+        ):
             self.assertEqual(
                 STACK.pxpipe_argv(self.config),
                 ["/opt/node-v24", "/managed/pxpipe/bin/cli.js"],
@@ -205,7 +223,7 @@ class TokenOptimizerStackTests(unittest.TestCase):
                 "#!/bin/sh\n"
                 "set -eu\n"
                 "mkdir -p node_modules/pxpipe-proxy/bin node_modules/.bin\n"
-                "printf '%s\\n' '{\"name\":\"pxpipe-proxy\",\"version\":\"0.10.0\"}' > node_modules/pxpipe-proxy/package.json\n"
+                'printf \'%s\\n\' \'{"name":"pxpipe-proxy","version":"0.10.0"}\' > node_modules/pxpipe-proxy/package.json\n'
                 "printf '%s\\n' '#!/bin/sh' 'exit 0' > node_modules/pxpipe-proxy/bin/cli.js\n"
                 "chmod +x node_modules/pxpipe-proxy/bin/cli.js\n"
                 "ln -s ../pxpipe-proxy/bin/cli.js node_modules/.bin/pxpipe\n",
@@ -217,8 +235,9 @@ class TokenOptimizerStackTests(unittest.TestCase):
                 "PATH": str(fake_bin) + os.pathsep + os.environ.get("PATH", ""),
                 "SIN_TOKEN_STACK_HOME": str(root / "managed"),
             }
-            with mock.patch.dict(os.environ, env), mock.patch.object(
-                STACK, "ensure_assessed_source", return_value=source
+            with (
+                mock.patch.dict(os.environ, env),
+                mock.patch.object(STACK, "ensure_assessed_source", return_value=source),
             ):
                 first = STACK.install_pxpipe_runtime(self.config)
                 self.assertEqual(first["action"], "installed")
@@ -251,14 +270,17 @@ class TokenOptimizerStackTests(unittest.TestCase):
                 "PATH": str(fake_bin) + os.pathsep + os.environ.get("PATH", ""),
                 "SIN_TOKEN_STACK_HOME": str(root / "managed"),
             }
-            with mock.patch.dict(os.environ, env), mock.patch.object(
-                STACK, "ensure_assessed_source", return_value=source
+            with (
+                mock.patch.dict(os.environ, env),
+                mock.patch.object(STACK, "ensure_assessed_source", return_value=source),
             ):
                 with self.assertRaisesRegex(STACK.StackError, "npm ci"):
                     STACK.install_pxpipe_runtime(self.config)
             self.assertEqual(marker_file.read_text(encoding="utf-8"), "preserve")
 
-    def test_source_state_treats_unsynced_as_optional_and_symlink_as_drift(self) -> None:
+    def test_source_state_treats_unsynced_as_optional_and_symlink_as_drift(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp) / "managed"
             with mock.patch.dict(os.environ, {"SIN_TOKEN_STACK_HOME": str(home)}):
@@ -277,12 +299,20 @@ class TokenOptimizerStackTests(unittest.TestCase):
             source = root / "source"
             source.mkdir()
             subprocess.run(["git", "init", "-q"], cwd=source, check=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=source, check=True)
-            subprocess.run(["git", "config", "user.name", "Test"], cwd=source, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=source,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test"], cwd=source, check=True
+            )
             (source / "README.md").write_text("one\n", encoding="utf-8")
             subprocess.run(["git", "add", "."], cwd=source, check=True)
             subprocess.run(["git", "commit", "-qm", "one"], cwd=source, check=True)
-            first = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
+            first = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=source, text=True
+            ).strip()
             (source / "README.md").write_text("two\n", encoding="utf-8")
             subprocess.run(["git", "commit", "-qam", "two"], cwd=source, check=True)
             home = root / "managed"
@@ -290,10 +320,14 @@ class TokenOptimizerStackTests(unittest.TestCase):
             result = STACK.sync_one("fixture", spec, home)
             self.assertEqual(result["commit"], first[:7])
             self.assertEqual(
-                subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=home / "fixture", text=True).strip(),
+                subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], cwd=home / "fixture", text=True
+                ).strip(),
                 first,
             )
-            self.assertEqual(STACK.sync_one("fixture", spec, home)["action"], "verified")
+            self.assertEqual(
+                STACK.sync_one("fixture", spec, home)["action"], "verified"
+            )
             (home / "fixture" / "dirty.txt").write_text("dirty", encoding="utf-8")
             with self.assertRaisesRegex(STACK.StackError, "verändert"):
                 STACK.sync_one("fixture", spec, home)
@@ -307,7 +341,10 @@ class TokenOptimizerStackTests(unittest.TestCase):
             with self.assertRaisesRegex(STACK.StackError, "Symlink"):
                 STACK.sync_one(
                     "fixture",
-                    {"url": "https://github.com/example/example.git", "assessed_commit": "a" * 40},
+                    {
+                        "url": "https://github.com/example/example.git",
+                        "assessed_commit": "a" * 40,
+                    },
                     home,
                 )
 
@@ -330,39 +367,56 @@ class TokenOptimizerStackTests(unittest.TestCase):
                     with STACK.sync_lock(home):
                         self.fail("unreachable")
 
-    def test_fresh_status_check_is_green_but_drifted_present_source_is_not(self) -> None:
+    def test_fresh_status_check_is_green_but_drifted_present_source_is_not(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp) / "managed"
             args = argparse.Namespace(json=True, check=True)
-            with mock.patch.dict(os.environ, {"SIN_TOKEN_STACK_HOME": str(home)}), mock.patch(
-                "sys.stdout", new_callable=io.StringIO
-            ) as stdout:
+            with (
+                mock.patch.dict(os.environ, {"SIN_TOKEN_STACK_HOME": str(home)}),
+                mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
+            ):
                 self.assertEqual(STACK.cmd_status(args), 0)
                 self.assertTrue(json.loads(stdout.getvalue())["check_ok"])
             home.mkdir()
             (home / "ponytail").mkdir()
-            with mock.patch.dict(os.environ, {"SIN_TOKEN_STACK_HOME": str(home)}), mock.patch(
-                "sys.stdout", new_callable=io.StringIO
+            with (
+                mock.patch.dict(os.environ, {"SIN_TOKEN_STACK_HOME": str(home)}),
+                mock.patch("sys.stdout", new_callable=io.StringIO),
             ):
                 self.assertEqual(STACK.cmd_status(args), 2)
 
-    def test_gigatoken_runtime_is_isolated_exactly_pinned_and_source_bound(self) -> None:
-        runtime, version = STACK.validate_gigatoken_runtime_project(self.config, validation=True)
+    def test_gigatoken_runtime_is_isolated_exactly_pinned_and_source_bound(
+        self,
+    ) -> None:
+        runtime, version = STACK.validate_gigatoken_runtime_project(
+            self.config, validation=True
+        )
         self.assertEqual(version, "0.9.0")
         self.assertTrue((runtime / "uv.lock").is_file())
         source = Path("/tmp/reviewed-gigatoken")
-        with mock.patch.object(STACK, "ensure_assessed_source", return_value=source), mock.patch.object(
-            STACK, "assessed_gigatoken_version", return_value="0.9.0"
-        ), mock.patch.object(STACK.shutil, "which", return_value="/opt/homebrew/bin/uv"):
+        with (
+            mock.patch.object(STACK, "ensure_assessed_source", return_value=source),
+            mock.patch.object(
+                STACK, "assessed_gigatoken_version", return_value="0.9.0"
+            ),
+            mock.patch.object(
+                STACK.shutil, "which", return_value="/opt/homebrew/bin/uv"
+            ),
+        ):
             argv = STACK.gigatoken_runtime_argv(self.config, validation=True)
-        self.assertEqual(argv[:6], [
-            "/opt/homebrew/bin/uv",
-            "run",
-            "--quiet",
-            "--frozen",
-            "--project",
-            str(runtime.resolve()),
-        ])
+        self.assertEqual(
+            argv[:6],
+            [
+                "/opt/homebrew/bin/uv",
+                "run",
+                "--quiet",
+                "--frozen",
+                "--project",
+                str(runtime.resolve()),
+            ],
+        )
         self.assertEqual(argv[-2:], ["--group", "validation"])
 
     def test_token_commands_require_real_explicit_inputs(self) -> None:
@@ -396,7 +450,9 @@ class TokenOptimizerStackTests(unittest.TestCase):
         with self.assertRaisesRegex(STACK.StackError, "--yes"):
             STACK.cmd_memory_compress(args)
 
-    def test_caveman_refuses_symlinks_sensitive_names_paths_and_large_files(self) -> None:
+    def test_caveman_refuses_symlinks_sensitive_names_paths_and_large_files(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             normal = root / "memory.md"
@@ -443,10 +499,13 @@ class TokenOptimizerStackTests(unittest.TestCase):
                 allow_third_party_upload=True,
                 timeout=10.0,
             )
-            with mock.patch.object(STACK, "load_config", return_value=self.config), mock.patch.object(
-                STACK, "ensure_assessed_source", return_value=root / "caveman"
-            ), mock.patch.object(STACK, "caveman_backup_path", return_value=backup), mock.patch.object(
-                STACK.subprocess, "Popen", return_value=process
+            with (
+                mock.patch.object(STACK, "load_config", return_value=self.config),
+                mock.patch.object(
+                    STACK, "ensure_assessed_source", return_value=root / "caveman"
+                ),
+                mock.patch.object(STACK, "caveman_backup_path", return_value=backup),
+                mock.patch.object(STACK.subprocess, "Popen", return_value=process),
             ):
                 self.assertEqual(STACK.cmd_memory_compress(args), 0)
 
@@ -465,30 +524,40 @@ class TokenOptimizerStackTests(unittest.TestCase):
                 allow_third_party_upload=True,
                 timeout=0.1,
             )
-            with mock.patch.object(STACK, "load_config", return_value=self.config), mock.patch.object(
-                STACK, "ensure_assessed_source", return_value=root / "caveman"
-            ), mock.patch.object(STACK, "caveman_backup_path", return_value=root / "missing"), mock.patch.object(
-                STACK.subprocess, "Popen", return_value=process
-            ), mock.patch.object(STACK, "terminate_process_group") as terminate:
+            with (
+                mock.patch.object(STACK, "load_config", return_value=self.config),
+                mock.patch.object(
+                    STACK, "ensure_assessed_source", return_value=root / "caveman"
+                ),
+                mock.patch.object(
+                    STACK, "caveman_backup_path", return_value=root / "missing"
+                ),
+                mock.patch.object(STACK.subprocess, "Popen", return_value=process),
+                mock.patch.object(STACK, "terminate_process_group") as terminate,
+            ):
                 with self.assertRaisesRegex(STACK.StackError, "Zeitlimit"):
                     STACK.cmd_memory_compress(args)
                 terminate.assert_called_once_with(process)
 
     def test_pxpipe_export_validates_path_and_flag_combinations(self) -> None:
         args = argparse.Namespace(git=True, stdin=False, path="other")
-        with mock.patch.object(STACK, "load_config", return_value=self.config), mock.patch.object(
-            STACK, "pxpipe_argv", return_value=["pxpipe"]
+        with (
+            mock.patch.object(STACK, "load_config", return_value=self.config),
+            mock.patch.object(STACK, "pxpipe_argv", return_value=["pxpipe"]),
         ):
             with self.assertRaisesRegex(STACK.StackError, "kombiniert"):
                 STACK.cmd_pxpipe_export(args)
         args = argparse.Namespace(git=False, stdin=False, path="/definitely/missing")
-        with mock.patch.object(STACK, "load_config", return_value=self.config), mock.patch.object(
-            STACK, "pxpipe_argv", return_value=["pxpipe"]
+        with (
+            mock.patch.object(STACK, "load_config", return_value=self.config),
+            mock.patch.object(STACK, "pxpipe_argv", return_value=["pxpipe"]),
         ):
             with self.assertRaisesRegex(STACK.StackError, "nicht gefunden"):
                 STACK.cmd_pxpipe_export(args)
 
-    def test_installer_and_verifier_expose_fail_closed_cli_without_auto_sync(self) -> None:
+    def test_installer_and_verifier_expose_fail_closed_cli_without_auto_sync(
+        self,
+    ) -> None:
         installer = (ROOT / "bin" / "install.sh").read_text(encoding="utf-8")
         verifier = (ROOT / "bin" / "verify-tokens").read_text(encoding="utf-8")
         self.assertIn('ln -sfn "$REPO_DIR/bin/sin-token-stack"', installer)
@@ -496,9 +565,12 @@ class TokenOptimizerStackTests(unittest.TestCase):
         self.assertIn("sin-token-stack status --check --json", verifier)
 
     def test_main_reports_expected_failures_with_exit_two(self) -> None:
-        with mock.patch.object(STACK, "load_config", side_effect=STACK.StackError("broken")), mock.patch(
-            "sys.stderr", new_callable=io.StringIO
-        ) as stderr:
+        with (
+            mock.patch.object(
+                STACK, "load_config", side_effect=STACK.StackError("broken")
+            ),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
             self.assertEqual(STACK.main(["status"]), 2)
             self.assertIn("broken", stderr.getvalue())
 

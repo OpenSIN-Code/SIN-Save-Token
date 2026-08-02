@@ -11,10 +11,7 @@ from .verification import path_allowed
 def criterion_ids(
     task: dict[str, Any],
 ) -> list[str]:
-    return [
-        str(item["id"])
-        for item in task["acceptance_criteria"]
-    ]
+    return [str(item["id"]) for item in task["acceptance_criteria"]]
 
 
 def step_ids(task: dict[str, Any]) -> list[str]:
@@ -86,25 +83,20 @@ def execution_protocol_errors(task_id: str) -> list[str]:
         if item.get("actor") == "worker"
     ]
     if received_checkpoints != required_checkpoints:
-        errors.append(
-            "required checkpoints are incomplete or out of order"
-        )
+        errors.append("required checkpoints are incomplete or out of order")
 
     expected_steps = step_ids(task)
     approved_steps = [
         str(message.get("step_id"))
         for message in ledger.get("controller_messages", [])
-        if message.get("type") == "codex.approved"
-        and message.get("step_id")
+        if message.get("type") == "codex.approved" and message.get("step_id")
     ]
     approval_mode = task.get("approval_mode", "stepwise")
     if approval_mode not in {"continuous-preauthorized", "stepwise"}:
         errors.append(f"unsupported task approval mode: {approval_mode!r}")
     elif approval_mode == "stepwise":
         if approved_steps != expected_steps:
-            errors.append(
-                "stepwise task steps were not explicitly approved in order"
-            )
+            errors.append("stepwise task steps were not explicitly approved in order")
     elif approved_steps:
         errors.append(
             "continuous-preauthorized task contains unexpected explicit approvals"
@@ -125,9 +117,7 @@ def execution_protocol_errors(task_id: str) -> list[str]:
     previous_boundary = ack_sequence or 0
     for index, step_id in enumerate(expected_steps):
         checkpoint_name = (
-            required_checkpoints[index]
-            if index < len(required_checkpoints)
-            else None
+            required_checkpoints[index] if index < len(required_checkpoints) else None
         )
         checkpoint_events = [
             event
@@ -175,17 +165,13 @@ def execution_protocol_errors(task_id: str) -> list[str]:
             and callback_sequence is not None
             and checkpoint_sequence >= callback_sequence
         ):
-            errors.append(
-                f"{step_id} checkpoint callback must follow its artifact"
-            )
+            errors.append(f"{step_id} checkpoint callback must follow its artifact")
         for label, sequence in (
             ("checkpoint artifact", checkpoint_sequence),
             ("checkpoint callback", callback_sequence),
         ):
             if sequence is not None and sequence <= previous_boundary:
-                errors.append(
-                    f"{step_id} {label} is out of step order"
-                )
+                errors.append(f"{step_id} {label} is out of step order")
 
         if approval_mode == "stepwise":
             approval_sequence = _single_sequence(
@@ -204,17 +190,13 @@ def execution_protocol_errors(task_id: str) -> list[str]:
                 and approval_sequence is not None
                 and callback_sequence >= approval_sequence
             ):
-                errors.append(
-                    f"{step_id} approval must follow its checkpoint callback"
-                )
+                errors.append(f"{step_id} approval must follow its checkpoint callback")
             if (
                 ack_sequence is not None
                 and approval_sequence is not None
                 and ack_sequence >= approval_sequence
             ):
-                errors.append(
-                    f"worker ack must precede {step_id} approval"
-                )
+                errors.append(f"worker ack must precede {step_id} approval")
             if approval_sequence is not None:
                 previous_boundary = approval_sequence
         elif callback_sequence is not None:
@@ -251,17 +233,13 @@ def execution_protocol_errors(task_id: str) -> list[str]:
             ("worker done callback", done_sequence),
         ):
             if sequence is not None and sequence <= previous_boundary:
-                errors.append(
-                    f"{label} arrived before the final protocol boundary"
-                )
+                errors.append(f"{label} arrived before the final protocol boundary")
         if (
             report_sequence is not None
             and done_sequence is not None
             and report_sequence >= done_sequence
         ):
-            errors.append(
-                "worker done callback must follow the accepted worker report"
-            )
+            errors.append("worker done callback must follow the accepted worker report")
 
         verification_sequences = _matching_event_sequences(
             events,
@@ -313,13 +291,13 @@ def completion_errors(
         if report.get("unresolved"):
             errors.append("worker report contains unresolved work")
 
-        reported_changed = sorted(
-            str(path) for path in report.get("changed_files", [])
-        ) if isinstance(report.get("changed_files"), list) else []
+        reported_changed = (
+            sorted(str(path) for path in report.get("changed_files", []))
+            if isinstance(report.get("changed_files"), list)
+            else []
+        )
         if reported_changed != sorted(actual_changed_files):
-            errors.append(
-                "worker report changed_files does not match actual Git state"
-            )
+            errors.append("worker report changed_files does not match actual Git state")
 
         if task.get("role") == "implementer" and not report.get("evidence"):
             errors.append("implementer report has no evidence")
@@ -327,22 +305,13 @@ def completion_errors(
         scope = report.get("scope_compliance", {})
 
         if scope.get("outside_allowlist_touched") is not False:
-            errors.append(
-                "worker did not prove allowlist compliance"
-            )
+            errors.append("worker did not prove allowlist compliance")
 
-        if (
-            scope.get("unrequested_dependencies_added")
-            is not False
-        ):
-            errors.append(
-                "worker did not prove dependency compliance"
-            )
+        if scope.get("unrequested_dependencies_added") is not False:
+            errors.append("worker did not prove dependency compliance")
 
         if scope.get("architecture_decisions_made") is not False:
-            errors.append(
-                "worker did not prove architecture-decision compliance"
-            )
+            errors.append("worker did not prove architecture-decision compliance")
 
     outside = [
         path
@@ -354,10 +323,7 @@ def completion_errors(
     ]
 
     if outside:
-        errors.append(
-            "changed files outside allowlist: "
-            + ", ".join(outside)
-        )
+        errors.append("changed files outside allowlist: " + ", ".join(outside))
 
     forbidden = [
         path
@@ -369,10 +335,7 @@ def completion_errors(
     ]
 
     if forbidden:
-        errors.append(
-            "forbidden files changed: "
-            + ", ".join(forbidden)
-        )
+        errors.append("forbidden files changed: " + ", ".join(forbidden))
 
     verification = ledger.get("verification")
 
@@ -385,9 +348,7 @@ def completion_errors(
         if not isinstance(verified_changed, list) or sorted(
             str(path) for path in verified_changed
         ) != sorted(actual_changed_files):
-            errors.append(
-                "controller verification changed_files is stale"
-            )
+            errors.append("controller verification changed_files is stale")
         if task.get("role") == "implementer" and not verification.get("results"):
             errors.append("controller verification has no test results")
         if actual_diff_sha256 is not None and (
@@ -420,9 +381,7 @@ def completion_errors(
             and item.get("callback_type") == "done"
         ]
         if len(reviewer_callbacks) != 1:
-            errors.append(
-                "reviewer direct done callback missing or duplicated"
-            )
+            errors.append("reviewer direct done callback missing or duplicated")
 
         reviewer_spawn_sequence = _single_sequence(
             _matching_event_sequences(
@@ -478,9 +437,7 @@ def completion_errors(
             and reviewer_done_sequence is not None
             and review_sequence >= reviewer_done_sequence
         ):
-            errors.append(
-                "reviewer done callback must follow the accepted review"
-            )
+            errors.append("reviewer done callback must follow the accepted review")
         completion_sequences = _matching_event_sequences(
             events,
             event_type="task.completed",
@@ -520,34 +477,24 @@ def completion_errors(
                 errors.append("blind review diff hash is stale or missing")
 
             if review.get("scope_violation") is not False:
-                errors.append(
-                    "reviewer found a scope violation"
-                )
+                errors.append("reviewer found a scope violation")
 
             if review.get("regressions"):
                 errors.append("reviewer found regressions")
 
             if review.get("unverified"):
-                errors.append(
-                    "review contains unverified findings"
-                )
+                errors.append("review contains unverified findings")
 
             criteria = [
-                item for item in review.get("criteria", [])
-                if isinstance(item, dict)
+                item for item in review.get("criteria", []) if isinstance(item, dict)
             ]
             criterion_keys = [item.get("id") for item in criteria]
             if len(criterion_keys) != len(set(criterion_keys)):
                 errors.append("review contains duplicate criterion IDs")
-            statuses = {
-                item.get("id"): item.get("status")
-                for item in criteria
-            }
+            statuses = {item.get("id"): item.get("status") for item in criteria}
 
             for criterion_id in criterion_ids(task):
                 if statuses.get(criterion_id) != "proven":
-                    errors.append(
-                        f"{criterion_id} was not proven"
-                    )
+                    errors.append(f"{criterion_id} was not proven")
 
     return errors

@@ -40,9 +40,7 @@ class ProviderSpec:
                 or isinstance(value, bool)
                 or not minimum <= float(value) <= maximum
             ):
-                raise ValueError(
-                    f"{field} must be between {minimum} and {maximum}"
-                )
+                raise ValueError(f"{field} must be between {minimum} and {maximum}")
 
         integer_limits = {
             "maximum_output_chars": (
@@ -58,9 +56,7 @@ class ProviderSpec:
                 or isinstance(value, bool)
                 or not minimum <= value <= maximum
             ):
-                raise ValueError(
-                    f"{field} must be between {minimum} and {maximum}"
-                )
+                raise ValueError(f"{field} must be between {minimum} and {maximum}")
 
 
 @dataclass(frozen=True)
@@ -79,13 +75,7 @@ class ProviderRuntime:
         state_path: Path | None = None,
     ) -> None:
         self.state_path = (
-            state_path
-            or (
-                Path.home()
-                / ".cache"
-                / "sin"
-                / "provider-health.sqlite3"
-            )
+            state_path or (Path.home() / ".cache" / "sin" / "provider-health.sqlite3")
         ).resolve()
 
         self.state_path.parent.mkdir(
@@ -110,15 +100,9 @@ class ProviderRuntime:
             timeout=10,
         )
         connection.row_factory = sqlite3.Row
-        connection.execute(
-            "PRAGMA journal_mode=WAL"
-        )
-        connection.execute(
-            "PRAGMA busy_timeout=10000"
-        )
-        connection.execute(
-            "PRAGMA synchronous=FULL"
-        )
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA busy_timeout=10000")
+        connection.execute("PRAGMA synchronous=FULL")
         return connection
 
     def _initialize(self) -> None:
@@ -271,7 +255,6 @@ class ProviderRuntime:
             "opened_until": int(row["opened_until"]),
         }
 
-
     @staticmethod
     def _render_argv(
         argv: list[str],
@@ -289,9 +272,7 @@ class ProviderRuntime:
                 )
 
             if "{" in value or "}" in value:
-                raise ValueError(
-                    f"unresolved provider argument at index {index}"
-                )
+                raise ValueError(f"unresolved provider argument at index {index}")
 
             rendered.append(value)
 
@@ -363,9 +344,7 @@ class ProviderRuntime:
                         continue
                     if key.data == "stdout":
                         stdout_bytes += len(chunk)
-                        remaining_capacity = (
-                            maximum_stdout_bytes - len(retained_stdout)
-                        )
+                        remaining_capacity = maximum_stdout_bytes - len(retained_stdout)
                         if remaining_capacity > 0:
                             retained_stdout.extend(chunk[:remaining_capacity])
                     else:
@@ -410,9 +389,7 @@ class ProviderRuntime:
     ) -> dict[str, Any]:
         health = self._health(spec.name)
         now = int(time.time())
-        opened_until = int(
-            health.get("opened_until", 0)
-        )
+        opened_until = int(health.get("opened_until", 0))
 
         if opened_until > now:
             return {
@@ -430,10 +407,7 @@ class ProviderRuntime:
         executable = argv[0]
 
         if os.path.isabs(executable):
-            available = (
-                os.path.isfile(executable)
-                and os.access(executable, os.X_OK)
-            )
+            available = os.path.isfile(executable) and os.access(executable, os.X_OK)
         else:
             available = shutil.which(executable) is not None
 
@@ -488,9 +462,7 @@ class ProviderRuntime:
                 **state,
             }
 
-        duration_ms = int(
-            (time.monotonic() - started) * 1000
-        )
+        duration_ms = int((time.monotonic() - started) * 1000)
 
         stdout = process.stdout.strip()
 
@@ -544,11 +516,7 @@ class ProviderRuntime:
             )
 
             attempts.append(
-                {
-                    key: value
-                    for key, value in result.items()
-                    if key != "output"
-                }
+                {key: value for key, value in result.items() if key != "output"}
             )
 
             if result.get("ok") is True:
@@ -567,16 +535,12 @@ class ProviderRuntime:
 def load_provider_specs(
     path: Path,
 ) -> dict[str, ProviderSpec]:
-    raw = json.loads(
-        path.read_text(encoding="utf-8")
-    )
+    raw = json.loads(path.read_text(encoding="utf-8"))
 
     providers = raw.get("providers")
 
     if not isinstance(providers, dict):
-        raise ValueError(
-            "provider configuration requires providers object"
-        )
+        raise ValueError("provider configuration requires providers object")
 
     result: dict[str, ProviderSpec] = {}
 
@@ -585,31 +549,25 @@ def load_provider_specs(
             continue
 
         argv = config.get("argv")
-        if not isinstance(argv, list) or not argv or not all(
-            isinstance(item, str) and item for item in argv
+        if (
+            not isinstance(argv, list)
+            or not argv
+            or not all(isinstance(item, str) and item for item in argv)
         ):
-            raise ValueError(
-                f"provider {name!r} requires a non-empty argv string list"
-            )
+            raise ValueError(f"provider {name!r} requires a non-empty argv string list")
 
         result[name] = ProviderSpec(
             name=name,
             argv=list(argv),
-            timeout_seconds=float(
-                config.get("timeout_seconds", 120)
-            ),
+            timeout_seconds=float(config.get("timeout_seconds", 120)),
             maximum_output_chars=int(
                 config.get(
                     "maximum_output_chars",
                     16000,
                 )
             ),
-            failure_threshold=int(
-                config.get("failure_threshold", 3)
-            ),
-            cooldown_seconds=float(
-                config.get("cooldown_seconds", 300)
-            ),
+            failure_threshold=int(config.get("failure_threshold", 3)),
+            cooldown_seconds=float(config.get("cooldown_seconds", 300)),
         )
 
     return result

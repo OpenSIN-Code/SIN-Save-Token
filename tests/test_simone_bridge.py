@@ -30,18 +30,18 @@ class TestSimoneBridge(unittest.TestCase):
         self.state_patch.stop()
 
     def test_control_plane_json_parser_tolerates_short_preamble(self) -> None:
-        parsed = _parse_json_object(
-            "control-plane ready\n{\"ok\": true, \"result\": {}}\n"
-        )
+        parsed = _parse_json_object('control-plane ready\n{"ok": true, "result": {}}\n')
         self.assertTrue(parsed["ok"])
 
     def test_compact_text_is_redacted_and_bounded(self) -> None:
-        compact = compact_event({
-            "type": "codex.sent",
-            "payload": {
-                "text": "Authorization: Bearer secret-value",
-            },
-        })
+        compact = compact_event(
+            {
+                "type": "codex.sent",
+                "payload": {
+                    "text": "Authorization: Bearer secret-value",
+                },
+            }
+        )
         self.assertNotIn("secret-value", compact["text"])
         self.assertIn("<redacted>", compact["text"])
 
@@ -159,13 +159,15 @@ class TestSimoneBridge(unittest.TestCase):
 
     def test_automatic_sync_only_runs_for_explicit_binding(self) -> None:
         unbound_id = "bridge-unbound-001"
-        save_task({
-            "task_id": unbound_id,
-            "task_hash": "sha256:unbound",
-            "repository_root": "/repo",
-            "base_sha": "a" * 40,
-            "role": "implementer",
-        })
+        save_task(
+            {
+                "task_id": unbound_id,
+                "task_hash": "sha256:unbound",
+                "repository_root": "/repo",
+                "base_sha": "a" * 40,
+                "role": "implementer",
+            }
+        )
         with patch(
             "sin_orca.cli.sync_task_to_simone",
         ) as sync_call:
@@ -173,14 +175,16 @@ class TestSimoneBridge(unittest.TestCase):
             sync_call.assert_not_called()
 
         bound_id = "bridge-bound-001"
-        save_task({
-            "task_id": bound_id,
-            "simone_task_id": "TASK-SIMONE-BOUND",
-            "task_hash": "sha256:bound",
-            "repository_root": "/repo",
-            "base_sha": "b" * 40,
-            "role": "implementer",
-        })
+        save_task(
+            {
+                "task_id": bound_id,
+                "simone_task_id": "TASK-SIMONE-BOUND",
+                "task_hash": "sha256:bound",
+                "repository_root": "/repo",
+                "base_sha": "b" * 40,
+                "role": "implementer",
+            }
+        )
         with patch(
             "sin_orca.cli.sync_task_to_simone",
             return_value={

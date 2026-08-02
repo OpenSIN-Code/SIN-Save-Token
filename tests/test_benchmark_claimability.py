@@ -91,11 +91,7 @@ def is_claimable(report: dict[str, Any]) -> bool:
                 return False
             for field in NUMERIC_METRIC_FIELDS:
                 value = metrics.get(field)
-                if (
-                    not isinstance(value, int)
-                    or isinstance(value, bool)
-                    or value < 0
-                ):
+                if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                     return False
             task_ids.append(task_id)
 
@@ -125,14 +121,18 @@ def producer_result(
     complete_telemetry: bool = True,
     success: bool = True,
 ) -> Any:
-    telemetry = {
-        "input_tokens": 100,
-        "cache_read_tokens": 0,
-        "cache_write_tokens": 0,
-        "reported_output_tokens": 20,
-        "provider_attempts": 1,
-        "telemetry_cache_hit": False,
-    } if complete_telemetry else {}
+    telemetry = (
+        {
+            "input_tokens": 100,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "reported_output_tokens": 20,
+            "provider_attempts": 1,
+            "telemetry_cache_hit": False,
+        }
+        if complete_telemetry
+        else {}
+    )
     return BENCHMARK.RunResult(
         task_id="task-1",
         mode=mode,
@@ -230,10 +230,14 @@ class BenchmarkClaimabilityTests(unittest.TestCase):
             }
             <= set(schema["required"])
         )
-        self.assertEqual(set(schema["properties"]["variants"]["required"]), set(VARIANTS))
+        self.assertEqual(
+            set(schema["properties"]["variants"]["required"]), set(VARIANTS)
+        )
         self.assertTrue(METRIC_FIELDS <= set(schema["$defs"]["metrics"]["required"]))
 
-    def test_real_producer_emits_claimable_schema_report_with_complete_telemetry(self) -> None:
+    def test_real_producer_emits_claimable_schema_report_with_complete_telemetry(
+        self,
+    ) -> None:
         report = producer_report(complete_telemetry=True)
         self.assertTrue(report["claimable_abc_comparison"])
         self.assertTrue(is_claimable(report))
@@ -251,10 +255,15 @@ class BenchmarkClaimabilityTests(unittest.TestCase):
         self.assertFalse(report["claimable_abc_comparison"])
         self.assertFalse(is_claimable(report))
         self.assertTrue(
-            any("exact token/cache telemetry missing" in error for error in report["errors"])
+            any(
+                "exact token/cache telemetry missing" in error
+                for error in report["errors"]
+            )
         )
 
-    def test_benchmark_redacts_secret_bearing_arguments_and_omits_them_from_reports(self) -> None:
+    def test_benchmark_redacts_secret_bearing_arguments_and_omits_them_from_reports(
+        self,
+    ) -> None:
         argv = BENCHMARK.redact_argv(
             [
                 "runner",

@@ -88,9 +88,7 @@ def wrap_evidence(
     trust_level: str = "external-untrusted",
     metadata: dict[str, Any] | None = None,
 ) -> EvidenceEnvelope:
-    digest = hashlib.sha256(
-        content.encode("utf-8")
-    ).hexdigest()
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     return EvidenceEnvelope(
         source=source,
@@ -131,8 +129,7 @@ def _sanitize_metadata(value: Any, *, depth: int = 0) -> Any:
         }
     if isinstance(value, (list, tuple)):
         return [
-            _sanitize_metadata(child, depth=depth + 1)
-            for child in list(value)[:200]
+            _sanitize_metadata(child, depth=depth + 1) for child in list(value)[:200]
         ]
     if value is None or isinstance(value, (bool, int, float)):
         return value
@@ -172,20 +169,12 @@ def render_for_model(
             "artifact for the complete source."
         )
 
-    return (
-        "\n".join(warning)
-        + "\n\n"
-        + visible
-        + f"\n\n{EVIDENCE_END}"
-    )
+    return "\n".join(warning) + "\n\n" + visible + f"\n\n{EVIDENCE_END}"
 
 
 def envelope_to_dict(
     envelope: EvidenceEnvelope,
 ) -> dict[str, Any]:
     result = asdict(envelope)
-    result["suspicious"] = [
-        asdict(item)
-        for item in envelope.suspicious
-    ]
+    result["suspicious"] = [asdict(item) for item in envelope.suspicious]
     return result

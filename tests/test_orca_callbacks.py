@@ -29,11 +29,7 @@ class OrcaCallbackTests(unittest.TestCase):
         self.repository.mkdir()
         self.task_id = "callback-task-001"
         self.outbox = (
-            self.repository
-            / ".sin-worker"
-            / "tasks"
-            / self.task_id
-            / "outbox"
+            self.repository / ".sin-worker" / "tasks" / self.task_id / "outbox"
         )
         self.outbox.mkdir(parents=True)
         self.state_patch = patch(
@@ -41,21 +37,23 @@ class OrcaCallbackTests(unittest.TestCase):
             lambda *args, **kwargs: self.state,
         )
         self.state_patch.start()
-        save_task({
-            "task_id": self.task_id,
-            "task_hash": "sha256:callback",
-            "repository_root": str(self.repository),
-            "base_sha": "a" * 40,
-            "parent_terminal_handle": "parent-terminal",
-            "artifact_outbox": str(self.outbox.relative_to(self.repository)),
-            "role": "implementer",
-            "objective": "test callbacks",
-            "steps": [{"id": "S01", "instruction": "test callback"}],
-            "required_checkpoints": ["ready"],
-            "allowed_paths": ["README.md"],
-            "forbidden_paths": [],
-            "acceptance_criteria": [{"id": "AC01", "text": "callback works"}],
-        })
+        save_task(
+            {
+                "task_id": self.task_id,
+                "task_hash": "sha256:callback",
+                "repository_root": str(self.repository),
+                "base_sha": "a" * 40,
+                "parent_terminal_handle": "parent-terminal",
+                "artifact_outbox": str(self.outbox.relative_to(self.repository)),
+                "role": "implementer",
+                "objective": "test callbacks",
+                "steps": [{"id": "S01", "instruction": "test callback"}],
+                "required_checkpoints": ["ready"],
+                "allowed_paths": ["README.md"],
+                "forbidden_paths": [],
+                "acceptance_criteria": [{"id": "AC01", "text": "callback works"}],
+            }
+        )
         append_event(
             self.task_id,
             "task.created",
@@ -87,19 +85,21 @@ class OrcaCallbackTests(unittest.TestCase):
 
     def write_checkpoint(self) -> None:
         (self.outbox / "checkpoint.json").write_text(
-            json.dumps({
-                "task_id": self.task_id,
-                "task_hash": "sha256:callback",
-                "base_sha": "a" * 40,
-                "checkpoint": "ready",
-                "sequence": 1,
-                "step_id": "S01",
-                "status": "ready",
-                "changed_files": [],
-                "commands": [],
-                "unresolved": [],
-                "child_process_running": False,
-            }),
+            json.dumps(
+                {
+                    "task_id": self.task_id,
+                    "task_hash": "sha256:callback",
+                    "base_sha": "a" * 40,
+                    "checkpoint": "ready",
+                    "sequence": 1,
+                    "step_id": "S01",
+                    "status": "ready",
+                    "changed_files": [],
+                    "commands": [],
+                    "unresolved": [],
+                    "child_process_running": False,
+                }
+            ),
             encoding="utf-8",
         )
 
@@ -128,21 +128,23 @@ class OrcaCallbackTests(unittest.TestCase):
             actor="codex",
         )
         (self.outbox / "report.json").write_text(
-            json.dumps({
-                "task_id": self.task_id,
-                "task_hash": "sha256:callback",
-                "base_sha": "a" * 40,
-                "status": "complete",
-                "changed_files": ["README.md"],
-                "evidence": ["README.md updated"],
-                "commands": [],
-                "unresolved": [],
-                "scope_compliance": {
-                    "outside_allowlist_touched": False,
-                    "unrequested_dependencies_added": False,
-                    "architecture_decisions_made": False,
-                },
-            }),
+            json.dumps(
+                {
+                    "task_id": self.task_id,
+                    "task_hash": "sha256:callback",
+                    "base_sha": "a" * 40,
+                    "status": "complete",
+                    "changed_files": ["README.md"],
+                    "evidence": ["README.md updated"],
+                    "commands": [],
+                    "unresolved": [],
+                    "scope_compliance": {
+                        "outside_allowlist_touched": False,
+                        "unrequested_dependencies_added": False,
+                        "architecture_decisions_made": False,
+                    },
+                }
+            ),
             encoding="utf-8",
         )
 
@@ -223,16 +225,16 @@ class OrcaCallbackTests(unittest.TestCase):
             "sin_orca.cli.run_orca",
             return_value={"ok": True},
         ) as sender:
-            result = _cmd_notify(self.args(
-                summary="Authorization: Bearer secret-token",
-                verify="password=hunter2",
-                action="use https://user:pass@example.invalid/path",
-            ))
+            result = _cmd_notify(
+                self.args(
+                    summary="Authorization: Bearer secret-token",
+                    verify="password=hunter2",
+                    action="use https://user:pass@example.invalid/path",
+                )
+            )
 
         self.assertEqual(result, 0)
-        message = sender.call_args.args[0][
-            sender.call_args.args[0].index("--text") + 1
-        ]
+        message = sender.call_args.args[0][sender.call_args.args[0].index("--text") + 1]
         self.assertNotIn("secret-token", message)
         self.assertNotIn("hunter2", message)
         self.assertNotIn("pass@example", message)

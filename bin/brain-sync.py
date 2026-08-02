@@ -18,13 +18,7 @@ import sys
 import time
 from pathlib import Path
 
-STATE_FILE = (
-    Path.home()
-    / ".local"
-    / "share"
-    / "sin-save-token"
-    / "brain-sync.sqlite3"
-)
+STATE_FILE = Path.home() / ".local" / "share" / "sin-save-token" / "brain-sync.sqlite3"
 MEMORY_WRITER = Path(__file__).resolve().parent / "sin-memory-write"
 
 
@@ -205,9 +199,7 @@ def export_page(
 
 def status(connection: sqlite3.Connection) -> int:
     count = connection.execute("SELECT COUNT(*) FROM exports").fetchone()[0]
-    newest = connection.execute(
-        "SELECT MAX(exported_at) FROM exports"
-    ).fetchone()[0]
+    newest = connection.execute("SELECT MAX(exported_at) FROM exports").fetchone()[0]
 
     print(
         json.dumps(

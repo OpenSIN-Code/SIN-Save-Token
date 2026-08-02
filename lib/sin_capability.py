@@ -10,7 +10,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
-CAPABILITIES_PATH = Path(__file__).resolve().parent.parent / "config" / "capabilities.json"
+CAPABILITIES_PATH = (
+    Path(__file__).resolve().parent.parent / "config" / "capabilities.json"
+)
 
 
 @lru_cache(maxsize=16)

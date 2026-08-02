@@ -53,9 +53,7 @@ def audit_sst(audit: Audit, root: Path) -> None:
     budgets = policy.get("budgets", {})
 
     route_by_name = {
-        route.get("name"): route
-        for route in routes
-        if isinstance(route, dict)
+        route.get("name"): route for route in routes if isinstance(route, dict)
     }
     symbol = route_by_name.get("code_symbol", {})
     architecture = route_by_name.get("code_architecture", {})
@@ -134,7 +132,7 @@ def audit_sst(audit: Audit, root: Path) -> None:
     audit.require(
         "cognee2gbrain" not in sync
         and "def reverse_sync" not in sync
-        and "add_parser(\"reverse\")" not in sync,
+        and 'add_parser("reverse")' not in sync,
         "brain-sync implementation exposes no reverse command",
     )
 
@@ -237,7 +235,7 @@ def audit_global_brain(audit: Audit, root: Path) -> None:
     audit.require(
         "mktemp" in before
         and "trap 'rm -f \"$CONTEXT_FILE\"' EXIT" in before
-        and 'pcpm-context-${PROJECT_ID}.json' not in before,
+        and "pcpm-context-${PROJECT_ID}.json" not in before,
         "live beforeRun uses a private, cleaned temporary context file",
     )
     audit.require(
@@ -288,8 +286,7 @@ def audit_global_brain(audit: Audit, root: Path) -> None:
         "runtime surfaces expose no chat-turn memory loop",
     )
     audit.require(
-        "PCPM_EXPORT_TO_CLAUDE_MEM" not in after
-        and "brain-to-claude-mem" not in after,
+        "PCPM_EXPORT_TO_CLAUDE_MEM" not in after and "brain-to-claude-mem" not in after,
         "live afterRun hook has no duplicate-memory export path",
     )
     audit.require(

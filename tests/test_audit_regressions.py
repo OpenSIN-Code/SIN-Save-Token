@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402  # Local modules require the repository lib path bootstrap below.
 
 import fcntl
 import json
@@ -78,18 +79,24 @@ def test_terminal_selection_uses_expected_title_not_last_candidate() -> None:
             ]
         }
     }
-    assert select_created_terminal(
-        listing,
-        existing_handles={"term-old"},
-        expected_title="task-123",
-    ) == "term-wanted"
+    assert (
+        select_created_terminal(
+            listing,
+            existing_handles={"term-old"},
+            expected_title="task-123",
+        )
+        == "term-wanted"
+    )
 
 
 def test_terminal_selection_refuses_ambiguous_unlabelled_candidates() -> None:
     listing = {"terminals": [{"handle": "a"}, {"handle": "b"}]}
-    assert select_created_terminal(
-        listing, existing_handles=set(), expected_title="task-123"
-    ) is None
+    assert (
+        select_created_terminal(
+            listing, existing_handles=set(), expected_title="task-123"
+        )
+        is None
+    )
 
 
 def test_review_context_detects_async_methods_and_exact_test_references(
@@ -111,7 +118,8 @@ def test_review_context_detects_async_methods_and_exact_test_references(
     names = {item["name"] for item in symbols}
     assert {"Service", "refresh_token"} <= names
     gap = next(
-        item for item in builder._detect_test_gaps(symbols)
+        item
+        for item in builder._detect_test_gaps(symbols)
         if item["function"] == "refresh_token"
     )
     assert gap["has_direct_test"] is False
@@ -127,13 +135,15 @@ def test_review_context_preserves_rename_source_and_destination(tmp_path: Path) 
     ]
     with patch("sin_review_context.run_command", side_effect=responses):
         files = builder._get_changed_files("a" * 40)
-    assert files == [{
-        "path": "new.py",
-        "previous_path": "old.py",
-        "change_type": "renamed",
-        "lines_added": 0,
-        "lines_removed": 0,
-    }]
+    assert files == [
+        {
+            "path": "new.py",
+            "previous_path": "old.py",
+            "change_type": "renamed",
+            "lines_added": 0,
+            "lines_removed": 0,
+        }
+    ]
 
 
 def test_malformed_orchestrator_config_fails_explicitly(tmp_path: Path) -> None:
@@ -147,15 +157,20 @@ def test_malformed_orchestrator_config_fails_explicitly(tmp_path: Path) -> None:
 
 def test_capability_prompt_rejects_path_traversal(tmp_path: Path) -> None:
     config = tmp_path / "capabilities.json"
-    config.write_text(json.dumps({
-        "schema_version": 1,
-        "capabilities": {
-            "escape": {
-                "description": "fallback",
-                "prompt_template": "../../outside.txt",
+    config.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "capabilities": {
+                    "escape": {
+                        "description": "fallback",
+                        "prompt_template": "../../outside.txt",
+                    }
+                },
             }
-        },
-    }), encoding="utf-8")
+        ),
+        encoding="utf-8",
+    )
     assert load_capabilities(config)["capabilities"]["escape"]
     with pytest.raises(ValueError, match="escapes config/prompts"):
         capability_prompt("escape", config)
@@ -177,12 +192,14 @@ def test_dynamic_subquestion_id_uses_max_existing_number() -> None:
 
 def test_citation_import_rejects_unknown_source_reference() -> None:
     with pytest.raises(ValueError, match="unknown sources"):
-        CitationManager.from_dict({
-            "entries": [],
-            "claims": [{
-                "claim_id": "c1", "text": "claim", "source_ids": ["missing"]
-            }],
-        })
+        CitationManager.from_dict(
+            {
+                "entries": [],
+                "claims": [
+                    {"claim_id": "c1", "text": "claim", "source_ids": ["missing"]}
+                ],
+            }
+        )
 
 
 def test_memory_context_bounds_disk_reads(tmp_path: Path) -> None:
@@ -228,9 +245,12 @@ def test_cache_ttl_expires_even_frequently_used_entries(tmp_path: Path) -> None:
         )
         cache.conn.commit()
         assert cache.get("route", "provider", "query", "repo") is None
-        assert cache.conn.execute(
-            "SELECT COUNT(*) FROM cache_entries WHERE cache_key = ?", (key,)
-        ).fetchone()[0] == 0
+        assert (
+            cache.conn.execute(
+                "SELECT COUNT(*) FROM cache_entries WHERE cache_key = ?", (key,)
+            ).fetchone()[0]
+            == 0
+        )
     finally:
         cache.close()
 

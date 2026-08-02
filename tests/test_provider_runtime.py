@@ -194,10 +194,12 @@ class ProviderRuntimeTests(unittest.TestCase):
             )
             runtimes = [ProviderRuntime(state_path=state) for _ in range(20)]
             with ThreadPoolExecutor(max_workers=8) as executor:
-                results = list(executor.map(
-                    lambda runtime: runtime._record_failure(spec, "failed"),
-                    runtimes,
-                ))
+                results = list(
+                    executor.map(
+                        lambda runtime: runtime._record_failure(spec, "failed"),
+                        runtimes,
+                    )
+                )
 
             self.assertEqual(len(results), 20)
             health = ProviderRuntime(state_path=state).health("parallel-broken")

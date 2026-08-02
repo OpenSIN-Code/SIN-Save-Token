@@ -53,7 +53,9 @@ class ProviderFailureCacheContractTests(unittest.TestCase):
                 cooldown_seconds=60,
             )
 
-            self.assertEqual(runtime.call(failed, cwd=root, variables={})["status"], "failed")
+            self.assertEqual(
+                runtime.call(failed, cwd=root, variables={})["status"], "failed"
+            )
             self.assertEqual(runtime.health("resettable")["consecutive_failures"], 1)
             self.assertTrue(runtime.call(succeeded, cwd=root, variables={})["ok"])
             self.assertEqual(runtime.health("resettable")["consecutive_failures"], 0)

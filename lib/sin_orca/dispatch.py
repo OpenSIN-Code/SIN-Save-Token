@@ -47,16 +47,17 @@ def run_git(
     )
 
     if process.returncode != 0:
-        raise RuntimeError(
-            process.stderr.strip()
-            or process.stdout.strip()
-        )
+        raise RuntimeError(process.stderr.strip() or process.stdout.strip())
 
     return process.stdout.strip()
 
 
 TERMINAL_HANDLE_KEYS = {
-    "handle", "terminalHandle", "terminal_handle", "terminalId", "terminal_id",
+    "handle",
+    "terminalHandle",
+    "terminal_handle",
+    "terminalId",
+    "terminal_id",
 }
 
 
@@ -74,15 +75,15 @@ def terminal_records(value: Any) -> list[dict[str, str]]:
             None,
         )
         if handle:
-            records.append({
-                "handle": handle,
-                "title": str(value.get("title") or "").strip(),
-                "worktree_path": str(
-                    value.get("worktreePath")
-                    or value.get("worktree_path")
-                    or ""
-                ).strip(),
-            })
+            records.append(
+                {
+                    "handle": handle,
+                    "title": str(value.get("title") or "").strip(),
+                    "worktree_path": str(
+                        value.get("worktreePath") or value.get("worktree_path") or ""
+                    ).strip(),
+                }
+            )
         for child in value.values():
             records.extend(terminal_records(child))
     elif isinstance(value, list):
@@ -106,11 +107,13 @@ def select_created_terminal(
     expected_title: str,
 ) -> str | None:
     candidates = [
-        record for record in terminal_records(value)
+        record
+        for record in terminal_records(value)
         if record["handle"] not in existing_handles
     ]
     exact = [
-        record["handle"] for record in candidates
+        record["handle"]
+        for record in candidates
         if record.get("title") == expected_title
     ]
     if len(exact) == 1:
@@ -135,8 +138,7 @@ def resolve_parent_terminal(explicit: str | None) -> str:
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
     raise ValueError(
-        "same-worktree dispatch requires --parent-terminal or "
-        "SIN_ORCA_PARENT_TERMINAL"
+        "same-worktree dispatch requires --parent-terminal or SIN_ORCA_PARENT_TERMINAL"
     )
 
 
@@ -154,13 +156,15 @@ def create_baseline_commit(
         pass
     index_path.unlink(missing_ok=True)
     environment = safe_subprocess_environment()
-    environment.update({
-        "GIT_INDEX_FILE": str(index_path),
-        "GIT_AUTHOR_NAME": "SIN Orca Controller",
-        "GIT_AUTHOR_EMAIL": "sin-orca@localhost",
-        "GIT_COMMITTER_NAME": "SIN Orca Controller",
-        "GIT_COMMITTER_EMAIL": "sin-orca@localhost",
-    })
+    environment.update(
+        {
+            "GIT_INDEX_FILE": str(index_path),
+            "GIT_AUTHOR_NAME": "SIN Orca Controller",
+            "GIT_AUTHOR_EMAIL": "sin-orca@localhost",
+            "GIT_COMMITTER_NAME": "SIN Orca Controller",
+            "GIT_COMMITTER_EMAIL": "sin-orca@localhost",
+        }
+    )
     try:
         run_git(root, "read-tree", "HEAD", env=environment)
         run_git(root, "add", "-A", "--", ".", env=environment)
@@ -205,9 +209,8 @@ def baseline_ref_is_valid(
     baseline_ref: Any,
     expected_sha: str,
 ) -> bool:
-    if (
-        not isinstance(baseline_ref, str)
-        or not baseline_ref.startswith("refs/sin-orca/baselines/")
+    if not isinstance(baseline_ref, str) or not baseline_ref.startswith(
+        "refs/sin-orca/baselines/"
     ):
         return False
     try:
@@ -253,9 +256,7 @@ def _parse_json_object(text: str) -> dict[str, Any]:
 
     candidates = [stripped]
     candidates.extend(
-        stripped[index:]
-        for index, character in enumerate(stripped)
-        if character == "{"
+        stripped[index:] for index, character in enumerate(stripped) if character == "{"
     )
     decoder = json.JSONDecoder()
     for candidate in candidates:
@@ -327,15 +328,11 @@ def deep_values(
             if key in keys:
                 results.append(child)
 
-            results.extend(
-                deep_values(child, keys)
-            )
+            results.extend(deep_values(child, keys))
 
     elif isinstance(value, list):
         for child in value:
-            results.extend(
-                deep_values(child, keys)
-            )
+            results.extend(deep_values(child, keys))
 
     return results
 
@@ -364,15 +361,9 @@ def make_task_id(
         role.lower(),
     ).strip("-")
 
-    material = (
-        f"{time.time_ns()}:"
-        f"{uuid.uuid4().hex}:"
-        f"{objective}"
-    )
+    material = f"{time.time_ns()}:{uuid.uuid4().hex}:{objective}"
 
-    digest = hashlib.sha256(
-        material.encode("utf-8")
-    ).hexdigest()[:10]
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:10]
 
     return f"{safe_role}-{digest}"
 
@@ -382,32 +373,26 @@ def render_worker_prompt(
     *,
     worker_terminal: str,
 ) -> str:
-    steps = "\n".join(
-        f"{step['id']}. {step['instruction']}"
-        for step in task["steps"]
-    )
+    steps = "\n".join(f"{step['id']}. {step['instruction']}" for step in task["steps"])
 
-    allowed = "\n".join(
-        f"- {path}"
-        for path in task["allowed_paths"]
-    )
+    allowed = "\n".join(f"- {path}" for path in task["allowed_paths"])
 
     acceptance = "\n".join(
-        f"- {item['id']}: {item['text']}"
-        for item in task["acceptance_criteria"]
+        f"- {item['id']}: {item['text']}" for item in task["acceptance_criteria"]
     )
 
-    checkpoints = "\n".join(
-        f"{index}. {checkpoint}"
-        for index, checkpoint in enumerate(
-            task.get("required_checkpoints", []),
-            start=1,
+    checkpoints = (
+        "\n".join(
+            f"{index}. {checkpoint}"
+            for index, checkpoint in enumerate(
+                task.get("required_checkpoints", []),
+                start=1,
+            )
         )
-    ) or "(none)"
-
-    approval_mode = str(
-        task.get("approval_mode", "continuous-preauthorized")
+        or "(none)"
     )
+
+    approval_mode = str(task.get("approval_mode", "continuous-preauthorized"))
     if approval_mode == "continuous-preauthorized":
         approval_rules = """All listed ordered steps are approved in advance.
 Send the required acknowledgement and checkpoint callbacks, then continue automatically through the listed steps unless a stop condition or parent interrupt applies.
@@ -550,9 +535,7 @@ def dispatch_task(
     if role not in {"explorer", "librarian", "implementer", "reviewer"}:
         raise ValueError(f"unsupported worker role: {role}")
     if approval_mode not in {"continuous-preauthorized", "stepwise"}:
-        raise ValueError(
-            "approval_mode must be continuous-preauthorized or stepwise"
-        )
+        raise ValueError("approval_mode must be continuous-preauthorized or stepwise")
     if not isinstance(agent, str) or not agent.strip():
         raise ValueError("agent must be a non-empty string")
     agent = agent.strip()
@@ -562,15 +545,11 @@ def dispatch_task(
         )
 
     candidate_root = (
-        Path(repository).expanduser().resolve()
-        if repository
-        else repository_root()
+        Path(repository).expanduser().resolve() if repository else repository_root()
     )
     if not candidate_root.is_dir():
         raise ValueError(f"repository does not exist: {candidate_root}")
-    root = Path(
-        run_git(candidate_root, "rev-parse", "--show-toplevel")
-    ).resolve()
+    root = Path(run_git(candidate_root, "rev-parse", "--show-toplevel")).resolve()
     parent_handle = resolve_parent_terminal(parent_terminal)
     selector = f"path:{root}"
     if role == "implementer":
@@ -587,8 +566,7 @@ def dispatch_task(
             missing.append("required_checkpoints")
         if missing:
             raise ValueError(
-                "implementer task is missing required fields: "
-                + ", ".join(missing)
+                "implementer task is missing required fields: " + ", ".join(missing)
             )
         if len(required_checkpoints) != len(steps):
             raise ValueError(
@@ -605,9 +583,7 @@ def dispatch_task(
             writer_reservation = acquire_writer(
                 root,
                 task_id=task_id,
-                parent_task_id=(
-                    parent_task_id.strip() if parent_task_id else None
-                ),
+                parent_task_id=(parent_task_id.strip() if parent_task_id else None),
             )
         repository_head_sha, base_sha, baseline_ref = create_baseline_commit(
             root,
@@ -674,10 +650,7 @@ def dispatch_task(
         task["simone_task_id"] = simone_task_id.strip()
 
     hash_material = dict(task)
-    task["task_hash"] = (
-        "sha256:"
-        + sha256_json(hash_material)
-    )
+    task["task_hash"] = "sha256:" + sha256_json(hash_material)
 
     try:
         save_task(task, root=root)
@@ -718,16 +691,18 @@ def dispatch_task(
                 "parent terminal is not attached to the selected repository worktree"
             )
 
-        created = run_orca([
-            "terminal",
-            "create",
-            "--worktree",
-            selector,
-            "--command",
-            agent,
-            "--title",
-            task_id,
-        ])
+        created = run_orca(
+            [
+                "terminal",
+                "create",
+                "--worktree",
+                selector,
+                "--command",
+                agent,
+                "--title",
+                task_id,
+            ]
+        )
         terminal = first_string(
             created.get("result", created),
             {
@@ -786,15 +761,17 @@ def dispatch_task(
     prompt_file.chmod(0o600)
 
     try:
-        run_orca([
-            "terminal",
-            "send",
-            "--terminal",
-            terminal,
-            "--text",
-            prompt,
-            "--enter",
-        ])
+        run_orca(
+            [
+                "terminal",
+                "send",
+                "--terminal",
+                terminal,
+                "--text",
+                prompt,
+                "--enter",
+            ]
+        )
     except Exception as error:
         append_event(
             task_id,

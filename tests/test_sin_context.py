@@ -15,16 +15,17 @@ MODULE_PATH = ROOT / "bin" / "sin-context"
 MODULE = ModuleType("sin_context")
 MODULE.__file__ = str(MODULE_PATH)
 sys.modules["sin_context"] = MODULE
-exec(compile(MODULE_PATH.read_text(encoding="utf-8"), str(MODULE_PATH), "exec"), MODULE.__dict__)
+exec(
+    compile(MODULE_PATH.read_text(encoding="utf-8"), str(MODULE_PATH), "exec"),
+    MODULE.__dict__,
+)
 
 
 class ContextBrokerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.policy = json.loads(
-            (ROOT / "config" / "context-policy.json").read_text(
-                encoding="utf-8"
-            )
+            (ROOT / "config" / "context-policy.json").read_text(encoding="utf-8")
         )
 
     def test_routes_symbol_question_to_simone_first(self):
@@ -118,9 +119,7 @@ class ContextBrokerTests(unittest.TestCase):
             MODULE.validate_policy(invalid)
 
     def test_every_routed_provider_has_runtime_config(self):
-        specs = MODULE.load_provider_specs(
-            ROOT / "config" / "provider-runtime.json"
-        )
+        specs = MODULE.load_provider_specs(ROOT / "config" / "provider-runtime.json")
         routed = {
             provider
             for route in self.policy["routes"]

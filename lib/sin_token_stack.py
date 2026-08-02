@@ -95,36 +95,60 @@ def validate_config(config: Any) -> dict[str, Any]:
             raise StackError(f"upstreams.{name}.license muss MIT sein")
         _require_string(spec.get("role"), f"upstreams.{name}.role")
         _require_string(spec.get("integration"), f"upstreams.{name}.integration")
-        commit = _require_string(spec.get("assessed_commit"), f"upstreams.{name}.assessed_commit")
+        commit = _require_string(
+            spec.get("assessed_commit"), f"upstreams.{name}.assessed_commit"
+        )
         if not re.fullmatch(r"[0-9a-f]{40}", commit):
-            raise StackError(f"upstreams.{name}.assessed_commit muss ein vollständiger SHA-1 sein")
+            raise StackError(
+                f"upstreams.{name}.assessed_commit muss ein vollständiger SHA-1 sein"
+            )
 
     pxpipe = _require_mapping(upstreams["pxpipe"], "upstreams.pxpipe")
     _parse_npm_pin(pxpipe.get("npm_package"), "upstreams.pxpipe.npm_package")
-    _safe_project_path(pxpipe.get("runtime_project"), "upstreams.pxpipe.runtime_project")
+    _safe_project_path(
+        pxpipe.get("runtime_project"), "upstreams.pxpipe.runtime_project"
+    )
     _require_string(pxpipe.get("npm_integrity"), "upstreams.pxpipe.npm_integrity")
-    transitive = _require_mapping(pxpipe.get("transitive_integrity"), "upstreams.pxpipe.transitive_integrity")
+    transitive = _require_mapping(
+        pxpipe.get("transitive_integrity"), "upstreams.pxpipe.transitive_integrity"
+    )
     if set(transitive) != {"gpt-tokenizer@3.4.0"}:
-        raise StackError("upstreams.pxpipe.transitive_integrity muss gpt-tokenizer@3.4.0 enthalten")
+        raise StackError(
+            "upstreams.pxpipe.transitive_integrity muss gpt-tokenizer@3.4.0 enthalten"
+        )
     _require_string(transitive["gpt-tokenizer@3.4.0"], "gpt-tokenizer integrity")
 
     gigatoken = _require_mapping(upstreams["gigatoken"], "upstreams.gigatoken")
-    _parse_python_pin(gigatoken.get("python_package"), "upstreams.gigatoken.python_package")
-    _parse_python_pin(gigatoken.get("validation_package"), "upstreams.gigatoken.validation_package")
-    _safe_project_path(gigatoken.get("runtime_project"), "upstreams.gigatoken.runtime_project")
-    _require_string(gigatoken.get("validation_group"), "upstreams.gigatoken.validation_group")
+    _parse_python_pin(
+        gigatoken.get("python_package"), "upstreams.gigatoken.python_package"
+    )
+    _parse_python_pin(
+        gigatoken.get("validation_package"), "upstreams.gigatoken.validation_package"
+    )
+    _safe_project_path(
+        gigatoken.get("runtime_project"), "upstreams.gigatoken.runtime_project"
+    )
+    _require_string(
+        gigatoken.get("validation_group"), "upstreams.gigatoken.validation_group"
+    )
 
     policy = _require_mapping(data.get("policy"), "policy")
     for key in ("always_on", "explicit_only"):
         values = policy.get(key)
-        if not isinstance(values, list) or not values or not all(isinstance(item, str) and item for item in values):
+        if (
+            not isinstance(values, list)
+            or not values
+            or not all(isinstance(item, str) and item for item in values)
+        ):
             raise StackError(f"policy.{key} muss eine nichtleere String-Liste sein")
     px_policy = _require_mapping(policy.get("pxpipe"), "policy.pxpipe")
     if px_policy.get("default_mode") != "off":
         raise StackError("policy.pxpipe.default_mode muss off sein")
     for key in ("validated_default_models", "lossy_opt_in_models", "never_image"):
         values = px_policy.get(key)
-        if not isinstance(values, list) or not all(isinstance(item, str) and item for item in values):
+        if not isinstance(values, list) or not all(
+            isinstance(item, str) and item for item in values
+        ):
             raise StackError(f"policy.pxpipe.{key} muss eine String-Liste sein")
     giga_policy = _require_mapping(policy.get("gigatoken"), "policy.gigatoken")
     if giga_policy.get("default_mode") != "off":
@@ -190,16 +214,24 @@ def normalize_git_url(url: str) -> str:
 
 
 def _origin_matches(target: Path, expected_url: str) -> bool:
-    result = run(["git", "remote", "get-url", "origin"], cwd=target, check=False, timeout=15)
-    return result.returncode == 0 and normalize_git_url(result.stdout.strip()) == normalize_git_url(expected_url)
+    result = run(
+        ["git", "remote", "get-url", "origin"], cwd=target, check=False, timeout=15
+    )
+    return result.returncode == 0 and normalize_git_url(
+        result.stdout.strip()
+    ) == normalize_git_url(expected_url)
 
 
 def verify_origin(target: Path, expected_url: str) -> None:
     if _origin_matches(target, expected_url):
         return
-    result = run(["git", "remote", "get-url", "origin"], cwd=target, check=False, timeout=15)
+    result = run(
+        ["git", "remote", "get-url", "origin"], cwd=target, check=False, timeout=15
+    )
     actual = result.stdout.strip() if result.returncode == 0 else "<missing>"
-    raise StackError(f"{target}: unerwartetes origin {actual!r}; erwartet {expected_url!r}")
+    raise StackError(
+        f"{target}: unerwartetes origin {actual!r}; erwartet {expected_url!r}"
+    )
 
 
 def _checkout_is_clean(target: Path) -> bool:
@@ -217,7 +249,9 @@ def source_state(name: str, config: Mapping[str, Any] | None = None) -> dict[str
     spec = config["upstreams"][name]
     target = managed_home(config) / name
     present = target.exists() or target.is_symlink()
-    installed = target.is_dir() and (target / ".git").exists() and not target.is_symlink()
+    installed = (
+        target.is_dir() and (target / ".git").exists() and not target.is_symlink()
+    )
     full_commit = git_head(target, short=False) if installed else None
     origin_valid = _origin_matches(target, str(spec["url"])) if installed else False
     clean = _checkout_is_clean(target) if installed else False
@@ -276,12 +310,17 @@ def sync_one(name: str, spec: Mapping[str, Any], home: Path) -> dict[str, str]:
     expected = str(spec["assessed_commit"]).lower()
     home.mkdir(parents=True, exist_ok=True)
     if target.is_symlink():
-        raise StackError(f"{target}: Symlink als verwalteter Checkout ist nicht erlaubt")
+        raise StackError(
+            f"{target}: Symlink als verwalteter Checkout ist nicht erlaubt"
+        )
 
     created = False
     if not target.exists():
         temp_target = home / f".{name}.clone-{os.getpid()}-{time.time_ns()}"
-        result = run([git, "clone", "--filter=blob:none", str(spec["url"]), str(temp_target)], check=False)
+        result = run(
+            [git, "clone", "--filter=blob:none", str(spec["url"]), str(temp_target)],
+            check=False,
+        )
         if result.returncode != 0:
             shutil.rmtree(temp_target, ignore_errors=True)
             raise StackError(f"clone {name} fehlgeschlagen: {result.stderr.strip()}")
@@ -298,19 +337,27 @@ def sync_one(name: str, spec: Mapping[str, Any], home: Path) -> dict[str, str]:
     ensure_clean_checkout(target)
     actual = (git_head(target, short=False) or "").lower()
     if actual != expected:
-        result = run([git, "fetch", "--depth", "1", "origin", expected], cwd=target, check=False)
+        result = run(
+            [git, "fetch", "--depth", "1", "origin", expected], cwd=target, check=False
+        )
         if result.returncode != 0:
-            raise StackError(f"fetch {name}@{expected[:7]} fehlgeschlagen: {result.stderr.strip()}")
+            raise StackError(
+                f"fetch {name}@{expected[:7]} fehlgeschlagen: {result.stderr.strip()}"
+            )
         result = run([git, "checkout", "--detach", expected], cwd=target, check=False)
         if result.returncode != 0:
-            raise StackError(f"checkout {name}@{expected[:7]} fehlgeschlagen: {result.stderr.strip()}")
+            raise StackError(
+                f"checkout {name}@{expected[:7]} fehlgeschlagen: {result.stderr.strip()}"
+            )
         action = "cloned+pinned" if created else "pinned"
     else:
         action = "cloned+verified" if created else "verified"
 
     final = (git_head(target, short=False) or "").lower()
     if final != expected:
-        raise StackError(f"{name}: Checkout endete auf {final or '<unknown>'}, erwartet {expected}")
+        raise StackError(
+            f"{name}: Checkout endete auf {final or '<unknown>'}, erwartet {expected}"
+        )
     verify_origin(target, str(spec["url"]))
     ensure_clean_checkout(target)
     return {"name": name, "action": action, "path": str(target), "commit": final[:7]}
@@ -320,7 +367,9 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
         raise StackError(f"Symlink als State-Datei ist nicht erlaubt: {path}")
-    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
     temp = Path(temp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -333,7 +382,9 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
         temp.unlink(missing_ok=True)
 
 
-def pxpipe_policy(model: str, accept_lossy: bool, config: dict[str, Any] | None = None) -> tuple[bool, str]:
+def pxpipe_policy(
+    model: str, accept_lossy: bool, config: dict[str, Any] | None = None
+) -> tuple[bool, str]:
     config = config or load_config()
     policy = config["policy"]["pxpipe"]
     normalized = model.strip().lower()
@@ -371,11 +422,15 @@ def configure_pxpipe_routing(env: dict[str, str], model: str, route: str) -> Non
         env["CLOUDFLARE_MODELS"] = model
 
 
-def wait_for_port(host: str, port: int, process: subprocess.Popen[str], timeout: float = 45.0) -> None:
+def wait_for_port(
+    host: str, port: int, process: subprocess.Popen[str], timeout: float = 45.0
+) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            raise StackError(f"pxpipe exited before startup with code {process.returncode}")
+            raise StackError(
+                f"pxpipe exited before startup with code {process.returncode}"
+            )
         try:
             with socket.create_connection((host, port), timeout=0.3):
                 return
@@ -413,8 +468,13 @@ def validate_pxpipe_runtime_project(
         raise StackError(f"pxpipe-Runtime enthält ungültiges JSON: {exc}") from exc
 
     dependencies = package.get("dependencies")
-    if not isinstance(dependencies, dict) or dependencies.get(package_name) != expected_version:
-        raise StackError(f"{package_path}: {package_name} muss exakt {expected_version} sein")
+    if (
+        not isinstance(dependencies, dict)
+        or dependencies.get(package_name) != expected_version
+    ):
+        raise StackError(
+            f"{package_path}: {package_name} muss exakt {expected_version} sein"
+        )
     if lock.get("lockfileVersion") != 3:
         raise StackError(f"{lock_path}: lockfileVersion 3 erforderlich")
     packages = lock.get("packages")
@@ -422,7 +482,9 @@ def validate_pxpipe_runtime_project(
         raise StackError(f"{lock_path}: packages fehlt")
 
     root = packages.get("")
-    if not isinstance(root, dict) or root.get("dependencies") != {package_name: expected_version}:
+    if not isinstance(root, dict) or root.get("dependencies") != {
+        package_name: expected_version
+    }:
         raise StackError(f"{lock_path}: Root-Abhängigkeiten driften")
     px_entry = packages.get(f"node_modules/{package_name}")
     expected_integrity = str(spec["npm_integrity"])
@@ -431,13 +493,19 @@ def validate_pxpipe_runtime_project(
         or px_entry.get("version") != expected_version
         or px_entry.get("integrity") != expected_integrity
     ):
-        raise StackError(f"{lock_path}: {package_name}@{expected_version} oder SRI fehlt")
+        raise StackError(
+            f"{lock_path}: {package_name}@{expected_version} oder SRI fehlt"
+        )
 
     transitive = spec["transitive_integrity"]
     for pin, integrity in transitive.items():
         dependency, version = _parse_npm_pin(pin, f"transitive_integrity.{pin}")
         entry = packages.get(f"node_modules/{dependency}")
-        if not isinstance(entry, dict) or entry.get("version") != version or entry.get("integrity") != integrity:
+        if (
+            not isinstance(entry, dict)
+            or entry.get("version") != version
+            or entry.get("integrity") != integrity
+        ):
             raise StackError(f"{lock_path}: {pin} oder SRI fehlt")
     return runtime, expected_version
 
@@ -462,7 +530,11 @@ def compatible_node() -> Path:
             resolved = candidate.resolve()
         except OSError:
             continue
-        if resolved in seen or not resolved.is_file() or not os.access(resolved, os.X_OK):
+        if (
+            resolved in seen
+            or not resolved.is_file()
+            or not os.access(resolved, os.X_OK)
+        ):
             continue
         seen.add(resolved)
         major = _node_major(resolved)
@@ -512,11 +584,11 @@ def pxpipe_runtime_state(config: Mapping[str, Any] | None = None) -> dict[str, A
             installed_version = None
     manifests_match = False
     try:
-        manifests_match = (
-            (managed / "package.json").read_bytes() == (expected_project / "package.json").read_bytes()
-            and (managed / "package-lock.json").read_bytes()
-            == (expected_project / "package-lock.json").read_bytes()
-        )
+        manifests_match = (managed / "package.json").read_bytes() == (
+            expected_project / "package.json"
+        ).read_bytes() and (managed / "package-lock.json").read_bytes() == (
+            expected_project / "package-lock.json"
+        ).read_bytes()
     except OSError:
         pass
     installed = managed.is_dir() and not managed.is_symlink()
@@ -550,7 +622,11 @@ def install_pxpipe_runtime(config: Mapping[str, Any] | None = None) -> dict[str,
         )
     current = pxpipe_runtime_state(config)
     if current["ready"]:
-        return {"action": "verified", "path": str(current["path"]), "version": expected_version}
+        return {
+            "action": "verified",
+            "path": str(current["path"]),
+            "version": expected_version,
+        }
 
     project, _ = validate_pxpipe_runtime_project(config)
     target = managed_pxpipe_runtime(config)
@@ -570,12 +646,16 @@ def install_pxpipe_runtime(config: Mapping[str, Any] | None = None) -> dict[str,
             timeout=180,
         )
         if result.returncode != 0:
-            raise StackError(f"npm ci für pxpipe fehlgeschlagen: {result.stderr.strip()}")
+            raise StackError(
+                f"npm ci für pxpipe fehlgeschlagen: {result.stderr.strip()}"
+            )
         binary = temp / "node_modules" / "pxpipe-proxy" / "bin" / "cli.js"
         installed_package = temp / "node_modules" / "pxpipe-proxy" / "package.json"
         if not binary.is_file() or not installed_package.is_file():
             raise StackError("pxpipe-Installation enthält kein ausführbares CLI")
-        installed_version = json.loads(installed_package.read_text(encoding="utf-8")).get("version")
+        installed_version = json.loads(
+            installed_package.read_text(encoding="utf-8")
+        ).get("version")
         if installed_version != expected_version:
             raise StackError(
                 f"pxpipe installierte Version {installed_version!r}, erwartet {expected_version!r}"
@@ -605,7 +685,9 @@ def pxpipe_argv(config: Mapping[str, Any] | None = None) -> list[str]:
     return [str(node), str(state["binary"])]
 
 
-def planned_chunks(token_count: int, chunk_size: int | None, overlap: int = 0) -> int | None:
+def planned_chunks(
+    token_count: int, chunk_size: int | None, overlap: int = 0
+) -> int | None:
     """Return the number of fixed-token windows needed without changing text."""
     if chunk_size is None:
         return None
@@ -646,7 +728,9 @@ def _locked_python_packages(lock_text: str) -> set[tuple[str, str]]:
     packages: set[tuple[str, str]] = set()
     for block in lock_text.split("[[package]]")[1:]:
         name_match = re.search(r'^name\s*=\s*"([^"]+)"', block, flags=re.MULTILINE)
-        version_match = re.search(r'^version\s*=\s*"([^"]+)"', block, flags=re.MULTILINE)
+        version_match = re.search(
+            r'^version\s*=\s*"([^"]+)"', block, flags=re.MULTILINE
+        )
         if name_match and version_match:
             packages.add((name_match.group(1), version_match.group(1)))
     return packages
@@ -659,7 +743,9 @@ def validate_gigatoken_runtime_project(
 ) -> tuple[Path, str]:
     config = config or load_config()
     spec = config["upstreams"]["gigatoken"]
-    package_name, expected_version = _parse_python_pin(spec["python_package"], "python_package")
+    package_name, expected_version = _parse_python_pin(
+        spec["python_package"], "python_package"
+    )
     validation_name, validation_version = _parse_python_pin(
         spec["validation_package"], "validation_package"
     )
@@ -671,7 +757,9 @@ def validate_gigatoken_runtime_project(
     if f'"{spec["python_package"]}"' not in pyproject_text:
         raise StackError(f"{pyproject_path}: {spec['python_package']} fehlt")
     if validation and f'"{spec["validation_package"]}"' not in pyproject_text:
-        raise StackError(f"{pyproject_path}: Validierungsgruppe ist nicht exakt gepinnt")
+        raise StackError(
+            f"{pyproject_path}: Validierungsgruppe ist nicht exakt gepinnt"
+        )
     locked = _locked_python_packages(lock_text)
     if (package_name, expected_version) not in locked:
         raise StackError(f"{lock_path}: {package_name}=={expected_version} fehlt")
@@ -687,7 +775,9 @@ def gigatoken_runtime_argv(
 ) -> list[str]:
     config = config or load_config()
     source = ensure_assessed_source("gigatoken", config)
-    runtime, expected_version = validate_gigatoken_runtime_project(config, validation=validation)
+    runtime, expected_version = validate_gigatoken_runtime_project(
+        config, validation=validation
+    )
     source_version = assessed_gigatoken_version(source)
     if source_version != expected_version:
         raise StackError(
@@ -695,10 +785,14 @@ def gigatoken_runtime_argv(
         )
     uv = shutil.which("uv")
     if uv is None:
-        raise StackError("uv fehlt; Gigatoken wird absichtlich nicht global installiert")
+        raise StackError(
+            "uv fehlt; Gigatoken wird absichtlich nicht global installiert"
+        )
     argv = [uv, "run", "--quiet", "--frozen", "--project", str(runtime)]
     if validation:
-        argv.extend(["--group", str(config["upstreams"]["gigatoken"]["validation_group"])])
+        argv.extend(
+            ["--group", str(config["upstreams"]["gigatoken"]["validation_group"])]
+        )
     return argv
 
 
@@ -834,7 +928,14 @@ def cmd_token_count(args: argparse.Namespace) -> int:
     if args.doc_separator is not None:
         argv.extend(["--doc-separator", args.doc_separator])
     if args.chunk_size is not None:
-        argv.extend(["--chunk-size", str(args.chunk_size), "--chunk-overlap", str(args.chunk_overlap)])
+        argv.extend(
+            [
+                "--chunk-size",
+                str(args.chunk_size),
+                "--chunk-overlap",
+                str(args.chunk_overlap),
+            ]
+        )
     if args.json:
         argv.append("--json")
     argv.extend(str(path) for path in files)
@@ -869,7 +970,9 @@ def cmd_status(args: argparse.Namespace) -> int:
     problems: list[str] = []
     for row in rows:
         if row["present"] and not row["ready"]:
-            problems.append(f"source {row['name']} is present but not a clean assessed checkout")
+            problems.append(
+                f"source {row['name']} is present but not a clean assessed checkout"
+            )
 
     try:
         px_runtime = pxpipe_runtime_state(config)
@@ -888,7 +991,9 @@ def cmd_status(args: argparse.Namespace) -> int:
     if px_runtime.get("installed") and not px_source["ready"]:
         problems.append("pxpipe runtime is installed without a ready assessed source")
     try:
-        giga_runtime, giga_version = validate_gigatoken_runtime_project(config, validation=True)
+        giga_runtime, giga_version = validate_gigatoken_runtime_project(
+            config, validation=True
+        )
         giga_state: dict[str, Any] = {
             "path": str(giga_runtime),
             "expected_version": giga_version,
@@ -896,7 +1001,11 @@ def cmd_status(args: argparse.Namespace) -> int:
             "uv": shutil.which("uv"),
         }
     except StackError as exc:
-        giga_state = {"manifest_valid": False, "error": str(exc), "uv": shutil.which("uv")}
+        giga_state = {
+            "manifest_valid": False,
+            "error": str(exc),
+            "uv": shutil.which("uv"),
+        }
         problems.append(f"gigatoken runtime manifest invalid: {exc}")
     giga_source = next(row for row in rows if row["name"] == "gigatoken")
     if giga_source["installed"] and not giga_state.get("uv"):
@@ -962,16 +1071,26 @@ def cmd_sync(args: argparse.Namespace) -> int:
         if state_path.is_symlink():
             raise StackError(f"Symlink als State-Datei ist nicht erlaubt: {state_path}")
         try:
-            state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.is_file() else {}
+            state = (
+                json.loads(state_path.read_text(encoding="utf-8"))
+                if state_path.is_file()
+                else {}
+            )
         except (OSError, json.JSONDecodeError):
             state = {}
         sources_raw = state.get("sources") if isinstance(state, dict) else None
         sources: dict[str, Any] = sources_raw if isinstance(sources_raw, dict) else {}
         sources.update({row["name"]: row for row in results})
         runtimes_raw = state.get("runtimes") if isinstance(state, dict) else None
-        runtimes: dict[str, Any] = runtimes_raw if isinstance(runtimes_raw, dict) else {}
+        runtimes: dict[str, Any] = (
+            runtimes_raw if isinstance(runtimes_raw, dict) else {}
+        )
         runtimes.update(runtime_results)
-        state = {"updated_at": int(time.time()), "sources": sources, "runtimes": runtimes}
+        state = {
+            "updated_at": int(time.time()),
+            "sources": sources,
+            "runtimes": runtimes,
+        }
         _atomic_write_json(state_path, state)
     for row in results:
         print(f"{row['name']}: {row['action']} {row['commit']} at {row['path']}")
@@ -983,11 +1102,19 @@ def cmd_sync(args: argparse.Namespace) -> int:
 def caveman_backup_path(target: Path) -> Path:
     if sys.platform == "win32":
         local_appdata = os.environ.get("LOCALAPPDATA")
-        base = Path(local_appdata) if local_appdata else Path.home() / "AppData" / "Local"
+        base = (
+            Path(local_appdata) if local_appdata else Path.home() / "AppData" / "Local"
+        )
     else:
         xdg = os.environ.get("XDG_DATA_HOME")
         base = Path(xdg).expanduser() if xdg else Path.home() / ".local" / "share"
-    return base / "caveman-compress" / "backups" / target.parent.name / f"{target.stem}.original.md"
+    return (
+        base
+        / "caveman-compress"
+        / "backups"
+        / target.parent.name
+        / f"{target.stem}.original.md"
+    )
 
 
 def _validate_caveman_target(raw: str) -> Path:
@@ -1001,7 +1128,9 @@ def _validate_caveman_target(raw: str) -> Path:
         raise StackError("Caveman-Datei ist größer als 500 KB")
     sensitive_components = {".ssh", ".aws", ".gnupg", ".kube", ".docker"}
     if sensitive_components & {part.lower() for part in target.parts}:
-        raise StackError("Caveman-Datei liegt in einem sensiblen Konfigurationsverzeichnis")
+        raise StackError(
+            "Caveman-Datei liegt in einem sensiblen Konfigurationsverzeichnis"
+        )
     normalized_name = re.sub(r"[_\-\s.]", "", target.name.lower())
     if any(
         token in normalized_name
@@ -1019,7 +1148,9 @@ def _validate_caveman_target(raw: str) -> Path:
     return target
 
 
-def terminate_process_group(process: subprocess.Popen[Any], *, grace_seconds: float = 5.0) -> None:
+def terminate_process_group(
+    process: subprocess.Popen[Any], *, grace_seconds: float = 5.0
+) -> None:
     if process.poll() is not None:
         return
     try:
@@ -1070,7 +1201,9 @@ def cmd_memory_compress(args: argparse.Namespace) -> int:
     caveman = ensure_assessed_source("caveman", config)
     scripts = caveman / "skills" / "caveman-compress"
     if not scripts.is_dir():
-        raise StackError("Caveman nicht synchronisiert; zuerst: sin-token-stack sync --source caveman")
+        raise StackError(
+            "Caveman nicht synchronisiert; zuerst: sin-token-stack sync --source caveman"
+        )
     print(
         "warning: Caveman überträgt diese Datei an Claude/Anthropic; "
         "Backup liegt außerhalb des Quellverzeichnisses im Caveman-Datenordner.",
@@ -1096,7 +1229,9 @@ def cmd_memory_compress(args: argparse.Namespace) -> int:
         return 0
     except subprocess.TimeoutExpired as exc:
         terminate_process_group(process)
-        raise StackError(f"Caveman überschritt das Zeitlimit von {args.timeout:g}s") from exc
+        raise StackError(
+            f"Caveman überschritt das Zeitlimit von {args.timeout:g}s"
+        ) from exc
     except KeyboardInterrupt:
         terminate_process_group(process)
         return 130
@@ -1168,13 +1303,18 @@ def cmd_pxpipe_run(args: argparse.Namespace) -> int:
             log.flush()
             log.seek(0)
             detail = log.read().strip()
-            raise StackError(f"pxpipe start fehlgeschlagen: {detail or 'kein Fehlertext'}")
+            raise StackError(
+                f"pxpipe start fehlgeschlagen: {detail or 'kein Fehlertext'}"
+            )
         child_env = env.copy()
         child_env["ANTHROPIC_BASE_URL"] = f"http://{host}:{port}"
         child_env["OPENAI_BASE_URL"] = f"http://{host}:{port}/v1"
         child_env.setdefault("ANTHROPIC_AUTH_TOKEN", "local-pxpipe")
         if route == "openai" and not env.get("OPENAI_API_KEY"):
-            print("warning: OPENAI_API_KEY fehlt; echte OpenAI-Anfragen werden scheitern", file=sys.stderr)
+            print(
+                "warning: OPENAI_API_KEY fehlt; echte OpenAI-Anfragen werden scheitern",
+                file=sys.stderr,
+            )
         if route == "cloudflare" and not (
             env.get("CLOUDFLARE_ACCOUNT_ID") and env.get("CLOUDFLARE_API_TOKEN")
         ):
@@ -1198,7 +1338,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = sub.add_parser("status", help="show managed source and runtime state")
     status.add_argument("--json", action="store_true")
-    status.add_argument("--check", action="store_true", help="fail on drifted installed sources/runtimes")
+    status.add_argument(
+        "--check",
+        action="store_true",
+        help="fail on drifted installed sources/runtimes",
+    )
     status.set_defaults(func=cmd_status)
 
     sync = sub.add_parser("sync", help="sync reviewed sources and locked runtimes")
@@ -1209,18 +1353,38 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sync.set_defaults(func=cmd_sync)
 
-    count = sub.add_parser("token-count", help="exact model-bound token count via Gigatoken")
-    count.add_argument("--tokenizer", required=True, help="HF repo/path, tokenizer.json, .tiktoken, or .model")
-    count.add_argument("--stdin", action="store_true", help="read one document from stdin")
-    count.add_argument("--doc-separator", help="split each input file into documents on this exact separator")
-    count.add_argument("--chunk-size", type=int, help="also calculate fixed-token chunk count")
+    count = sub.add_parser(
+        "token-count", help="exact model-bound token count via Gigatoken"
+    )
+    count.add_argument(
+        "--tokenizer",
+        required=True,
+        help="HF repo/path, tokenizer.json, .tiktoken, or .model",
+    )
+    count.add_argument(
+        "--stdin", action="store_true", help="read one document from stdin"
+    )
+    count.add_argument(
+        "--doc-separator",
+        help="split each input file into documents on this exact separator",
+    )
+    count.add_argument(
+        "--chunk-size", type=int, help="also calculate fixed-token chunk count"
+    )
     count.add_argument("--chunk-overlap", type=int, default=0)
     count.add_argument("--json", action="store_true")
     count.add_argument("files", nargs="*")
     count.set_defaults(func=cmd_token_count)
 
-    bench = sub.add_parser("token-bench", help="benchmark Gigatoken and optionally validate HuggingFace parity")
-    bench.add_argument("--tokenizer", required=True, help="HF repo/path, tokenizer.json, .tiktoken, or .model")
+    bench = sub.add_parser(
+        "token-bench",
+        help="benchmark Gigatoken and optionally validate HuggingFace parity",
+    )
+    bench.add_argument(
+        "--tokenizer",
+        required=True,
+        help="HF repo/path, tokenizer.json, .tiktoken, or .model",
+    )
     bench.add_argument("--validate-hf", action="store_true")
     bench.add_argument("--stream-from-disk", action="store_true")
     bench.add_argument("--comparison-limit", default="100MB")
@@ -1228,25 +1392,38 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("files", nargs="+")
     bench.set_defaults(func=cmd_token_bench)
 
-    compress = sub.add_parser("memory-compress", help="explicit Caveman memory-file rewrite via Claude")
+    compress = sub.add_parser(
+        "memory-compress", help="explicit Caveman memory-file rewrite via Claude"
+    )
     compress.add_argument("file")
-    compress.add_argument("--yes", action="store_true", help="confirm local file rewrite")
+    compress.add_argument(
+        "--yes", action="store_true", help="confirm local file rewrite"
+    )
     compress.add_argument(
         "--allow-third-party-upload",
         action="store_true",
         help="confirm that file contents may be sent to Claude/Anthropic",
     )
-    compress.add_argument("--timeout", type=float, default=300.0, help="maximum Caveman runtime in seconds")
+    compress.add_argument(
+        "--timeout",
+        type=float,
+        default=300.0,
+        help="maximum Caveman runtime in seconds",
+    )
     compress.set_defaults(func=cmd_memory_compress)
 
-    export = sub.add_parser("pxpipe-export", help="render dense context to PNG without proxying")
+    export = sub.add_parser(
+        "pxpipe-export", help="render dense context to PNG without proxying"
+    )
     group = export.add_mutually_exclusive_group()
     group.add_argument("--git", action="store_true")
     group.add_argument("--stdin", action="store_true")
     export.add_argument("path", nargs="?", default=".")
     export.set_defaults(func=cmd_pxpipe_export)
 
-    pxrun = sub.add_parser("pxpipe-run", help="run one command through an isolated pxpipe proxy")
+    pxrun = sub.add_parser(
+        "pxpipe-run", help="run one command through an isolated pxpipe proxy"
+    )
     pxrun.add_argument("--model", required=True)
     pxrun.add_argument("--accept-lossy", action="store_true")
     pxrun.add_argument(

@@ -51,7 +51,9 @@ def build(root: Path) -> None:
         "doctor.sh",
         'PROFILE="${WOW_MCP_PROFILE:-minimal}"\n# worktree shadowing guard\n',
     )
-    write_text(wow, "shared/AGENTS.md", "Use exactly **one** cheap worker by default.\n")
+    write_text(
+        wow, "shared/AGENTS.md", "Use exactly **one** cheap worker by default.\n"
+    )
 
     write_json(
         global_brain,

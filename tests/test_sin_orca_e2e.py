@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 import unittest
 
-FAKE_ORCA_SCRIPT = textwrap.dedent(r'''
+FAKE_ORCA_SCRIPT = textwrap.dedent(r"""
 import json
 import os
 import sys
@@ -77,16 +77,20 @@ if args[:2] == ["terminal", "wait"]:
 
 print(json.dumps({"ok": False, "error": "unsupported", "args": args}))
 raise SystemExit(1)
-''')
+""")
 
 
 def initialize_repository(path: Path) -> None:
     subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"], cwd=path, check=True
+    )
     subprocess.run(["git", "config", "user.name", "Test"], cwd=path, check=True)
     (path / "README.md").write_text("test\n", encoding="utf-8")
     subprocess.run(["git", "add", "README.md"], cwd=path, check=True)
-    subprocess.run(["git", "commit", "-m", "initial"], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "initial"], cwd=path, check=True, capture_output=True
+    )
 
 
 class TestE2EDispatch(unittest.TestCase):
@@ -94,6 +98,7 @@ class TestE2EDispatch(unittest.TestCase):
 
     def setUp(self):
         import tempfile
+
         self.tmpdir = Path(tempfile.mkdtemp())
         self.repository = self.tmpdir / "repo"
         self.repository.mkdir()
@@ -125,21 +130,32 @@ class TestE2EDispatch(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_dispatch_creates_real_worker_state(self):
         process = subprocess.run(
             [
-                self.sin_orca_bin, "dispatch",
-                "--role", "implementer",
-                "--agent", "mimo-code",
-                "--parent-terminal", "parent-terminal",
-                "--objective", "Change README",
-                "--step", "Change README safely",
-                "--allowed-path", "README.md",
-                "--acceptance", "README contains the requested text",
-                "--verify-command", "git diff --check",
-                "--checkpoint", "plan-ready",
+                self.sin_orca_bin,
+                "dispatch",
+                "--role",
+                "implementer",
+                "--agent",
+                "mimo-code",
+                "--parent-terminal",
+                "parent-terminal",
+                "--objective",
+                "Change README",
+                "--step",
+                "Change README safely",
+                "--allowed-path",
+                "README.md",
+                "--acceptance",
+                "README contains the requested text",
+                "--verify-command",
+                "git diff --check",
+                "--checkpoint",
+                "plan-ready",
             ],
             cwd=self.repository,
             text=True,
@@ -154,19 +170,11 @@ class TestE2EDispatch(unittest.TestCase):
         self.assertNotEqual(output["base_sha"], "HEAD")
         self.assertEqual(len(output["base_sha"]), 40)
         self.assertEqual(output["terminal"], "worker-terminal-1")
-        self.assertEqual(
-            output["approval_mode"], "continuous-preauthorized"
-        )
+        self.assertEqual(output["approval_mode"], "continuous-preauthorized")
 
         task_id = output["task_id"]
         self.assertTrue(
-            (
-                self.repository
-                / ".sin-worker"
-                / "tasks"
-                / task_id
-                / "outbox"
-            ).is_dir()
+            (self.repository / ".sin-worker" / "tasks" / task_id / "outbox").is_dir()
         )
         task_files = list(self.state_root.rglob(f"{task_id}/task.json"))
         self.assertEqual(len(task_files), 1)
@@ -175,12 +183,8 @@ class TestE2EDispatch(unittest.TestCase):
         self.assertEqual(task["task_id"], task_id)
         self.assertTrue(task["task_hash"].startswith("sha256:"))
         self.assertEqual(task["base_sha"], output["base_sha"])
-        self.assertEqual(
-            task["approval_mode"], "continuous-preauthorized"
-        )
-        prompt = (task_files[0].parent / "worker-prompt.md").read_text(
-            encoding="utf-8"
-        )
+        self.assertEqual(task["approval_mode"], "continuous-preauthorized")
+        prompt = (task_files[0].parent / "worker-prompt.md").read_text(encoding="utf-8")
         self.assertIn("Approval mode: continuous-preauthorized", prompt)
         self.assertIn("continue automatically", prompt)
         self.assertIn("type <ack|checkpoint|discovery|question", prompt)
@@ -200,17 +204,28 @@ class TestE2EDispatch(unittest.TestCase):
     def test_stepwise_dispatch_is_explicit_and_not_default(self):
         process = subprocess.run(
             [
-                self.sin_orca_bin, "dispatch",
-                "--role", "implementer",
-                "--agent", "mimo-code",
-                "--parent-terminal", "parent-terminal",
-                "--approval-mode", "stepwise",
-                "--objective", "Change README at a protected boundary",
-                "--step", "Change README safely",
-                "--allowed-path", "README.md",
-                "--acceptance", "README contains the requested text",
-                "--verify-command", "git diff --check",
-                "--checkpoint", "approval-boundary",
+                self.sin_orca_bin,
+                "dispatch",
+                "--role",
+                "implementer",
+                "--agent",
+                "mimo-code",
+                "--parent-terminal",
+                "parent-terminal",
+                "--approval-mode",
+                "stepwise",
+                "--objective",
+                "Change README at a protected boundary",
+                "--step",
+                "Change README safely",
+                "--allowed-path",
+                "README.md",
+                "--acceptance",
+                "README contains the requested text",
+                "--verify-command",
+                "git diff --check",
+                "--checkpoint",
+                "approval-boundary",
             ],
             cwd=self.repository,
             text=True,
@@ -221,28 +236,32 @@ class TestE2EDispatch(unittest.TestCase):
         self.assertEqual(process.returncode, 0, process.stderr)
         output = json.loads(process.stdout)
         self.assertEqual(output["approval_mode"], "stepwise")
-        task_file = next(
-            self.state_root.rglob(f"{output['task_id']}/task.json")
-        )
+        task_file = next(self.state_root.rglob(f"{output['task_id']}/task.json"))
         task = json.loads(task_file.read_text(encoding="utf-8"))
         self.assertEqual(task["approval_mode"], "stepwise")
-        prompt = (task_file.parent / "worker-prompt.md").read_text(
-            encoding="utf-8"
-        )
+        prompt = (task_file.parent / "worker-prompt.md").read_text(encoding="utf-8")
         self.assertIn("Approval mode: stepwise", prompt)
         self.assertIn("Every listed step requires its own explicit approval", prompt)
 
     def test_discovery_callback_reaches_parent_and_event_log(self):
         dispatched = subprocess.run(
             [
-                self.sin_orca_bin, "dispatch",
-                "--role", "explorer",
-                "--agent", "opencode",
-                "--parent-terminal", "parent-terminal",
-                "--objective", "Inspect project gaps",
-                "--step", "Inspect README",
-                "--allowed-path", "README.md",
-                "--acceptance", "Gaps are reported",
+                self.sin_orca_bin,
+                "dispatch",
+                "--role",
+                "explorer",
+                "--agent",
+                "opencode",
+                "--parent-terminal",
+                "parent-terminal",
+                "--objective",
+                "Inspect project gaps",
+                "--step",
+                "Inspect README",
+                "--allowed-path",
+                "README.md",
+                "--acceptance",
+                "Gaps are reported",
                 "--read-only",
             ],
             cwd=self.repository,
@@ -255,10 +274,15 @@ class TestE2EDispatch(unittest.TestCase):
         task_id = json.loads(dispatched.stdout)["task_id"]
         notified = subprocess.run(
             [
-                self.sin_orca_bin, "notify", task_id,
-                "--type", "discovery",
-                "--summary", "Missing recovery path discovered",
-                "--action", "add a bounded recovery task",
+                self.sin_orca_bin,
+                "notify",
+                task_id,
+                "--type",
+                "discovery",
+                "--summary",
+                "Missing recovery path discovered",
+                "--action",
+                "add a bounded recovery task",
             ],
             cwd=self.repository,
             text=True,
@@ -269,50 +293,52 @@ class TestE2EDispatch(unittest.TestCase):
         self.assertEqual(notified.returncode, 0, notified.stderr)
         payload = json.loads(notified.stdout)
         self.assertEqual(payload["type"], "discovery")
-        events_file = next(
-            self.state_root.rglob(f"{task_id}/events.jsonl")
-        )
+        events_file = next(self.state_root.rglob(f"{task_id}/events.jsonl"))
         events = [
             json.loads(line)
             for line in events_file.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
-        callbacks = [
-            event for event in events
-            if event["type"] == "worker.callback"
-        ]
-        self.assertEqual(
-            callbacks[-1]["payload"]["callback_type"], "discovery"
-        )
+        callbacks = [event for event in events if event["type"] == "worker.callback"]
+        self.assertEqual(callbacks[-1]["payload"]["callback_type"], "discovery")
         sends = [
             json.loads(line)
-            for line in (self.fake_state / "terminal-send.jsonl").read_text(
-                encoding="utf-8"
-            ).splitlines()
+            for line in (self.fake_state / "terminal-send.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
             if line.strip()
         ]
         self.assertTrue(
             any(
                 "type=discovery" in command[command.index("--text") + 1]
                 for command in sends
-                if command[:2] == ["terminal", "send"]
-                and "--text" in command
+                if command[:2] == ["terminal", "send"] and "--text" in command
             )
         )
 
     def test_checkpoint_notify_archives_artifact_before_direct_callback(self):
         dispatched = subprocess.run(
             [
-                self.sin_orca_bin, "dispatch",
-                "--role", "implementer",
-                "--agent", "mimo-code",
-                "--parent-terminal", "parent-terminal",
-                "--objective", "Exercise transactional checkpoint callback",
-                "--step", "Inspect README without changing it",
-                "--allowed-path", "README.md",
-                "--acceptance", "Checkpoint is archived before callback",
-                "--verify-command", "git diff --check",
-                "--checkpoint", "inspection-complete",
+                self.sin_orca_bin,
+                "dispatch",
+                "--role",
+                "implementer",
+                "--agent",
+                "mimo-code",
+                "--parent-terminal",
+                "parent-terminal",
+                "--objective",
+                "Exercise transactional checkpoint callback",
+                "--step",
+                "Inspect README without changing it",
+                "--allowed-path",
+                "README.md",
+                "--acceptance",
+                "Checkpoint is archived before callback",
+                "--verify-command",
+                "git diff --check",
+                "--checkpoint",
+                "inspection-complete",
             ],
             cwd=self.repository,
             text=True,
@@ -328,9 +354,13 @@ class TestE2EDispatch(unittest.TestCase):
 
         acknowledged = subprocess.run(
             [
-                self.sin_orca_bin, "notify", task_id,
-                "--type", "ack",
-                "--summary", "scope understood",
+                self.sin_orca_bin,
+                "notify",
+                task_id,
+                "--type",
+                "ack",
+                "--summary",
+                "scope understood",
             ],
             cwd=self.repository,
             text=True,
@@ -343,29 +373,37 @@ class TestE2EDispatch(unittest.TestCase):
         outbox = Path(output["artifact_outbox"])
         checkpoint_path = outbox / "checkpoint.json"
         checkpoint_path.write_text(
-            json.dumps({
-                "task_id": task_id,
-                "task_hash": task["task_hash"],
-                "base_sha": task["base_sha"],
-                "checkpoint": "inspection-complete",
-                "sequence": 1,
-                "step_id": "S01",
-                "status": "complete",
-                "changed_files": [],
-                "commands": [],
-                "unresolved": [],
-                "child_process_running": False,
-            }),
+            json.dumps(
+                {
+                    "task_id": task_id,
+                    "task_hash": task["task_hash"],
+                    "base_sha": task["base_sha"],
+                    "checkpoint": "inspection-complete",
+                    "sequence": 1,
+                    "step_id": "S01",
+                    "status": "complete",
+                    "changed_files": [],
+                    "commands": [],
+                    "unresolved": [],
+                    "child_process_running": False,
+                }
+            ),
             encoding="utf-8",
         )
 
         notified = subprocess.run(
             [
-                self.sin_orca_bin, "notify", task_id,
-                "--type", "checkpoint",
-                "--step", "S01",
-                "--summary", "inspection complete",
-                "--verify", "passed",
+                self.sin_orca_bin,
+                "notify",
+                task_id,
+                "--type",
+                "checkpoint",
+                "--step",
+                "S01",
+                "--summary",
+                "inspection complete",
+                "--verify",
+                "passed",
             ],
             cwd=self.repository,
             text=True,
@@ -381,23 +419,21 @@ class TestE2EDispatch(unittest.TestCase):
 
         events = [
             json.loads(line)
-            for line in (task_file.parent / "events.jsonl").read_text(
-                encoding="utf-8"
-            ).splitlines()
+            for line in (task_file.parent / "events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
             if line.strip()
         ]
         artifact_event = next(
-            event for event in events
-            if event["type"] == "checkpoint.received"
+            event for event in events if event["type"] == "checkpoint.received"
         )
         callback_event = next(
-            event for event in events
+            event
+            for event in events
             if event["type"] == "worker.callback"
             and event["payload"].get("callback_type") == "checkpoint"
         )
-        self.assertLess(
-            artifact_event["sequence"], callback_event["sequence"]
-        )
+        self.assertLess(artifact_event["sequence"], callback_event["sequence"])
         self.assertEqual(
             callback_event["payload"]["artifact"]["filename"],
             "checkpoint.json",
@@ -405,9 +441,9 @@ class TestE2EDispatch(unittest.TestCase):
 
         sends = [
             json.loads(line)
-            for line in (self.fake_state / "terminal-send.jsonl").read_text(
-                encoding="utf-8"
-            ).splitlines()
+            for line in (self.fake_state / "terminal-send.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
             if line.strip()
         ]
         self.assertTrue(
@@ -415,8 +451,7 @@ class TestE2EDispatch(unittest.TestCase):
                 "type=checkpoint" in command[command.index("--text") + 1]
                 and "step=S01" in command[command.index("--text") + 1]
                 for command in sends
-                if command[:2] == ["terminal", "send"]
-                and "--text" in command
+                if command[:2] == ["terminal", "send"] and "--text" in command
             )
         )
 
@@ -445,7 +480,8 @@ class TestE2EDispatch(unittest.TestCase):
             env={
                 key: value
                 for key, value in self.env.items()
-                if key not in {
+                if key
+                not in {
                     "SIN_ORCA_PARENT_TERMINAL",
                     "ORCA_TERMINAL_HANDLE",
                     "ORCA_CURRENT_TERMINAL",
@@ -460,14 +496,22 @@ class TestE2EDispatch(unittest.TestCase):
     def test_dispatch_uses_terminal_create_and_forbids_worktree_create(self):
         process = subprocess.run(
             [
-                self.sin_orca_bin, "dispatch",
-                "--role", "explorer",
-                "--agent", "opencode",
-                "--parent-terminal", "parent-terminal",
-                "--objective", "Read code",
-                "--step", "Read the code",
-                "--allowed-path", "src/",
-                "--acceptance", "Code is read",
+                self.sin_orca_bin,
+                "dispatch",
+                "--role",
+                "explorer",
+                "--agent",
+                "opencode",
+                "--parent-terminal",
+                "parent-terminal",
+                "--objective",
+                "Read code",
+                "--step",
+                "Read the code",
+                "--allowed-path",
+                "src/",
+                "--acceptance",
+                "Code is read",
                 "--read-only",
             ],
             cwd=self.repository,
@@ -481,13 +525,17 @@ class TestE2EDispatch(unittest.TestCase):
 
         commands = [
             json.loads(line)
-            for line in (self.fake_state / "commands.jsonl").read_text(
-                encoding="utf-8"
-            ).splitlines()
+            for line in (self.fake_state / "commands.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
             if line.strip()
         ]
-        self.assertTrue(any(command[:2] == ["terminal", "create"] for command in commands))
-        self.assertFalse(any(command[:2] == ["worktree", "create"] for command in commands))
+        self.assertTrue(
+            any(command[:2] == ["terminal", "create"] for command in commands)
+        )
+        self.assertFalse(
+            any(command[:2] == ["worktree", "create"] for command in commands)
+        )
         self.assertTrue(
             any(
                 command[:2] == ["terminal", "create"]
@@ -505,9 +553,9 @@ class TestE2EDispatch(unittest.TestCase):
         cache.put("route1", "prov1", "query1", "repo1", "shared content")
         cache.put("route2", "prov2", "query2", "repo2", "shared content")
 
-        blob_count = cache.conn.execute(
-            "SELECT COUNT(*) FROM cache_blobs"
-        ).fetchone()[0]
+        blob_count = cache.conn.execute("SELECT COUNT(*) FROM cache_blobs").fetchone()[
+            0
+        ]
 
         self.assertEqual(blob_count, 1)
 
@@ -522,14 +570,19 @@ class TestE2EDispatch(unittest.TestCase):
 
         cache = SinCache(db_path=self.tmpdir / "test.db")
         cache.put_evidence(
-            "code_symbol", "graphify", "where is token",
-            "repo1", "Token is in auth.py",
+            "code_symbol",
+            "graphify",
+            "where is token",
+            "repo1",
+            "Token is in auth.py",
             evidence=[{"path": "auth.py", "content_sha256": ""}],
             repository_path=repo,
         )
 
         result = cache.get(
-            "code_symbol", "graphify", "where is token",
+            "code_symbol",
+            "graphify",
+            "where is token",
             "repo1",
             repository_path=repo,
         )
@@ -538,7 +591,9 @@ class TestE2EDispatch(unittest.TestCase):
         (repo / "auth.py").write_text("token = 'changed'\n", encoding="utf-8")
 
         result_stale = cache.get(
-            "code_symbol", "graphify", "where is token",
+            "code_symbol",
+            "graphify",
+            "where is token",
             "repo1",
             repository_path=repo,
         )
@@ -559,7 +614,9 @@ class TestE2EDispatch(unittest.TestCase):
         )
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["results"][0]["argv"], ["git", "log", "--oneline", "-1"])
+        self.assertEqual(
+            result["results"][0]["argv"], ["git", "log", "--oneline", "-1"]
+        )
 
     def test_bounded_diff_includes_untracked_files(self):
         from sin_orca.verification import bounded_diff
@@ -840,9 +897,7 @@ class TestE2EDispatch(unittest.TestCase):
 
             second_output = io.StringIO()
             with contextlib.redirect_stdout(second_output):
-                second_result = _cmd_complete(
-                    argparse.Namespace(task_id=task_id)
-                )
+                second_result = _cmd_complete(argparse.Namespace(task_id=task_id))
             self.assertEqual(second_result, 0, second_output.getvalue())
             self.assertTrue(json.loads(second_output.getvalue())["reused"])
 
@@ -852,17 +907,12 @@ class TestE2EDispatch(unittest.TestCase):
             )
             stale_output = io.StringIO()
             with contextlib.redirect_stdout(stale_output):
-                stale_result = _cmd_complete(
-                    argparse.Namespace(task_id=task_id)
-                )
+                stale_result = _cmd_complete(argparse.Namespace(task_id=task_id))
             self.assertEqual(stale_result, 1, stale_output.getvalue())
             stale_payload = json.loads(stale_output.getvalue())
             self.assertEqual(stale_payload["status"], "manifest-invalid")
             self.assertTrue(
-                any(
-                    "worktree" in error
-                    for error in stale_payload["errors"]
-                )
+                any("worktree" in error for error in stale_payload["errors"])
             )
 
     def test_stall_detection_does_not_refresh_before_check(self):
@@ -873,9 +923,7 @@ class TestE2EDispatch(unittest.TestCase):
         task_dir_path = self.state_root / "stall" / task_id
         task_dir_path.mkdir(parents=True, exist_ok=True)
 
-        old_time = (
-            datetime.now(timezone.utc) - timedelta(seconds=2000)
-        ).isoformat()
+        old_time = (datetime.now(timezone.utc) - timedelta(seconds=2000)).isoformat()
 
         activity = {"worker_last_active": old_time}
         (task_dir_path / "activity.json").write_text(
@@ -887,8 +935,16 @@ class TestE2EDispatch(unittest.TestCase):
             lambda *a, **k: task_dir_path,
         ):
             result = _check_stalled(
-                task_id, "worker",
-                {"worker_control": {"stalled_worker_policy": {"enabled": True, "maximum_inactive_seconds": 1200}}},
+                task_id,
+                "worker",
+                {
+                    "worker_control": {
+                        "stalled_worker_policy": {
+                            "enabled": True,
+                            "maximum_inactive_seconds": 1200,
+                        }
+                    }
+                },
             )
 
         self.assertTrue(result["stalled"])
@@ -1072,34 +1128,37 @@ class TestE2EDispatch(unittest.TestCase):
                 {"ok": True, "result": {"handle": "reviewer-terminal"}},
                 {"ok": True},
             ]
-            with patch(
-                "sin_orca.review.ReviewContextBuilder.build_review_context",
-                return_value={
-                    "schema_version": 1,
-                    "base_sha": base_sha,
-                    "worktree": str(repo),
-                    "changed_files": [{"path": "README.md"}],
-                    "changed_symbols": [],
-                    "affected_flows": [],
-                    "test_gaps": [],
-                    "risk_signals": [],
-                    "crg_advisory": {
-                        "ok": False,
-                        "provider": "code-review-graph",
-                        "status": "test-fixture",
-                        "authoritative": False,
+            with (
+                patch(
+                    "sin_orca.review.ReviewContextBuilder.build_review_context",
+                    return_value={
+                        "schema_version": 1,
+                        "base_sha": base_sha,
+                        "worktree": str(repo),
+                        "changed_files": [{"path": "README.md"}],
+                        "changed_symbols": [],
+                        "affected_flows": [],
+                        "test_gaps": [],
+                        "risk_signals": [],
+                        "crg_advisory": {
+                            "ok": False,
+                            "provider": "code-review-graph",
+                            "status": "test-fixture",
+                            "authoritative": False,
+                        },
+                        "crg_authoritative": False,
+                        "graphify_paths": [],
+                        "uncertainties": [],
+                        "recommended_review_order": [],
+                        "total_risk_score": 0.0,
+                        "diff_hash": diff_sha256,
+                        "diff_length": 1,
                     },
-                    "crg_authoritative": False,
-                    "graphify_paths": [],
-                    "uncertainties": [],
-                    "recommended_review_order": [],
-                    "total_risk_score": 0.0,
-                    "diff_hash": diff_sha256,
-                    "diff_length": 1,
-                },
-            ), patch(
-                "sin_orca.review.run_orca",
-                side_effect=calls,
+                ),
+                patch(
+                    "sin_orca.review.run_orca",
+                    side_effect=calls,
+                ),
             ):
                 result = start_blind_review(
                     task_id=task_id,
@@ -1129,29 +1188,38 @@ class TestE2EDispatch(unittest.TestCase):
 
         with patch("sin_orca.state.state_root", lambda *a, **k: tmpdir):
             task_id = "comp-test-001"
-            save_task({
-                "task_id": task_id,
-                "task_hash": "sha256:abc",
-                "base_sha": "a" * 40,
-                "role": "implementer",
-                "objective": "test",
-                "allowed_paths": ["src/"],
-                "forbidden_paths": [],
-                "steps": [],
-                "acceptance_criteria": [{"id": "AC01", "text": "It works"}],
-                "required_checkpoints": [],
-                "allow_edits": True,
-            })
+            save_task(
+                {
+                    "task_id": task_id,
+                    "task_hash": "sha256:abc",
+                    "base_sha": "a" * 40,
+                    "role": "implementer",
+                    "objective": "test",
+                    "allowed_paths": ["src/"],
+                    "forbidden_paths": [],
+                    "steps": [],
+                    "acceptance_criteria": [{"id": "AC01", "text": "It works"}],
+                    "required_checkpoints": [],
+                    "allow_edits": True,
+                }
+            )
 
             append_event(
-                task_id, "task.created",
-                {"task_hash": "sha256:abc", "base_sha": "a" * 40, "role": "implementer"},
+                task_id,
+                "task.created",
+                {
+                    "task_hash": "sha256:abc",
+                    "base_sha": "a" * 40,
+                    "role": "implementer",
+                },
                 actor="codex",
             )
 
             errors = completion_errors(task_id, actual_changed_files=["src/main.py"])
 
-            self.assertTrue(any("not proven" in e or "review" in e.lower() for e in errors))
+            self.assertTrue(
+                any("not proven" in e or "review" in e.lower() for e in errors)
+            )
 
     def test_completion_rejects_directory_scope_escape(self):
         from sin_orca.gates import completion_errors
@@ -1163,23 +1231,30 @@ class TestE2EDispatch(unittest.TestCase):
 
         with patch("sin_orca.state.state_root", lambda *a, **k: tmpdir):
             task_id = "scope-test-001"
-            save_task({
-                "task_id": task_id,
-                "task_hash": "sha256:abc",
-                "base_sha": "a" * 40,
-                "role": "implementer",
-                "objective": "test",
-                "allowed_paths": ["src/"],
-                "forbidden_paths": [],
-                "steps": [],
-                "acceptance_criteria": [{"id": "AC01", "text": "It works"}],
-                "required_checkpoints": [],
-                "allow_edits": True,
-            })
+            save_task(
+                {
+                    "task_id": task_id,
+                    "task_hash": "sha256:abc",
+                    "base_sha": "a" * 40,
+                    "role": "implementer",
+                    "objective": "test",
+                    "allowed_paths": ["src/"],
+                    "forbidden_paths": [],
+                    "steps": [],
+                    "acceptance_criteria": [{"id": "AC01", "text": "It works"}],
+                    "required_checkpoints": [],
+                    "allow_edits": True,
+                }
+            )
 
             append_event(
-                task_id, "task.created",
-                {"task_hash": "sha256:abc", "base_sha": "a" * 40, "role": "implementer"},
+                task_id,
+                "task.created",
+                {
+                    "task_hash": "sha256:abc",
+                    "base_sha": "a" * 40,
+                    "role": "implementer",
+                },
                 actor="codex",
             )
 

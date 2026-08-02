@@ -32,7 +32,10 @@ def utc_now() -> str:
 
 def canonical_json(value: Any) -> bytes:
     return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
     ).encode("utf-8")
 
 
@@ -43,7 +46,11 @@ def sha256_json(value: Any) -> str:
 def run_git(root: Path, *args: str) -> str:
     process = subprocess.run(
         ["git", *args],
-        cwd=root, text=True, capture_output=True, check=False, timeout=15,
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
         env=safe_subprocess_environment(),
     )
     if process.returncode != 0:
@@ -54,7 +61,10 @@ def run_git(root: Path, *args: str) -> str:
 def repository_root() -> Path:
     process = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
-        text=True, capture_output=True, check=False, timeout=5,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
         env=safe_subprocess_environment(),
     )
     if process.returncode == 0 and process.stdout.strip():
@@ -72,7 +82,11 @@ def repository_id(root: Path | None = None) -> str:
             common_dir = (root / common_dir).resolve()
         remote = subprocess.run(
             ["git", "config", "--get", "remote.origin.url"],
-            cwd=root, text=True, capture_output=True, check=False, timeout=5,
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
             env=safe_subprocess_environment(),
         ).stdout.strip()
         material = {"git_common_dir": str(common_dir), "remote": remote}
@@ -125,18 +139,10 @@ def task_dir(task_id: str, root: Path | None = None) -> Path:
         return current
 
     repository_bucket = current.parent.name
-    looks_like_repository_id = (
-        len(repository_bucket) == 24
-        and all(
-            character in "0123456789abcdef"
-            for character in repository_bucket
-        )
+    looks_like_repository_id = len(repository_bucket) == 24 and all(
+        character in "0123456789abcdef" for character in repository_bucket
     )
-    search_base = (
-        current.parent.parent
-        if looks_like_repository_id
-        else current.parent
-    )
+    search_base = current.parent.parent if looks_like_repository_id else current.parent
     matches = sorted(
         path.parent
         for path in search_base.glob(f"*/{task_id}/task.json")
@@ -146,9 +152,7 @@ def task_dir(task_id: str, root: Path | None = None) -> Path:
         return matches[0]
     if len(matches) > 1:
         locations = ", ".join(str(path) for path in matches)
-        raise RuntimeError(
-            f"task id is ambiguous across repositories: {locations}"
-        )
+        raise RuntimeError(f"task id is ambiguous across repositories: {locations}")
 
     current.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
@@ -173,7 +177,9 @@ def ledger_path(task_id: str, root: Path | None = None) -> Path:
 def atomic_write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     temporary.chmod(0o600)
     os.replace(temporary, path)
     try:
@@ -211,9 +217,7 @@ def _read_events_unlocked(
         try:
             event = json.loads(line)
         except json.JSONDecodeError as error:
-            raise RuntimeError(
-                f"invalid JSON event at line {line_number}"
-            ) from error
+            raise RuntimeError(f"invalid JSON event at line {line_number}") from error
         if not isinstance(event, dict):
             raise RuntimeError(f"invalid event at line {line_number}")
         events.append(event)
@@ -223,13 +227,19 @@ def _read_events_unlocked(
             if event.get("sequence") != expected_sequence:
                 raise RuntimeError(f"invalid event sequence at {expected_sequence}")
             if event.get("previous_hash") != previous_hash:
-                raise RuntimeError(f"event chain broken at sequence {expected_sequence}")
+                raise RuntimeError(
+                    f"event chain broken at sequence {expected_sequence}"
+                )
             try:
                 material = {
                     key: event[key]
                     for key in (
-                        "sequence", "type", "timestamp", "actor",
-                        "payload", "previous_hash",
+                        "sequence",
+                        "type",
+                        "timestamp",
+                        "actor",
+                        "payload",
+                        "previous_hash",
                     )
                 }
             except KeyError as error:
@@ -238,7 +248,9 @@ def _read_events_unlocked(
                 ) from error
             expected_hash = sha256_json(material)
             if event.get("event_hash") != expected_hash:
-                raise RuntimeError(f"event hash mismatch at sequence {expected_sequence}")
+                raise RuntimeError(
+                    f"event hash mismatch at sequence {expected_sequence}"
+                )
             previous_hash = expected_hash
     return events
 
@@ -265,10 +277,17 @@ def read_events(
 
 def reduce_events(task_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
     ledger: dict[str, Any] = {
-        "task_id": task_id, "status": "unknown", "actors": {},
-        "checkpoints": [], "controller_messages": [], "callbacks": [],
-        "verification": None, "review": None, "report": None,
-        "suspended": False, "updated_at": None,
+        "task_id": task_id,
+        "status": "unknown",
+        "actors": {},
+        "checkpoints": [],
+        "controller_messages": [],
+        "callbacks": [],
+        "verification": None,
+        "review": None,
+        "report": None,
+        "suspended": False,
+        "updated_at": None,
     }
     for event in events:
         etype = event["type"]
@@ -288,8 +307,15 @@ def reduce_events(task_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
         elif etype == "checkpoint.received":
             ledger["checkpoints"].append({"actor": actor, **payload})
             ledger["status"] = f"checkpoint:{payload['checkpoint']}"
-        elif etype in {"codex.sent", "codex.interrupted", "codex.approved", "codex.followup"}:
-            ledger["controller_messages"].append({"type": etype, "actor": actor, **payload})
+        elif etype in {
+            "codex.sent",
+            "codex.interrupted",
+            "codex.approved",
+            "codex.followup",
+        }:
+            ledger["controller_messages"].append(
+                {"type": etype, "actor": actor, **payload}
+            )
             ledger["status"] = "worker-running"
         elif etype in {"worker.callback", "reviewer.callback"}:
             ledger["callbacks"].append({"type": etype, "actor": actor, **payload})
@@ -362,8 +388,12 @@ def rebuild_ledger(task_id: str, root: Path | None = None) -> dict[str, Any]:
 
 
 def append_event(
-    task_id: str, event_type: str, payload: dict[str, Any],
-    *, actor: str, root: Path | None = None,
+    task_id: str,
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    actor: str,
+    root: Path | None = None,
 ) -> dict[str, Any]:
     directory = task_dir(task_id, root)
     lock_path = directory / ".events.lock"
@@ -377,9 +407,12 @@ def append_event(
         sequence = len(events) + 1
         previous_hash = events[-1]["event_hash"] if events else ZERO_HASH
         material = {
-            "sequence": sequence, "type": event_type,
-            "timestamp": utc_now(), "actor": actor,
-            "payload": payload, "previous_hash": previous_hash,
+            "sequence": sequence,
+            "type": event_type,
+            "timestamp": utc_now(),
+            "actor": actor,
+            "payload": payload,
+            "previous_hash": previous_hash,
         }
         event = {**material, "event_hash": sha256_json(material)}
         with events_path(task_id, root).open("a", encoding="utf-8") as handle:
@@ -387,7 +420,9 @@ def append_event(
                 os.fchmod(handle.fileno(), 0o600)
             except OSError:
                 pass
-            handle.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+            handle.write(
+                json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+            )
             handle.flush()
             os.fsync(handle.fileno())
         ledger = reduce_events(task_id, [*events, event])

@@ -45,13 +45,15 @@ class WriterReservationTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def create_live_task(self, task_id: str) -> None:
-        save_task({
-            "task_id": task_id,
-            "task_hash": f"sha256:{task_id}",
-            "repository_root": str(self.repository),
-            "base_sha": "a" * 40,
-            "role": "implementer",
-        })
+        save_task(
+            {
+                "task_id": task_id,
+                "task_hash": f"sha256:{task_id}",
+                "repository_root": str(self.repository),
+                "base_sha": "a" * 40,
+                "role": "implementer",
+            }
+        )
         append_event(
             task_id,
             "task.created",

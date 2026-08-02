@@ -92,15 +92,17 @@ class CitationManager:
     def detect_contradictions(self) -> list[dict[str, Any]]:
         contradictions = []
         for i, c1 in enumerate(self.claims):
-            for c2 in self.claims[i + 1:]:
+            for c2 in self.claims[i + 1 :]:
                 if self._might_contradict(c1, c2):
-                    contradictions.append({
-                        "claim_a": c1["claim_id"],
-                        "claim_b": c2["claim_id"],
-                        "text_a": c1["text"],
-                        "text_b": c2["text"],
-                        "reason": "opposite_or_incompatible",
-                    })
+                    contradictions.append(
+                        {
+                            "claim_a": c1["claim_id"],
+                            "claim_b": c2["claim_id"],
+                            "text_a": c1["text"],
+                            "text_b": c2["text"],
+                            "reason": "opposite_or_incompatible",
+                        }
+                    )
         return contradictions
 
     def _might_contradict(self, c1: dict, c2: dict) -> bool:
@@ -168,8 +170,13 @@ class CitationManager:
                 raise ValueError(f"duplicate citation claim_id: {claim_id}")
             if not isinstance(text, str) or not isinstance(references, list):
                 raise ValueError(f"citation claim {index} has invalid fields")
-            if any(not isinstance(item, str) or item not in source_ids for item in references):
-                raise ValueError(f"citation claim {claim_id} references unknown sources")
+            if any(
+                not isinstance(item, str) or item not in source_ids
+                for item in references
+            ):
+                raise ValueError(
+                    f"citation claim {claim_id} references unknown sources"
+                )
             claim_ids.add(claim_id)
             normalized_claims.append(dict(claim))
 

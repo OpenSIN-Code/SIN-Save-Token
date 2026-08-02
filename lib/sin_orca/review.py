@@ -39,9 +39,7 @@ def select_reviewer_agent(
         if candidate != implementer_agent:
             return candidate
 
-    raise RuntimeError(
-        "no independent reviewer agent is available"
-    )
+    raise RuntimeError("no independent reviewer agent is available")
 
 
 def _compact_test_results(value: Any) -> list[dict[str, Any]]:
@@ -81,18 +79,11 @@ def start_blind_review(
         protocol_errors.append("worker report missing")
     if protocol_errors:
         raise RuntimeError(
-            "worker protocol is incomplete before review: "
-            + "; ".join(protocol_errors)
+            "worker protocol is incomplete before review: " + "; ".join(protocol_errors)
         )
 
-    if (
-        not isinstance(verification, dict)
-        or verification.get("ok") is not True
-    ):
-        raise RuntimeError(
-            "controller verification must be green "
-            "before review"
-        )
+    if not isinstance(verification, dict) or verification.get("ok") is not True:
+        raise RuntimeError("controller verification must be green before review")
 
     worker = ledger.get("actors", {}).get("worker")
 
@@ -110,7 +101,7 @@ def start_blind_review(
     selector_prefix = "path:"
     if not worktree_selector.startswith(selector_prefix):
         raise RuntimeError("worker selector is not a repository path selector")
-    selector_path = Path(worktree_selector[len(selector_prefix):]).resolve()
+    selector_path = Path(worktree_selector[len(selector_prefix) :]).resolve()
     if selector_path != Path(task["repository_root"]).resolve():
         raise RuntimeError("worker selector does not match task repository")
 
@@ -141,9 +132,10 @@ def start_blind_review(
         base_sha=task["base_sha"],
     )
     verified_changed = verification.get("changed_files")
-    if not isinstance(verified_changed, list) or sorted(
-        str(path) for path in verified_changed
-    ) != current_changed:
+    if (
+        not isinstance(verified_changed, list)
+        or sorted(str(path) for path in verified_changed) != current_changed
+    ):
         raise RuntimeError(
             "worktree changed after controller verification; verify again"
         )
@@ -153,9 +145,7 @@ def start_blind_review(
         base_sha=task["base_sha"],
     )
     if verification.get("diff_sha256") != diff["full_sha256"]:
-        raise RuntimeError(
-            "controller verification does not cover the current diff"
-        )
+        raise RuntimeError("controller verification does not cover the current diff")
 
     existing_reviewer = ledger.get("actors", {}).get("reviewer")
     if (
@@ -205,8 +195,7 @@ def start_blind_review(
             "base_sha": task["base_sha"],
             "worktree": str(worktree),
             "changed_files": [
-                {"path": path, "change_type": "unknown"}
-                for path in current_changed
+                {"path": path, "change_type": "unknown"} for path in current_changed
             ],
             "changed_symbols": [],
             "affected_flows": [],
@@ -246,9 +235,7 @@ def start_blind_review(
             "trust_level": diff_envelope.trust_level,
             "suspicious_instruction_spans": len(diff_envelope.suspicious),
         },
-        "controller_test_results": _compact_test_results(
-            verification.get("results")
-        ),
+        "controller_test_results": _compact_test_results(verification.get("results")),
         "review_context": advisory_context,
         "crg_authoritative": False,
     }
@@ -397,10 +384,7 @@ Review packet:
             "worktree_selector": worktree_selector,
             "terminal_handle": terminal,
             "parent_terminal_handle": task.get("parent_terminal_handle"),
-            "outbox_path": str(
-                Path(task["repository_root"])
-                / task["artifact_outbox"]
-            ),
+            "outbox_path": str(Path(task["repository_root"]) / task["artifact_outbox"]),
             "review_packet": str(packet_path),
             "same_worktree": True,
             "diff_sha256": diff["full_sha256"],

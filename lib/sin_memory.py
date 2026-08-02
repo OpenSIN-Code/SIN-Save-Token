@@ -32,11 +32,10 @@ def _validated_identifier(value: str, field: str) -> str:
         )
     return value
 
+
 def _reject_symlink(path: Path) -> None:
     if path.is_symlink():
-        raise ValueError(
-            f"memory path must not be a symbolic link: {path.name}"
-        )
+        raise ValueError(f"memory path must not be a symbolic link: {path.name}")
 
 
 def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
@@ -126,9 +125,7 @@ class MemoryStore:
             try:
                 existing = self._read_l1_events_unlocked(events_file)
                 sequence = len(existing) + 1
-                previous_hash = (
-                    existing[-1]["event_hash"] if existing else ZERO_HASH
-                )
+                previous_hash = existing[-1]["event_hash"] if existing else ZERO_HASH
                 material = {
                     "sequence": sequence,
                     "type": event_type,
@@ -211,7 +208,8 @@ class MemoryStore:
 
     def list_l2_topics(self) -> list[str]:
         return sorted(
-            path.stem for path in self.l2_dir.glob("*.json")
+            path.stem
+            for path in self.l2_dir.glob("*.json")
             if path.is_file() and not path.is_symlink()
         )
 
@@ -264,7 +262,8 @@ class MemoryStore:
 
     def list_l3_decisions(self) -> list[str]:
         return sorted(
-            path.stem for path in self.l3_dir.glob("*.json")
+            path.stem
+            for path in self.l3_dir.glob("*.json")
             if path.is_file() and not path.is_symlink()
         )
 
@@ -291,8 +290,7 @@ class MemoryStore:
     ) -> dict[str, Any]:
         events = self.read_l1_events(task_id)
         evidence_refs = [
-            {"source": "events.jsonl", "sequence": e["sequence"]}
-            for e in events[-10:]
+            {"source": "events.jsonl", "sequence": e["sequence"]} for e in events[-10:]
         ]
 
         return self.write_l2_summary(
@@ -335,7 +333,8 @@ class MemoryStore:
 
         def recent_files(directory: Path, limit: int) -> tuple[list[Path], int]:
             candidates = [
-                path for path in directory.glob("*.json")
+                path
+                for path in directory.glob("*.json")
                 if path.is_file() and not path.is_symlink()
             ]
             selected = heapq.nlargest(
@@ -346,9 +345,7 @@ class MemoryStore:
             return selected, len(candidates)
 
         def score(entry: dict[str, Any], path: Path) -> tuple[int, int]:
-            value = json.dumps(
-                entry, ensure_ascii=False, sort_keys=True
-            ).lower()
+            value = json.dumps(entry, ensure_ascii=False, sort_keys=True).lower()
             overlap = sum(1 for term in query_terms if term in value)
             return overlap, path.stat().st_mtime_ns
 

@@ -204,8 +204,7 @@ class ExecutionProtocolOrderTests(unittest.TestCase):
         errors = execution_protocol_errors(self.task_id)
         self.assertTrue(
             any(
-                error.startswith("S02 checkpoint")
-                and "out of step order" in error
+                error.startswith("S02 checkpoint") and "out of step order" in error
                 for error in errors
             )
         )

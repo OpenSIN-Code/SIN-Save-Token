@@ -11,7 +11,10 @@ MODULE_PATH = ROOT / "bin" / "sin-memory-write"
 MODULE = ModuleType("sin_memory_write")
 MODULE.__file__ = str(MODULE_PATH)
 sys.modules["sin_memory_write"] = MODULE
-exec(compile(MODULE_PATH.read_text(encoding="utf-8"), str(MODULE_PATH), "exec"), MODULE.__dict__)
+exec(
+    compile(MODULE_PATH.read_text(encoding="utf-8"), str(MODULE_PATH), "exec"),
+    MODULE.__dict__,
+)
 
 
 class MemoryWriteTests(unittest.TestCase):
@@ -31,13 +34,29 @@ class MemoryWriteTests(unittest.TestCase):
         self.assertLess(MODULE.similarity(left, right), 0.2)
 
     def test_rejects_speculation(self):
-        policy = {"write_policy": {"minimum_length": 10, "maximum_length": 500, "allowed_types": ["decision"], "reject_patterns": ["^maybe\\b"]}}
+        policy = {
+            "write_policy": {
+                "minimum_length": 10,
+                "maximum_length": 500,
+                "allowed_types": ["decision"],
+                "reject_patterns": ["^maybe\\b"],
+            }
+        }
         problem = MODULE.validate("Maybe this database is faster.", "decision", policy)
         self.assertIsNotNone(problem)
 
     def test_accepts_atomic_decision(self):
-        policy = {"write_policy": {"minimum_length": 10, "maximum_length": 500, "allowed_types": ["decision"], "reject_patterns": ["^maybe\\b"]}}
-        problem = MODULE.validate("Cognee is the canonical durable domain-memory owner.", "decision", policy)
+        policy = {
+            "write_policy": {
+                "minimum_length": 10,
+                "maximum_length": 500,
+                "allowed_types": ["decision"],
+                "reject_patterns": ["^maybe\\b"],
+            }
+        }
+        problem = MODULE.validate(
+            "Cognee is the canonical durable domain-memory owner.", "decision", policy
+        )
         self.assertIsNone(problem)
 
 

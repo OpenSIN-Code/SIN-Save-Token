@@ -89,8 +89,7 @@ def _validate_identity(
 
         if actual != expected_value:
             raise ArtifactValidationError(
-                f"{field} mismatch: expected "
-                f"{expected_value!r}, received {actual!r}"
+                f"{field} mismatch: expected {expected_value!r}, received {actual!r}"
             )
 
 
@@ -100,14 +99,10 @@ def _validate_shape(
 ) -> None:
     if filename == "checkpoint.json":
         if not isinstance(payload.get("checkpoint"), str):
-            raise ArtifactValidationError(
-                "checkpoint requires checkpoint string"
-            )
+            raise ArtifactValidationError("checkpoint requires checkpoint string")
 
         if not isinstance(payload.get("sequence"), int):
-            raise ArtifactValidationError(
-                "checkpoint requires integer sequence"
-            )
+            raise ArtifactValidationError("checkpoint requires integer sequence")
 
         for field in ("step_id", "status"):
             if not isinstance(payload.get(field), str) or not payload[field]:
@@ -116,9 +111,7 @@ def _validate_shape(
                 )
         for field in ("changed_files", "commands", "unresolved"):
             if not isinstance(payload.get(field), list):
-                raise ArtifactValidationError(
-                    f"checkpoint requires list field {field}"
-                )
+                raise ArtifactValidationError(f"checkpoint requires list field {field}")
         if not isinstance(payload.get("child_process_running"), bool):
             raise ArtifactValidationError(
                 "checkpoint requires child_process_running boolean"
@@ -126,9 +119,7 @@ def _validate_shape(
 
     elif filename == "report.json":
         if payload.get("status") != "complete":
-            raise ArtifactValidationError(
-                "worker report status must be complete"
-            )
+            raise ArtifactValidationError("worker report status must be complete")
 
         for field in (
             "changed_files",
@@ -158,20 +149,14 @@ def _validate_shape(
 
     elif filename == "review.json":
         if payload.get("verdict") not in {"accept", "reject"}:
-            raise ArtifactValidationError(
-                "review verdict must be accept or reject"
-            )
+            raise ArtifactValidationError("review verdict must be accept or reject")
 
         if not isinstance(payload.get("diff_sha256"), str) or not payload.get(
             "diff_sha256"
         ):
-            raise ArtifactValidationError(
-                "review requires diff_sha256 string"
-            )
+            raise ArtifactValidationError("review requires diff_sha256 string")
         if not isinstance(payload.get("scope_violation"), bool):
-            raise ArtifactValidationError(
-                "review requires scope_violation boolean"
-            )
+            raise ArtifactValidationError("review requires scope_violation boolean")
 
         for field in (
             "criteria",
@@ -179,21 +164,13 @@ def _validate_shape(
             "unverified",
         ):
             if not isinstance(payload.get(field), list):
-                raise ArtifactValidationError(
-                    f"review requires list field {field}"
-                )
+                raise ArtifactValidationError(f"review requires list field {field}")
 
         for criterion in payload["criteria"]:
             if not isinstance(criterion, dict):
-                raise ArtifactValidationError(
-                    "review criteria entries must be objects"
-                )
-            if criterion.get("status") not in {
-                "proven", "failed", "unverified"
-            }:
-                raise ArtifactValidationError(
-                    "review criterion status is invalid"
-                )
+                raise ArtifactValidationError("review criteria entries must be objects")
+            if criterion.get("status") not in {"proven", "failed", "unverified"}:
+                raise ArtifactValidationError("review criterion status is invalid")
             evidence = criterion.get("evidence")
             if not isinstance(evidence, str) or not evidence.strip():
                 raise ArtifactValidationError(
@@ -218,16 +195,13 @@ def _validate_checkpoint_order(
     index = len(received)
 
     if index >= len(required):
-        raise ArtifactValidationError(
-            "all required checkpoints were already received"
-        )
+        raise ArtifactValidationError("all required checkpoints were already received")
 
     expected = required[index]
     approved_steps = [
         str(message.get("step_id"))
         for message in ledger.get("controller_messages", [])
-        if message.get("type") == "codex.approved"
-        and message.get("step_id")
+        if message.get("type") == "codex.approved" and message.get("step_id")
     ]
     approval_mode = task.get("approval_mode", "stepwise")
     if approval_mode == "stepwise":
@@ -246,7 +220,8 @@ def _validate_checkpoint_order(
         )
 
     steps = [
-        step for step in task.get("steps", [])
+        step
+        for step in task.get("steps", [])
         if isinstance(step, dict) and step.get("id")
     ]
     if index < len(steps) and payload.get("step_id") != str(steps[index]["id"]):
@@ -262,9 +237,7 @@ def _validate_checkpoint_order(
         )
 
     if payload.get("sequence") != index + 1:
-        raise ArtifactValidationError(
-            f"checkpoint sequence must be {index + 1}"
-        )
+        raise ArtifactValidationError(f"checkpoint sequence must be {index + 1}")
 
 
 def _validate_report_protocol(
@@ -281,9 +254,7 @@ def _validate_report_protocol(
         if item.get("actor") == "worker"
     ]
     if received != required:
-        raise ArtifactValidationError(
-            "worker report arrived before all checkpoints"
-        )
+        raise ArtifactValidationError("worker report arrived before all checkpoints")
 
     expected_steps = [
         str(step.get("id"))
@@ -293,8 +264,7 @@ def _validate_report_protocol(
     approved_steps = [
         str(message.get("step_id"))
         for message in ledger.get("controller_messages", [])
-        if message.get("type") == "codex.approved"
-        and message.get("step_id")
+        if message.get("type") == "codex.approved" and message.get("step_id")
     ]
     approval_mode = task.get("approval_mode", "stepwise")
     if approval_mode == "stepwise":
@@ -313,9 +283,7 @@ def _validate_report_protocol(
         )
 
     if task.get("role") == "implementer" and not payload.get("evidence"):
-        raise ArtifactValidationError(
-            "implementer report requires non-empty evidence"
-        )
+        raise ArtifactValidationError("implementer report requires non-empty evidence")
 
 
 def _validate_review_protocol(
@@ -327,17 +295,13 @@ def _validate_review_protocol(
     reviewer = ledger.get("actors", {}).get("reviewer")
 
     if not isinstance(worker, dict) or not isinstance(reviewer, dict):
-        raise ArtifactValidationError(
-            "review actors are incomplete"
-        )
+        raise ArtifactValidationError("review actors are incomplete")
     if reviewer.get("agent") == worker.get("agent"):
         raise ArtifactValidationError(
             "reviewer must use a different agent than implementer"
         )
     if reviewer.get("same_worktree") is not True:
-        raise ArtifactValidationError(
-            "reviewer must inspect the implementer worktree"
-        )
+        raise ArtifactValidationError("reviewer must inspect the implementer worktree")
     expected_diff = reviewer.get("diff_sha256")
     if not isinstance(expected_diff, str) or (
         payload.get("diff_sha256") != expected_diff
@@ -378,14 +342,14 @@ def _record_command_history(
         if not isinstance(exit_code, int) or isinstance(exit_code, bool):
             continue
         error_text = str(entry.get("error") or entry.get("stderr") or "")
-        history.append({
-            "command": _command_text(entry.get("command")),
-            "exit_code": exit_code,
-            "error_hash": hashlib.sha256(
-                error_text.encode("utf-8")
-            ).hexdigest(),
-            "recorded_at": utc_now(),
-        })
+        history.append(
+            {
+                "command": _command_text(entry.get("command")),
+                "exit_code": exit_code,
+                "error_hash": hashlib.sha256(error_text.encode("utf-8")).hexdigest(),
+                "recorded_at": utc_now(),
+            }
+        )
 
     atomic_write_json(history_path, history[-500:])
 
@@ -424,28 +388,20 @@ def _read_artifact_bytes(
         ) from error
 
     if stat.S_ISLNK(metadata.st_mode):
-        raise ArtifactValidationError(
-            "artifact must not be a symbolic link"
-        )
+        raise ArtifactValidationError("artifact must not be a symbolic link")
     if not stat.S_ISREG(metadata.st_mode):
-        raise ArtifactValidationError(
-            "artifact must be a regular file"
-        )
+        raise ArtifactValidationError("artifact must be a regular file")
 
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(source, flags)
     except OSError as error:
-        raise ArtifactValidationError(
-            "artifact could not be opened safely"
-        ) from error
+        raise ArtifactValidationError("artifact could not be opened safely") from error
 
     try:
         opened = os.fstat(descriptor)
         if not stat.S_ISREG(opened.st_mode):
-            raise ArtifactValidationError(
-                "artifact changed type during ingestion"
-            )
+            raise ArtifactValidationError("artifact changed type during ingestion")
         if opened.st_size > maximum:
             raise ArtifactValidationError(
                 f"artifact exceeds controller context limit: "
@@ -502,11 +458,7 @@ def _list_count(value: Any) -> int:
 def _bounded_string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
-    return [
-        item[:500]
-        for item in value[:100]
-        if isinstance(item, str)
-    ]
+    return [item[:500] for item in value[:100] if isinstance(item, str)]
 
 
 def _artifact_summary(
@@ -519,29 +471,20 @@ def _artifact_summary(
             "sequence": payload.get("sequence"),
             "step_id": payload.get("step_id"),
             "status": payload.get("status"),
-            "changed_files": _bounded_string_list(
-                payload.get("changed_files")
-            ),
-            "unresolved_count": _list_count(
-                payload.get("unresolved")
-            ),
+            "changed_files": _bounded_string_list(payload.get("changed_files")),
+            "unresolved_count": _list_count(payload.get("unresolved")),
         }
     if filename == "report.json":
         return {
             "status": payload.get("status"),
-            "changed_files": _bounded_string_list(
-                payload.get("changed_files")
-            ),
+            "changed_files": _bounded_string_list(payload.get("changed_files")),
             "evidence_count": _list_count(payload.get("evidence")),
-            "unresolved_count": _list_count(
-                payload.get("unresolved")
-            ),
+            "unresolved_count": _list_count(payload.get("unresolved")),
             "scope_compliance": {
                 key: value
-                for key, value in (
-                    payload.get("scope_compliance") or {}
-                ).items()
-                if key in {
+                for key, value in (payload.get("scope_compliance") or {}).items()
+                if key
+                in {
                     "outside_allowlist_touched",
                     "unrequested_dependencies_added",
                     "architecture_decisions_made",
@@ -568,9 +511,7 @@ def ingest_artifact(
     filename: str,
 ) -> dict[str, Any]:
     if filename not in ALLOWED_ARTIFACTS:
-        raise ArtifactValidationError(
-            f"unsupported artifact: {filename}"
-        )
+        raise ArtifactValidationError(f"unsupported artifact: {filename}")
     expected_actor = ARTIFACT_ACTORS[filename]
     if actor != expected_actor:
         raise ArtifactValidationError(
@@ -583,9 +524,7 @@ def ingest_artifact(
     try:
         source.relative_to(expected_parent)
     except ValueError as error:
-        raise ArtifactValidationError(
-            "artifact escaped the worker outbox"
-        ) from error
+        raise ArtifactValidationError("artifact escaped the worker outbox") from error
 
     maximum = _maximum_artifact_bytes()
     raw = _read_artifact_bytes(source, maximum)
@@ -609,14 +548,10 @@ def ingest_artifact(
     try:
         payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ArtifactValidationError(
-            "artifact is not valid UTF-8 JSON"
-        ) from error
+        raise ArtifactValidationError("artifact is not valid UTF-8 JSON") from error
 
     if not isinstance(payload, dict):
-        raise ArtifactValidationError(
-            "artifact root must be an object"
-        )
+        raise ArtifactValidationError("artifact root must be an object")
 
     task = load_task(task_id)
 
@@ -631,10 +566,7 @@ def ingest_artifact(
         _validate_review_protocol(task_id, payload)
 
     archive = (
-        task_dir(task_id)
-        / "artifacts"
-        / actor
-        / f"{Path(filename).stem}-{digest}.json"
+        task_dir(task_id) / "artifacts" / actor / f"{Path(filename).stem}-{digest}.json"
     )
 
     if not archive.exists():
@@ -660,9 +592,7 @@ def ingest_artifact(
             "source_type": envelope.source_type,
             "sha256": envelope.sha256,
             "suspicious_instruction_spans": len(envelope.suspicious),
-            "suspicious_lines": sorted(
-                {span.line for span in envelope.suspicious}
-            ),
+            "suspicious_lines": sorted({span.line for span in envelope.suspicious}),
         },
     }
 

@@ -12,7 +12,10 @@ MODULE_PATH = ROOT / "bin" / "sin-context-packet.py"
 MODULE = ModuleType("sin_context_packet")
 MODULE.__file__ = str(MODULE_PATH)
 sys.modules["sin_context_packet"] = MODULE
-exec(compile(MODULE_PATH.read_text(encoding="utf-8"), str(MODULE_PATH), "exec"), MODULE.__dict__)
+exec(
+    compile(MODULE_PATH.read_text(encoding="utf-8"), str(MODULE_PATH), "exec"),
+    MODULE.__dict__,
+)
 
 
 class ContextPacketTests(unittest.TestCase):

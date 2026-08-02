@@ -56,20 +56,34 @@ class TestEventLogAppendAndHash(unittest.TestCase):
         task_id = "test-chain-001"
         task_dir(task_id).mkdir(parents=True, exist_ok=True)
 
-        save_task({
-            "task_id": task_id,
-            "task_hash": "sha256:abc",
-            "base_sha": "a" * 40,
-            "role": "test",
-            "objective": "test",
-            "allowed_paths": [],
-            "steps": [],
-            "acceptance_criteria": [],
-        })
+        save_task(
+            {
+                "task_id": task_id,
+                "task_hash": "sha256:abc",
+                "base_sha": "a" * 40,
+                "role": "test",
+                "objective": "test",
+                "allowed_paths": [],
+                "steps": [],
+                "acceptance_criteria": [],
+            }
+        )
 
-        append_event(task_id, "task.created", {"task_hash": "sha256:abc", "base_sha": "a" * 40, "role": "test"}, actor="codex")
-        append_event(task_id, "worker.spawned", {"agent": "mimo", "terminal_handle": "t1", "worktree_path": "/tmp"}, actor="worker")
-        append_event(task_id, "checkpoint.received", {"checkpoint": "plan-ready"}, actor="worker")
+        append_event(
+            task_id,
+            "task.created",
+            {"task_hash": "sha256:abc", "base_sha": "a" * 40, "role": "test"},
+            actor="codex",
+        )
+        append_event(
+            task_id,
+            "worker.spawned",
+            {"agent": "mimo", "terminal_handle": "t1", "worktree_path": "/tmp"},
+            actor="worker",
+        )
+        append_event(
+            task_id, "checkpoint.received", {"checkpoint": "plan-ready"}, actor="worker"
+        )
 
         events = read_events(task_id)
         self.assertEqual(len(events), 3)
@@ -85,18 +99,25 @@ class TestEventLogAppendAndHash(unittest.TestCase):
         task_id = "test-tamper-001"
         task_dir(task_id).mkdir(parents=True, exist_ok=True)
 
-        save_task({
-            "task_id": task_id,
-            "task_hash": "sha256:abc",
-            "base_sha": "a" * 40,
-            "role": "test",
-            "objective": "test",
-            "allowed_paths": [],
-            "steps": [],
-            "acceptance_criteria": [],
-        })
+        save_task(
+            {
+                "task_id": task_id,
+                "task_hash": "sha256:abc",
+                "base_sha": "a" * 40,
+                "role": "test",
+                "objective": "test",
+                "allowed_paths": [],
+                "steps": [],
+                "acceptance_criteria": [],
+            }
+        )
 
-        append_event(task_id, "task.created", {"task_hash": "sha256:abc", "base_sha": "a" * 40, "role": "test"}, actor="codex")
+        append_event(
+            task_id,
+            "task.created",
+            {"task_hash": "sha256:abc", "base_sha": "a" * 40, "role": "test"},
+            actor="codex",
+        )
 
         path = events_path(task_id)
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -124,19 +145,31 @@ class TestLedgerReconstruction(unittest.TestCase):
         task_id = "test-ledger-001"
         task_dir(task_id).mkdir(parents=True, exist_ok=True)
 
-        save_task({
-            "task_id": task_id,
-            "task_hash": "sha256:abc",
-            "base_sha": "a" * 40,
-            "role": "implementer",
-            "objective": "test",
-            "allowed_paths": [],
-            "steps": [],
-            "acceptance_criteria": [],
-        })
+        save_task(
+            {
+                "task_id": task_id,
+                "task_hash": "sha256:abc",
+                "base_sha": "a" * 40,
+                "role": "implementer",
+                "objective": "test",
+                "allowed_paths": [],
+                "steps": [],
+                "acceptance_criteria": [],
+            }
+        )
 
-        append_event(task_id, "task.created", {"task_hash": "sha256:abc", "base_sha": "a" * 40, "role": "implementer"}, actor="codex")
-        append_event(task_id, "worker.spawned", {"agent": "mimo-code", "terminal_handle": "t1"}, actor="worker")
+        append_event(
+            task_id,
+            "task.created",
+            {"task_hash": "sha256:abc", "base_sha": "a" * 40, "role": "implementer"},
+            actor="codex",
+        )
+        append_event(
+            task_id,
+            "worker.spawned",
+            {"agent": "mimo-code", "terminal_handle": "t1"},
+            actor="worker",
+        )
 
         ledger = rebuild_ledger(task_id)
         self.assertEqual(ledger["status"], "awaiting-ack")
@@ -146,18 +179,25 @@ class TestLedgerReconstruction(unittest.TestCase):
         task_id = "test-ledger-002"
         task_dir(task_id).mkdir(parents=True, exist_ok=True)
 
-        save_task({
-            "task_id": task_id,
-            "task_hash": "sha256:abc",
-            "base_sha": "a" * 40,
-            "role": "test",
-            "objective": "test",
-            "allowed_paths": [],
-            "steps": [],
-            "acceptance_criteria": [],
-        })
+        save_task(
+            {
+                "task_id": task_id,
+                "task_hash": "sha256:abc",
+                "base_sha": "a" * 40,
+                "role": "test",
+                "objective": "test",
+                "allowed_paths": [],
+                "steps": [],
+                "acceptance_criteria": [],
+            }
+        )
 
-        append_event(task_id, "task.created", {"task_hash": "sha256:abc", "base_sha": "a" * 40, "role": "test"}, actor="codex")
+        append_event(
+            task_id,
+            "task.created",
+            {"task_hash": "sha256:abc", "base_sha": "a" * 40, "role": "test"},
+            actor="codex",
+        )
 
         first = rebuild_ledger(task_id)
         second = rebuild_ledger(task_id)
@@ -175,10 +215,13 @@ class TestCliParsing(unittest.TestCase):
             "--command",
             "pytest -q",
         ]
-        with patch.object(sys, "argv", argv), patch(
-            "sin_orca.cli._cmd_verify",
-            return_value=0,
-        ) as handler:
+        with (
+            patch.object(sys, "argv", argv),
+            patch(
+                "sin_orca.cli._cmd_verify",
+                return_value=0,
+            ) as handler,
+        ):
             result = main()
 
         self.assertEqual(result, 0)
@@ -219,10 +262,7 @@ class TestCrossRepositoryTaskLookup(unittest.TestCase):
     def test_ambiguous_task_id_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary) / "state"
-            repos = [
-                Path(temporary) / name
-                for name in ("repo-a", "repo-b", "repo-c")
-            ]
+            repos = [Path(temporary) / name for name in ("repo-a", "repo-b", "repo-c")]
             for repository in repos:
                 repository.mkdir()
 
@@ -289,36 +329,43 @@ class TestArtifactValidation(unittest.TestCase):
         task_id = "test-art-001"
         task_dir(task_id).mkdir(parents=True, exist_ok=True)
 
-        save_task({
-            "task_id": task_id,
-            "task_hash": "sha256:correct",
-            "base_sha": "a" * 40,
-            "role": "test",
-            "objective": "test",
-            "allowed_paths": [],
-            "steps": [],
-            "acceptance_criteria": [],
-            "required_checkpoints": [],
-        })
+        save_task(
+            {
+                "task_id": task_id,
+                "task_hash": "sha256:correct",
+                "base_sha": "a" * 40,
+                "role": "test",
+                "objective": "test",
+                "allowed_paths": [],
+                "steps": [],
+                "acceptance_criteria": [],
+                "required_checkpoints": [],
+            }
+        )
 
         outbox = self.tmpdir / "outbox"
         outbox.mkdir(parents=True)
         artifact = outbox / "report.json"
-        artifact.write_text(json.dumps({
-            "task_id": task_id,
-            "task_hash": "sha256:WRONG",
-            "base_sha": "a" * 40,
-            "status": "complete",
-            "changed_files": [],
-            "evidence": [],
-            "commands": [],
-            "unresolved": [],
-            "scope_compliance": {
-                "outside_allowlist_touched": False,
-                "unrequested_dependencies_added": False,
-                "architecture_decisions_made": False,
-            },
-        }), encoding="utf-8")
+        artifact.write_text(
+            json.dumps(
+                {
+                    "task_id": task_id,
+                    "task_hash": "sha256:WRONG",
+                    "base_sha": "a" * 40,
+                    "status": "complete",
+                    "changed_files": [],
+                    "evidence": [],
+                    "commands": [],
+                    "unresolved": [],
+                    "scope_compliance": {
+                        "outside_allowlist_touched": False,
+                        "unrequested_dependencies_added": False,
+                        "architecture_decisions_made": False,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
 
         with self.assertRaises(ArtifactValidationError):
             ingest_artifact(
@@ -332,36 +379,43 @@ class TestArtifactValidation(unittest.TestCase):
         task_id = "test-art-002"
         task_dir(task_id).mkdir(parents=True, exist_ok=True)
 
-        save_task({
-            "task_id": task_id,
-            "task_hash": "sha256:abc",
-            "base_sha": "a" * 40,
-            "role": "test",
-            "objective": "test",
-            "allowed_paths": [],
-            "steps": [],
-            "acceptance_criteria": [],
-            "required_checkpoints": [],
-        })
+        save_task(
+            {
+                "task_id": task_id,
+                "task_hash": "sha256:abc",
+                "base_sha": "a" * 40,
+                "role": "test",
+                "objective": "test",
+                "allowed_paths": [],
+                "steps": [],
+                "acceptance_criteria": [],
+                "required_checkpoints": [],
+            }
+        )
 
         outbox = self.tmpdir / "outbox2"
         outbox.mkdir(parents=True)
         artifact = outbox / "report.json"
-        artifact.write_text(json.dumps({
-            "task_id": task_id,
-            "task_hash": "sha256:abc",
-            "base_sha": "a" * 40,
-            "status": "complete",
-            "changed_files": [],
-            "evidence": [],
-            "commands": [],
-            "unresolved": [],
-            "scope_compliance": {
-                "outside_allowlist_touched": False,
-                "unrequested_dependencies_added": False,
-                "architecture_decisions_made": False,
-            },
-        }), encoding="utf-8")
+        artifact.write_text(
+            json.dumps(
+                {
+                    "task_id": task_id,
+                    "task_hash": "sha256:abc",
+                    "base_sha": "a" * 40,
+                    "status": "complete",
+                    "changed_files": [],
+                    "evidence": [],
+                    "commands": [],
+                    "unresolved": [],
+                    "scope_compliance": {
+                        "outside_allowlist_touched": False,
+                        "unrequested_dependencies_added": False,
+                        "architecture_decisions_made": False,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
 
         result = ingest_artifact(
             task_id=task_id,
@@ -380,38 +434,45 @@ class TestArtifactValidation(unittest.TestCase):
         task_id = "test-art-003"
         task_dir(task_id).mkdir(parents=True, exist_ok=True)
 
-        save_task({
-            "task_id": task_id,
-            "task_hash": "sha256:abc",
-            "base_sha": "a" * 40,
-            "role": "test",
-            "objective": "test",
-            "allowed_paths": [],
-            "steps": [],
-            "acceptance_criteria": [],
-            "required_checkpoints": [],
-        })
+        save_task(
+            {
+                "task_id": task_id,
+                "task_hash": "sha256:abc",
+                "base_sha": "a" * 40,
+                "role": "test",
+                "objective": "test",
+                "allowed_paths": [],
+                "steps": [],
+                "acceptance_criteria": [],
+                "required_checkpoints": [],
+            }
+        )
 
         outbox = self.tmpdir / "outbox3"
         outbox.mkdir(parents=True)
 
         for i in range(2):
             artifact = outbox / "report.json"
-            artifact.write_text(json.dumps({
-                "task_id": task_id,
-                "task_hash": "sha256:abc",
-                "base_sha": "a" * 40,
-                "status": "complete",
-                "changed_files": [],
-                "evidence": [],
-                "commands": [],
-                "unresolved": [],
-                "scope_compliance": {
-                    "outside_allowlist_touched": False,
-                    "unrequested_dependencies_added": False,
-                    "architecture_decisions_made": False,
-                },
-            }), encoding="utf-8")
+            artifact.write_text(
+                json.dumps(
+                    {
+                        "task_id": task_id,
+                        "task_hash": "sha256:abc",
+                        "base_sha": "a" * 40,
+                        "status": "complete",
+                        "changed_files": [],
+                        "evidence": [],
+                        "commands": [],
+                        "unresolved": [],
+                        "scope_compliance": {
+                            "outside_allowlist_touched": False,
+                            "unrequested_dependencies_added": False,
+                            "architecture_decisions_made": False,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             result = ingest_artifact(
                 task_id=task_id,
@@ -441,18 +502,20 @@ class TestArtifactProtocol(unittest.TestCase):
         self._patcher.stop()
 
     def _save_implementer_task(self, task_id: str) -> None:
-        save_task({
-            "task_id": task_id,
-            "task_hash": "sha256:protocol",
-            "base_sha": "a" * 40,
-            "role": "implementer",
-            "objective": "test protocol",
-            "allowed_paths": ["README.md"],
-            "forbidden_paths": [],
-            "steps": [{"id": "S01", "instruction": "edit"}],
-            "acceptance_criteria": [{"id": "AC01", "text": "works"}],
-            "required_checkpoints": ["plan-ready"],
-        })
+        save_task(
+            {
+                "task_id": task_id,
+                "task_hash": "sha256:protocol",
+                "base_sha": "a" * 40,
+                "role": "implementer",
+                "objective": "test protocol",
+                "allowed_paths": ["README.md"],
+                "forbidden_paths": [],
+                "steps": [{"id": "S01", "instruction": "edit"}],
+                "acceptance_criteria": [{"id": "AC01", "text": "works"}],
+                "required_checkpoints": ["plan-ready"],
+            }
+        )
         append_event(
             task_id,
             "task.created",
@@ -486,21 +549,23 @@ class TestArtifactProtocol(unittest.TestCase):
     def _write_report(self, outbox: Path, task_id: str) -> None:
         outbox.mkdir(parents=True, exist_ok=True)
         (outbox / "report.json").write_text(
-            json.dumps({
-                "task_id": task_id,
-                "task_hash": "sha256:protocol",
-                "base_sha": "a" * 40,
-                "status": "complete",
-                "changed_files": ["README.md"],
-                "evidence": ["README.md updated"],
-                "commands": [],
-                "unresolved": [],
-                "scope_compliance": {
-                    "outside_allowlist_touched": False,
-                    "unrequested_dependencies_added": False,
-                    "architecture_decisions_made": False,
-                },
-            }),
+            json.dumps(
+                {
+                    "task_id": task_id,
+                    "task_hash": "sha256:protocol",
+                    "base_sha": "a" * 40,
+                    "status": "complete",
+                    "changed_files": ["README.md"],
+                    "evidence": ["README.md updated"],
+                    "commands": [],
+                    "unresolved": [],
+                    "scope_compliance": {
+                        "outside_allowlist_touched": False,
+                        "unrequested_dependencies_added": False,
+                        "architecture_decisions_made": False,
+                    },
+                }
+            ),
             encoding="utf-8",
         )
 
@@ -537,17 +602,19 @@ class TestArtifactProtocol(unittest.TestCase):
 
     def test_review_artifact_must_match_assigned_diff(self):
         task_id = "protocol-review-001"
-        save_task({
-            "task_id": task_id,
-            "task_hash": "sha256:review",
-            "base_sha": "b" * 40,
-            "role": "implementer",
-            "objective": "review",
-            "allowed_paths": ["README.md"],
-            "steps": [],
-            "acceptance_criteria": [{"id": "AC01", "text": "works"}],
-            "required_checkpoints": [],
-        })
+        save_task(
+            {
+                "task_id": task_id,
+                "task_hash": "sha256:review",
+                "base_sha": "b" * 40,
+                "role": "implementer",
+                "objective": "review",
+                "allowed_paths": ["README.md"],
+                "steps": [],
+                "acceptance_criteria": [{"id": "AC01", "text": "works"}],
+                "required_checkpoints": [],
+            }
+        )
         append_event(
             task_id,
             "task.created",
@@ -589,11 +656,13 @@ class TestArtifactProtocol(unittest.TestCase):
             "base_sha": "b" * 40,
             "verdict": "accept",
             "diff_sha256": "e" * 64,
-            "criteria": [{
-                "id": "AC01",
-                "status": "proven",
-                "evidence": "independent test passed",
-            }],
+            "criteria": [
+                {
+                    "id": "AC01",
+                    "status": "proven",
+                    "evidence": "independent test passed",
+                }
+            ],
             "scope_violation": False,
             "regressions": [],
             "unverified": [],
@@ -628,21 +697,23 @@ class TestArtifactProtocol(unittest.TestCase):
 
     def test_future_checkpoint_requires_previous_step_approval(self):
         task_id = "protocol-checkpoint-001"
-        save_task({
-            "task_id": task_id,
-            "task_hash": "sha256:checkpoint",
-            "base_sha": "c" * 40,
-            "role": "implementer",
-            "approval_mode": "stepwise",
-            "objective": "two steps",
-            "allowed_paths": ["README.md"],
-            "steps": [
-                {"id": "S01", "instruction": "first"},
-                {"id": "S02", "instruction": "second"},
-            ],
-            "acceptance_criteria": [{"id": "AC01", "text": "works"}],
-            "required_checkpoints": ["first-ready", "second-ready"],
-        })
+        save_task(
+            {
+                "task_id": task_id,
+                "task_hash": "sha256:checkpoint",
+                "base_sha": "c" * 40,
+                "role": "implementer",
+                "approval_mode": "stepwise",
+                "objective": "two steps",
+                "allowed_paths": ["README.md"],
+                "steps": [
+                    {"id": "S01", "instruction": "first"},
+                    {"id": "S02", "instruction": "second"},
+                ],
+                "acceptance_criteria": [{"id": "AC01", "text": "works"}],
+                "required_checkpoints": ["first-ready", "second-ready"],
+            }
+        )
         append_event(
             task_id,
             "task.created",
@@ -673,29 +744,33 @@ class TestArtifactProtocol(unittest.TestCase):
             step_id: str,
         ) -> None:
             (outbox / "checkpoint.json").write_text(
-                json.dumps({
-                    "task_id": task_id,
-                    "task_hash": "sha256:checkpoint",
-                    "base_sha": "c" * 40,
-                    "checkpoint": checkpoint,
-                    "sequence": sequence,
-                    "step_id": step_id,
-                    "status": "ready",
-                    "changed_files": [],
-                    "commands": [],
-                    "unresolved": [],
-                    "child_process_running": False,
-                }),
+                json.dumps(
+                    {
+                        "task_id": task_id,
+                        "task_hash": "sha256:checkpoint",
+                        "base_sha": "c" * 40,
+                        "checkpoint": checkpoint,
+                        "sequence": sequence,
+                        "step_id": step_id,
+                        "status": "ready",
+                        "changed_files": [],
+                        "commands": [],
+                        "unresolved": [],
+                        "child_process_running": False,
+                    }
+                ),
                 encoding="utf-8",
             )
 
         write_checkpoint("first-ready", 1, "S01")
-        self.assertTrue(ingest_artifact(
-            task_id=task_id,
-            actor="worker",
-            outbox=outbox,
-            filename="checkpoint.json",
-        )["ok"])
+        self.assertTrue(
+            ingest_artifact(
+                task_id=task_id,
+                actor="worker",
+                outbox=outbox,
+                filename="checkpoint.json",
+            )["ok"]
+        )
 
         write_checkpoint("second-ready", 2, "S02")
         with self.assertRaisesRegex(
@@ -725,17 +800,19 @@ class TestArtifactProtocol(unittest.TestCase):
 
     def test_symbolic_link_artifact_is_rejected(self):
         task_id = "protocol-symlink-001"
-        save_task({
-            "task_id": task_id,
-            "task_hash": "sha256:protocol",
-            "base_sha": "a" * 40,
-            "role": "test",
-            "objective": "test",
-            "allowed_paths": [],
-            "steps": [],
-            "acceptance_criteria": [],
-            "required_checkpoints": [],
-        })
+        save_task(
+            {
+                "task_id": task_id,
+                "task_hash": "sha256:protocol",
+                "base_sha": "a" * 40,
+                "role": "test",
+                "objective": "test",
+                "allowed_paths": [],
+                "steps": [],
+                "acceptance_criteria": [],
+                "required_checkpoints": [],
+            }
+        )
         outbox = self.tmpdir / "symlink-outbox"
         outbox.mkdir()
         target = self.tmpdir / "outside.json"
@@ -794,25 +871,27 @@ class TestContinuousPreauthorizedProtocol(unittest.TestCase):
         from sin_orca.gates import execution_protocol_errors
 
         task_id = "continuous-protocol-001"
-        save_task({
-            "task_id": task_id,
-            "task_hash": "sha256:continuous",
-            "base_sha": "a" * 40,
-            "repository_root": "/tmp/repository",
-            "parent_terminal_handle": "parent-terminal",
-            "approval_mode": "continuous-preauthorized",
-            "role": "implementer",
-            "objective": "execute two bounded steps",
-            "allowed_paths": ["src/"],
-            "forbidden_paths": [],
-            "steps": [
-                {"id": "S01", "instruction": "first"},
-                {"id": "S02", "instruction": "second"},
-            ],
-            "acceptance_criteria": [],
-            "required_checkpoints": ["first-complete", "second-complete"],
-            "allow_edits": True,
-        })
+        save_task(
+            {
+                "task_id": task_id,
+                "task_hash": "sha256:continuous",
+                "base_sha": "a" * 40,
+                "repository_root": "/tmp/repository",
+                "parent_terminal_handle": "parent-terminal",
+                "approval_mode": "continuous-preauthorized",
+                "role": "implementer",
+                "objective": "execute two bounded steps",
+                "allowed_paths": ["src/"],
+                "forbidden_paths": [],
+                "steps": [
+                    {"id": "S01", "instruction": "first"},
+                    {"id": "S02", "instruction": "second"},
+                ],
+                "acceptance_criteria": [],
+                "required_checkpoints": ["first-complete", "second-complete"],
+                "allow_edits": True,
+            }
+        )
         append_event(
             task_id,
             "task.created",
@@ -912,22 +991,22 @@ class TestSecretIsolation(unittest.TestCase):
         self.assertNotIn("SIN_MANIFEST_HMAC_KEY", environment)
 
     def test_verification_redacts_secret_arguments_and_output(self):
-        argv = redact_argv([
-            "runner",
-            "--api-key",
-            "top-secret",
-            "--token=second-secret",
-            "https://user:password@example.invalid/path",
-        ])
+        argv = redact_argv(
+            [
+                "runner",
+                "--api-key",
+                "top-secret",
+                "--token=second-secret",
+                "https://user:password@example.invalid/path",
+            ]
+        )
         rendered = " ".join(argv)
         self.assertNotIn("top-secret", rendered)
         self.assertNotIn("second-secret", rendered)
         self.assertNotIn("password@example", rendered)
         self.assertIn("<redacted>", rendered)
 
-        output = redact_text(
-            "password=hunter2 Authorization: Bearer abc.def.ghi"
-        )
+        output = redact_text("password=hunter2 Authorization: Bearer abc.def.ghi")
         self.assertNotIn("hunter2", output)
         self.assertNotIn("abc.def.ghi", output)
 
@@ -940,16 +1019,20 @@ class TestSecretIsolation(unittest.TestCase):
             stdout='{"ok": true}',
             stderr="",
         )
-        with patch.dict(
-            os.environ,
-            {"SIN_MANIFEST_HMAC_KEY": "controller-only-secret"},
-        ), patch(
-            "sin_orca.dispatch.shutil.which",
-            return_value="/usr/local/bin/orca",
-        ), patch(
-            "sin_orca.dispatch.subprocess.run",
-            return_value=completed,
-        ) as runner:
+        with (
+            patch.dict(
+                os.environ,
+                {"SIN_MANIFEST_HMAC_KEY": "controller-only-secret"},
+            ),
+            patch(
+                "sin_orca.dispatch.shutil.which",
+                return_value="/usr/local/bin/orca",
+            ),
+            patch(
+                "sin_orca.dispatch.subprocess.run",
+                return_value=completed,
+            ) as runner,
+        ):
             result = run_orca(["status"])
 
         self.assertTrue(result["ok"])
@@ -982,9 +1065,7 @@ class TestControllerLease(unittest.TestCase):
         lease1.acquire(ttl_seconds=30)
 
         # Manually expire the lease by writing an expired timestamp
-        lease_data = json.loads(
-            (self.tmpdir / "controller-lease.json").read_text()
-        )
+        lease_data = json.loads((self.tmpdir / "controller-lease.json").read_text())
         lease_data["expires_at"] = time.time() - 1
         (self.tmpdir / "controller-lease.json").write_text(
             json.dumps(lease_data) + "\n"

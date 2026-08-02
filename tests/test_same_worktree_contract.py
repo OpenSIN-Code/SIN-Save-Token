@@ -14,16 +14,12 @@ class SameWorktreeContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.policy = json.loads(
-            (ROOT / "config" / "orca-orchestrator.json").read_text(
-                encoding="utf-8"
-            )
+            (ROOT / "config" / "orca-orchestrator.json").read_text(encoding="utf-8")
         )
         cls.dispatch = (ROOT / "lib" / "sin_orca" / "dispatch.py").read_text(
             encoding="utf-8"
         )
-        cls.cli = (ROOT / "lib" / "sin_orca" / "cli.py").read_text(
-            encoding="utf-8"
-        )
+        cls.cli = (ROOT / "lib" / "sin_orca" / "cli.py").read_text(encoding="utf-8")
         cls.review = (ROOT / "lib" / "sin_orca" / "review.py").read_text(
             encoding="utf-8"
         )
@@ -58,7 +54,7 @@ class SameWorktreeContractTests(unittest.TestCase):
 
     def test_runtime_never_calls_orca_worktree_create(self) -> None:
         self.assertNotIn('"worktree", "create"', self.dispatch)
-        self.assertIn('"terminal",\n            "create"', self.dispatch)
+        self.assertRegex(self.dispatch, r'"terminal",\s*"create"')
         self.assertIn('selector = f"path:{root}"', self.dispatch)
         self.assertNotIn("--setup", self.dispatch)
         self.assertIn("continuous-preauthorized", self.dispatch)
@@ -84,7 +80,7 @@ class SameWorktreeContractTests(unittest.TestCase):
         self.assertIn("worker was not dispatched in same-worktree mode", self.review)
         self.assertIn("worker selector does not match task repository", self.review)
         self.assertIn("task does not own repository writer before review", self.review)
-        self.assertIn('"terminal",\n            "create"', self.review)
+        self.assertRegex(self.review, r'"terminal",\s*"create"')
         self.assertTrue(self.policy["review"]["different_agent"])
         self.assertIn("select_reviewer_agent", self.review)
 

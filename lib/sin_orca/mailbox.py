@@ -35,10 +35,16 @@ def actor_worktree(task_id: str, actor: str) -> Path:
 
 
 def validate_identity(task: dict[str, Any], payload: dict[str, Any]) -> None:
-    expected = {"task_id": task["task_id"], "task_hash": task["task_hash"], "base_sha": task["base_sha"]}
+    expected = {
+        "task_id": task["task_id"],
+        "task_hash": task["task_hash"],
+        "base_sha": task["base_sha"],
+    }
     for key, value in expected.items():
         if payload.get(key) != value:
-            raise RuntimeError(f"artifact {key} mismatch: expected {value!r}, got {payload.get(key)!r}")
+            raise RuntimeError(
+                f"artifact {key} mismatch: expected {value!r}, got {payload.get(key)!r}"
+            )
 
 
 def validate_checkpoint_order(task_id: str, payload: dict[str, Any]) -> None:
@@ -54,7 +60,9 @@ def validate_checkpoint_order(task_id: str, payload: dict[str, Any]) -> None:
         raise RuntimeError("all required checkpoints were already received")
     expected = required[expected_index]
     if checkpoint != expected:
-        raise RuntimeError(f"checkpoint out of order: expected {expected!r}, got {checkpoint!r}")
+        raise RuntimeError(
+            f"checkpoint out of order: expected {expected!r}, got {checkpoint!r}"
+        )
     sequence = payload.get("sequence")
     if sequence != expected_index + 1:
         raise RuntimeError(f"invalid checkpoint sequence: {sequence!r}")
@@ -73,12 +81,26 @@ def consume_file(*, task_id: str, actor: str, source: Path) -> dict[str, Any]:
     if source.name == "checkpoint.json":
         validate_checkpoint_order(task_id, payload)
     digest = hashlib.sha256(raw).hexdigest()
-    destination = task_dir(task_id) / "artifacts" / actor / f"{source.stem}-{digest[:16]}.json"
+    destination = (
+        task_dir(task_id) / "artifacts" / actor / f"{source.stem}-{digest[:16]}.json"
+    )
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(".tmp")
     temporary.write_bytes(raw)
     os.replace(temporary, destination)
-    append_event(task_id, ARTIFACT_EVENTS[source.name], {**payload, "_artifact": {"sha256": digest, "path": str(destination), "size_bytes": len(raw)}}, actor=actor)
+    append_event(
+        task_id,
+        ARTIFACT_EVENTS[source.name],
+        {
+            **payload,
+            "_artifact": {
+                "sha256": digest,
+                "path": str(destination),
+                "size_bytes": len(raw),
+            },
+        },
+        actor=actor,
+    )
     processed = source.with_suffix(source.suffix + ".processed")
     os.replace(source, processed)
     return {"artifact": source.name, "sha256": digest, "payload": payload}

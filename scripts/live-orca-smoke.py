@@ -121,14 +121,19 @@ def output_strings(value: Any) -> list[str]:
     values: list[str] = []
     if isinstance(value, dict):
         for key, child in value.items():
-            if key in {
-                "text",
-                "output",
-                "content",
-                "stdout",
-                "screen",
-                "terminalOutput",
-            } and isinstance(child, str) and child.strip():
+            if (
+                key
+                in {
+                    "text",
+                    "output",
+                    "content",
+                    "stdout",
+                    "screen",
+                    "terminalOutput",
+                }
+                and isinstance(child, str)
+                and child.strip()
+            ):
                 values.append(child)
             values.extend(output_strings(child))
     elif isinstance(value, list):
@@ -243,8 +248,7 @@ def resolve_parent_terminal(
     for _ in range(20):
         current = list_terminals(selector=selector, cwd=cwd, env=env)
         candidates = [
-            handle for handle in terminal_handles(current)
-            if handle not in existing
+            handle for handle in terminal_handles(current) if handle not in existing
         ]
         if candidates:
             return candidates[-1]
@@ -289,9 +293,7 @@ def wait_for_callback(
     deadline: float,
     transcript: list[dict[str, Any]],
 ) -> str | None:
-    marker = (
-        f"SIN_CALLBACK task={task_id} actor={actor} type={callback_type}"
-    )
+    marker = f"SIN_CALLBACK task={task_id} actor={actor} type={callback_type}"
     current_cursor = cursor
     while time.monotonic() < deadline:
         text, next_cursor = read_terminal(
@@ -301,12 +303,14 @@ def wait_for_callback(
             env=env,
         )
         found = marker in text
-        transcript.append({
-            "stage": f"callback:{actor}:{callback_type}",
-            "terminal": parent_terminal,
-            "observed_chars": len(text),
-            "found": found,
-        })
+        transcript.append(
+            {
+                "stage": f"callback:{actor}:{callback_type}",
+                "terminal": parent_terminal,
+                "observed_chars": len(text),
+                "found": found,
+            }
+        )
         if found:
             return next_cursor or current_cursor
         if next_cursor:
@@ -336,12 +340,14 @@ def wait_for_artifact(
             timeout=90,
             require_ok=False,
         )
-        transcript.append({
-            "stage": f"mailbox:{actor}",
-            "exit_code": payload.get("_exit_code"),
-            "update_count": len(payload.get("updates", [])),
-            "warning_count": len(payload.get("warnings", [])),
-        })
+        transcript.append(
+            {
+                "stage": f"mailbox:{actor}",
+                "exit_code": payload.get("_exit_code"),
+                "update_count": len(payload.get("updates", [])),
+                "warning_count": len(payload.get("warnings", [])),
+            }
+        )
         for update in payload.get("updates", []):
             if not isinstance(update, dict):
                 continue
@@ -353,7 +359,9 @@ def wait_for_artifact(
                 )
         warnings = payload.get("warnings", [])
         if warnings:
-            raise RuntimeError(f"actor warning while waiting for {filename}: {warnings}")
+            raise RuntimeError(
+                f"actor warning while waiting for {filename}: {warnings}"
+            )
 
         status = run(
             [str(sin_orca), "status", task_id],
@@ -362,17 +370,17 @@ def wait_for_artifact(
             timeout=60,
         )
         archived = (
-            filename == "checkpoint.json" and bool(status.get("checkpoints"))
-        ) or (
-            filename == "report.json" and status.get("report_received") is True
-        ) or (
-            filename == "review.json" and status.get("review_received") is True
+            (filename == "checkpoint.json" and bool(status.get("checkpoints")))
+            or (filename == "report.json" and status.get("report_received") is True)
+            or (filename == "review.json" and status.get("review_received") is True)
         )
         if archived:
-            transcript.append({
-                "stage": f"artifact:{actor}:{filename}",
-                "archived": True,
-            })
+            transcript.append(
+                {
+                    "stage": f"artifact:{actor}:{filename}",
+                    "archived": True,
+                }
+            )
             return {
                 "ok": True,
                 "filename": filename,
@@ -475,7 +483,7 @@ def main() -> int:
         )
 
         verification_command = (
-            "python3 -c \"from pathlib import Path; "
+            'python3 -c "from pathlib import Path; '
             "lines=Path('README.md').read_text(encoding='utf-8').splitlines(); "
             "raise SystemExit(0 if lines.count('ORCA_LIVE_SMOKE_OK') == 1 else 1)\""
         )
@@ -514,12 +522,14 @@ def main() -> int:
             env=env,
             timeout=240,
         )
-        transcript.append({
-            "stage": "dispatch",
-            "task_id": dispatched.get("task_id"),
-            "terminal": dispatched.get("terminal"),
-            "same_worktree": dispatched.get("same_worktree"),
-        })
+        transcript.append(
+            {
+                "stage": "dispatch",
+                "task_id": dispatched.get("task_id"),
+                "terminal": dispatched.get("terminal"),
+                "same_worktree": dispatched.get("same_worktree"),
+            }
+        )
         task_id = str(dispatched["task_id"])
         report["task_id"] = task_id
         if dispatched.get("same_worktree") is not True:
@@ -591,11 +601,13 @@ def main() -> int:
         )
         if verified.get("ok") is not True:
             raise RuntimeError(f"controller verification failed: {verified}")
-        transcript.append({
-            "stage": "verify",
-            "ok": verified.get("ok"),
-            "diff_sha256": verified.get("diff_sha256"),
-        })
+        transcript.append(
+            {
+                "stage": "verify",
+                "ok": verified.get("ok"),
+                "diff_sha256": verified.get("diff_sha256"),
+            }
+        )
 
         review_started = run(
             [str(sin_orca), "review", task_id],
@@ -612,12 +624,14 @@ def main() -> int:
             raise RuntimeError("reviewer terminal is not independent")
         if review_started.get("reviewer_agent") == args.agent:
             raise RuntimeError("reviewer reused the implementer agent")
-        transcript.append({
-            "stage": "review-start",
-            "terminal": reviewer_terminal,
-            "agent": review_started.get("reviewer_agent"),
-            "diff_sha256": review_started.get("diff_sha256"),
-        })
+        transcript.append(
+            {
+                "stage": "review-start",
+                "terminal": reviewer_terminal,
+                "agent": review_started.get("reviewer_agent"),
+                "diff_sha256": review_started.get("diff_sha256"),
+            }
+        )
 
         parent_cursor = wait_for_callback(
             task_id=task_id,
@@ -669,9 +683,7 @@ def main() -> int:
         if not body.get("diff_sha256"):
             raise RuntimeError("completion manifest diff hash missing")
 
-        lines = (repository / "README.md").read_text(
-            encoding="utf-8"
-        ).splitlines()
+        lines = (repository / "README.md").read_text(encoding="utf-8").splitlines()
         if lines.count("ORCA_LIVE_SMOKE_OK") != 1:
             raise RuntimeError("README smoke marker is not present exactly once")
         if run_git(repository, "rev-parse", "HEAD") != initial_head:
@@ -679,13 +691,13 @@ def main() -> int:
 
         worktree_paths = [
             line.removeprefix("worktree ")
-            for line in run_git(repository, "worktree", "list", "--porcelain").splitlines()
+            for line in run_git(
+                repository, "worktree", "list", "--porcelain"
+            ).splitlines()
             if line.startswith("worktree ")
         ]
         if worktree_paths != [str(repository)]:
-            raise RuntimeError(
-                f"unexpected Git worktrees created: {worktree_paths}"
-            )
+            raise RuntimeError(f"unexpected Git worktrees created: {worktree_paths}")
 
         if args.simone_task_id:
             synced = run(
@@ -702,44 +714,58 @@ def main() -> int:
             )
             transcript.append({"stage": "simone-sync", "payload": synced})
 
-        report.update({
-            "ok": True,
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-            "manifest": str(manifest_path),
-            "diff_sha256": body.get("diff_sha256"),
-            "changed_files": body.get("changed_files"),
-            "worker_terminal": worker_terminal,
-            "reviewer_terminal": reviewer_terminal,
-            "callbacks": sorted([list(item) for item in callback_pairs(status)]),
-            "git_worktrees": worktree_paths,
-            "head_unchanged": True,
-        })
+        report.update(
+            {
+                "ok": True,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "manifest": str(manifest_path),
+                "diff_sha256": body.get("diff_sha256"),
+                "changed_files": body.get("changed_files"),
+                "worker_terminal": worker_terminal,
+                "reviewer_terminal": reviewer_terminal,
+                "callbacks": sorted([list(item) for item in callback_pairs(status)]),
+                "git_worktrees": worktree_paths,
+                "head_unchanged": True,
+            }
+        )
         atomic_json(report_path, report)
-        print(json.dumps({
-            "ok": True,
-            "task_id": task_id,
-            "report": str(report_path),
-            "manifest": str(manifest_path),
-            "run_root": str(run_root),
-            "parent_terminal": parent_terminal,
-            "worker_terminal": worker_terminal,
-            "reviewer_terminal": reviewer_terminal,
-            "git_worktrees": worktree_paths,
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "task_id": task_id,
+                    "report": str(report_path),
+                    "manifest": str(manifest_path),
+                    "run_root": str(run_root),
+                    "parent_terminal": parent_terminal,
+                    "worker_terminal": worker_terminal,
+                    "reviewer_terminal": reviewer_terminal,
+                    "git_worktrees": worktree_paths,
+                },
+                indent=2,
+            )
+        )
         return 0
     except Exception as error:
-        report.update({
-            "ok": False,
-            "failed_at": datetime.now(timezone.utc).isoformat(),
-            "error": str(error),
-        })
+        report.update(
+            {
+                "ok": False,
+                "failed_at": datetime.now(timezone.utc).isoformat(),
+                "error": str(error),
+            }
+        )
         atomic_json(report_path, report)
-        print(json.dumps({
-            "ok": False,
-            "error": str(error),
-            "report": str(report_path),
-            "run_root": str(run_root),
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": str(error),
+                    "report": str(report_path),
+                    "run_root": str(run_root),
+                },
+                indent=2,
+            )
+        )
         return 1
 
 

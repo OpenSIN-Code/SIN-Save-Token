@@ -125,11 +125,7 @@ def compact_event(event: dict[str, Any]) -> dict[str, Any]:
         payload = {}
 
     fields = _EVENT_FIELDS.get(event_type, ())
-    compact = {
-        field: _bounded(payload[field])
-        for field in fields
-        if field in payload
-    }
+    compact = {field: _bounded(payload[field]) for field in fields if field in payload}
 
     if event_type in {
         "checkpoint.received",
@@ -140,39 +136,44 @@ def compact_event(event: dict[str, Any]) -> dict[str, Any]:
             len(unresolved) if isinstance(unresolved, list) else 0
         )
         scope = payload.get("scope_compliance")
-        compact["scope_compliance"] = {
-            key: value
-            for key, value in scope.items()
-            if key in {
-                "outside_allowlist_touched",
-                "unrequested_dependencies_added",
-                "architecture_decisions_made",
+        compact["scope_compliance"] = (
+            {
+                key: value
+                for key, value in scope.items()
+                if key
+                in {
+                    "outside_allowlist_touched",
+                    "unrequested_dependencies_added",
+                    "architecture_decisions_made",
+                }
+                and isinstance(value, bool)
             }
-            and isinstance(value, bool)
-        } if isinstance(scope, dict) else {}
+            if isinstance(scope, dict)
+            else {}
+        )
 
     if event_type == "worker.report.received":
         evidence = payload.get("evidence")
-        compact["evidence_count"] = (
-            len(evidence) if isinstance(evidence, list) else 0
-        )
+        compact["evidence_count"] = len(evidence) if isinstance(evidence, list) else 0
 
     if event_type == "review.completed":
         criteria = payload.get("criteria")
-        compact["criteria"] = [
-            {
-                key: item[key]
-                for key in ("id", "criterion_id", "status")
-                if key in item
-            }
-            for item in criteria[:100]
-            if isinstance(item, dict)
-        ] if isinstance(criteria, list) else []
+        compact["criteria"] = (
+            [
+                {
+                    key: item[key]
+                    for key in ("id", "criterion_id", "status")
+                    if key in item
+                }
+                for item in criteria[:100]
+                if isinstance(item, dict)
+            ]
+            if isinstance(criteria, list)
+            else []
+        )
         for field in ("regressions", "unverified", "unresolved"):
             value = payload.get(field)
-            compact[f"{field}_count"] = (
-                len(value) if isinstance(value, list) else 0
-            )
+            compact[f"{field}_count"] = len(value) if isinstance(value, list) else 0
 
     if event_type == "verification.completed":
         results = compact.get("results")
@@ -205,9 +206,7 @@ def _control_plane_command() -> list[str]:
     )
     command = shlex.split(configured)
     if not command:
-        raise RuntimeError(
-            "SIN_SIMONE_CONTROL_PLANE_COMMAND is empty"
-        )
+        raise RuntimeError("SIN_SIMONE_CONTROL_PLANE_COMMAND is empty")
     return command
 
 
@@ -309,9 +308,7 @@ def sync_task(
 ) -> dict[str, Any]:
     task = load_task(task_id)
     target_task_id = (
-        simone_task_id
-        or task.get("simone_task_id")
-        or os.getenv("SIN_SIMONE_TASK_ID")
+        simone_task_id or task.get("simone_task_id") or os.getenv("SIN_SIMONE_TASK_ID")
     )
     if not isinstance(target_task_id, str) or not target_task_id.strip():
         raise ValueError(
@@ -380,9 +377,7 @@ def sync_task(
         ),
         "artifacts_synced": len(artifact_results),
         "artifact_duplicates": sum(
-            1
-            for result in artifact_results
-            if result.get("duplicate")
+            1 for result in artifact_results if result.get("duplicate")
         ),
         "last_event_hash": last_event_hash,
         "idempotent": True,

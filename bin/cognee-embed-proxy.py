@@ -21,6 +21,7 @@ Env:
   COGNEE_FALLBACK_EMBED_MODEL  default mixedbread-ai/mxbai-embed-large-v1
   COGNEE_EMBED_FORCE_LOCAL  1 = skip Gemini
 """
+
 from __future__ import annotations
 
 import json
@@ -236,7 +237,9 @@ def embed_texts(texts: list[str]) -> tuple[list[list[float]], str]:
                 return vecs, "local-fallback"
             except Exception as e2:
                 _stats["errors"] += 1
-                raise RuntimeError(f"gemini+local failed: gemini={e!r} local={e2!r}") from e2
+                raise RuntimeError(
+                    f"gemini+local failed: gemini={e!r} local={e2!r}"
+                ) from e2
         _stats["errors"] += 1
         raise
 
@@ -281,12 +284,16 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(n).decode() or "{}")
             texts = _as_list(payload.get("input"))
             if not texts:
-                self._json(400, {"error": {"message": "input required", "type": "invalid"}})
+                self._json(
+                    400, {"error": {"message": "input required", "type": "invalid"}}
+                )
                 return
             t0 = time.perf_counter()
             vecs, backend = embed_texts(texts)
             elapsed = time.perf_counter() - t0
-            _log(f"embed n={len(texts)} backend={backend} dims={len(vecs[0])} {elapsed:.2f}s")
+            _log(
+                f"embed n={len(texts)} backend={backend} dims={len(vecs[0])} {elapsed:.2f}s"
+            )
             data = [
                 {"object": "embedding", "index": i, "embedding": v}
                 for i, v in enumerate(vecs)

@@ -54,19 +54,31 @@ class ResearchDecomposer:
 
         if any(w in q_lower for w in ["how", "wie", "flow", "ablauf"]):
             subqs.append(f"Where does {self._extract_subject(question)} start?")
-            subqs.append(f"What are the main steps in {self._extract_subject(question)}?")
-            subqs.append(f"What are the failure modes in {self._extract_subject(question)}?")
+            subqs.append(
+                f"What are the main steps in {self._extract_subject(question)}?"
+            )
+            subqs.append(
+                f"What are the failure modes in {self._extract_subject(question)}?"
+            )
 
         if any(w in q_lower for w in ["where", "wo", "find", "finde"]):
             subqs.append(f"Which files contain {self._extract_subject(question)}?")
-            subqs.append(f"What are the entry points for {self._extract_subject(question)}?")
+            subqs.append(
+                f"What are the entry points for {self._extract_subject(question)}?"
+            )
 
         if any(w in q_lower for w in ["why", "warum", "reason", "grund"]):
             subqs.append(f"What problem does {self._extract_subject(question)} solve?")
-            subqs.append(f"What are the alternatives to {self._extract_subject(question)}?")
+            subqs.append(
+                f"What are the alternatives to {self._extract_subject(question)}?"
+            )
 
-        if any(w in q_lower for w in ["security", "sicherheit", "vulnerability", "auth"]):
-            subqs.append(f"What are the security assumptions for {self._extract_subject(question)}?")
+        if any(
+            w in q_lower for w in ["security", "sicherheit", "vulnerability", "auth"]
+        ):
+            subqs.append(
+                f"What are the security assumptions for {self._extract_subject(question)}?"
+            )
             subqs.append(f"What could go wrong with {self._extract_subject(question)}?")
 
         if not subqs:
@@ -80,7 +92,32 @@ class ResearchDecomposer:
 
     def _extract_subject(self, question: str) -> str:
         words = question.split()
-        stop = {"how", "what", "where", "why", "when", "which", "does", "is", "the", "a", "an", "to", "in", "of", "for", "wie", "wo", "was", "warum", "wird", "ist", "die", "der", "das"}
+        stop = {
+            "how",
+            "what",
+            "where",
+            "why",
+            "when",
+            "which",
+            "does",
+            "is",
+            "the",
+            "a",
+            "an",
+            "to",
+            "in",
+            "of",
+            "for",
+            "wie",
+            "wo",
+            "was",
+            "warum",
+            "wird",
+            "ist",
+            "die",
+            "der",
+            "das",
+        }
         subject_words = [w for w in words if w.lower().strip("?!.") not in stop]
         return " ".join(subject_words[:5]) if subject_words else question[:50]
 
@@ -185,7 +222,9 @@ class ResearchPipeline:
         for sq in answered:
             synthesis_parts.append(f"**{sq['question']}**\n{sq['synthesis']}")
 
-        synthesis = "\n\n".join(synthesis_parts) if synthesis_parts else "No answers yet."
+        synthesis = (
+            "\n\n".join(synthesis_parts) if synthesis_parts else "No answers yet."
+        )
 
         contradictions = self.citations.detect_contradictions()
 

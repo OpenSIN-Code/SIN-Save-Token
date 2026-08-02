@@ -60,7 +60,10 @@ def test_context_guard_allows_targeted_pytest_and_nudges_bare_pytest() -> None:
     )
     payload = json.loads(broad.stdout)
     assert payload["hookSpecificOutput"]["permissionDecision"] == "allow"
-    assert "Broad context operation" in payload["hookSpecificOutput"]["permissionDecisionReason"]
+    assert (
+        "Broad context operation"
+        in payload["hookSpecificOutput"]["permissionDecisionReason"]
+    )
 
 
 def test_context_guard_nudges_directory_read() -> None:
@@ -70,7 +73,10 @@ def test_context_guard_nudges_directory_read() -> None:
     )
     payload = json.loads(result.stdout)
     assert payload["hookSpecificOutput"]["permissionDecision"] == "allow"
-    assert "Broad context operation" in payload["hookSpecificOutput"]["permissionDecisionReason"]
+    assert (
+        "Broad context operation"
+        in payload["hookSpecificOutput"]["permissionDecisionReason"]
+    )
 
 
 def rtk_environment(tmp_path: Path) -> dict[str, str]:

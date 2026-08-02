@@ -20,7 +20,9 @@ if str(LIB) not in sys.path:
 
 def load_context_cli():
     path = ROOT / "bin" / "sin-context"
-    loader = importlib.machinery.SourceFileLoader("sin_context_cache_contract_cli", str(path))
+    loader = importlib.machinery.SourceFileLoader(
+        "sin_context_cache_contract_cli", str(path)
+    )
     spec = importlib.util.spec_from_loader(loader.name, loader)
     if spec is None:
         raise RuntimeError(f"cannot load {path}")

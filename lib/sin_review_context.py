@@ -30,20 +30,48 @@ MAX_SYMBOLS = 5_000
 MAX_TEST_FILES = 5_000
 MAX_TEST_BYTES = 8 * 1024 * 1024
 TEXT_SUFFIXES = {
-    ".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
-    ".java", ".kt", ".kts", ".go", ".rs", ".rb", ".php", ".swift",
-    ".c", ".cc", ".cpp", ".h", ".hpp", ".cs", ".sh", ".bash", ".zsh",
+    ".py",
+    ".pyi",
+    ".js",
+    ".jsx",
+    ".ts",
+    ".tsx",
+    ".mjs",
+    ".cjs",
+    ".java",
+    ".kt",
+    ".kts",
+    ".go",
+    ".rs",
+    ".rb",
+    ".php",
+    ".swift",
+    ".c",
+    ".cc",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".cs",
+    ".sh",
+    ".bash",
+    ".zsh",
 }
 IGNORED_SCAN_PARTS = {
-    ".git", ".venv", "venv", "node_modules", "vendor", "dist", "build",
-    "__pycache__", ".mimocode", ".sin-worker",
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "vendor",
+    "dist",
+    "build",
+    "__pycache__",
+    ".mimocode",
+    ".sin-worker",
 }
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PROVIDER_CONFIG = ROOT / "config" / "provider-runtime.json"
-DEFAULT_PROVIDER_HEALTH = (
-    Path.home() / ".cache" / "sin" / "provider-health.sqlite3"
-)
+DEFAULT_PROVIDER_HEALTH = Path.home() / ".cache" / "sin" / "provider-health.sqlite3"
 
 
 def sha256_text(text: str) -> str:
@@ -97,9 +125,7 @@ class ReviewContextBuilder:
         risk_signals = self._calculate_risk_signals(changed_symbols, affected_flows)
         review_order = self._recommend_review_order(changed_symbols, risk_signals)
         if graphify_paths is None:
-            graphify_advisory = self._collect_graphify_top_risk(
-                review_order[:3]
-            )
+            graphify_advisory = self._collect_graphify_top_risk(review_order[:3])
         else:
             graphify_advisory = {
                 "ok": True,
@@ -117,9 +143,7 @@ class ReviewContextBuilder:
                 + str(crg_advisory.get("status", "unknown"))
             )
         elif crg_advisory.get("truncated") is True:
-            uncertainties.append(
-                "code-review-graph advisory output was truncated"
-            )
+            uncertainties.append("code-review-graph advisory output was truncated")
         if graphify_advisory.get("ok") is not True and review_order:
             uncertainties.append(
                 "Graphify top-risk enrichment unavailable: "
@@ -223,9 +247,9 @@ class ReviewContextBuilder:
             if isinstance(parsed, dict):
                 structured_shape = {
                     "type": "object",
-                    "top_level_keys": sorted(
-                        str(key)[:100] for key in parsed.keys()
-                    )[:100],
+                    "top_level_keys": sorted(str(key)[:100] for key in parsed.keys())[
+                        :100
+                    ],
                     "field_count": len(parsed),
                 }
             elif isinstance(parsed, list):
@@ -349,9 +373,7 @@ class ReviewContextBuilder:
         )
 
         if result.returncode != 0:
-            raise RuntimeError(
-                result.stderr.strip() or "git diff --name-status failed"
-            )
+            raise RuntimeError(result.stderr.strip() or "git diff --name-status failed")
 
         files: list[dict[str, Any]] = []
         for line in result.stdout.strip().splitlines():
@@ -366,30 +388,32 @@ class ReviewContextBuilder:
             status = parts[0] if parts else ""
             if status.startswith("R") and len(parts) == 3:
                 _, old_path, new_path = parts
-                files.append({
-                    "path": new_path,
-                    "previous_path": old_path,
-                    "change_type": "renamed",
-                    "lines_added": 0,
-                    "lines_removed": 0,
-                })
+                files.append(
+                    {
+                        "path": new_path,
+                        "previous_path": old_path,
+                        "change_type": "renamed",
+                        "lines_added": 0,
+                        "lines_removed": 0,
+                    }
+                )
             elif len(parts) == 2:
                 _, path = parts
-                files.append({
-                    "path": path,
-                    "change_type": self._map_status(status),
-                    "lines_added": 0,
-                    "lines_removed": 0,
-                })
+                files.append(
+                    {
+                        "path": path,
+                        "change_type": self._map_status(status),
+                        "lines_added": 0,
+                        "lines_removed": 0,
+                    }
+                )
 
         untracked = run_command(
             ["git", "ls-files", "--others", "--exclude-standard"],
             cwd=self.worktree,
         )
         if untracked.returncode != 0:
-            raise RuntimeError(
-                untracked.stderr.strip() or "git ls-files failed"
-            )
+            raise RuntimeError(untracked.stderr.strip() or "git ls-files failed")
         for line in untracked.stdout.strip().splitlines():
             if len(files) >= MAX_CHANGED_FILES:
                 self.scan_uncertainties.append(
@@ -397,12 +421,14 @@ class ReviewContextBuilder:
                 )
                 break
             if line.strip() and not line.strip().startswith(".sin-worker/"):
-                files.append({
-                    "path": line.strip(),
-                    "change_type": "added",
-                    "lines_added": 0,
-                    "lines_removed": 0,
-                })
+                files.append(
+                    {
+                        "path": line.strip(),
+                        "change_type": "added",
+                        "lines_added": 0,
+                        "lines_removed": 0,
+                    }
+                )
 
         unique: dict[str, dict[str, Any]] = {}
         for item in files:
@@ -500,35 +526,43 @@ class ReviewContextBuilder:
                         )
                         break
                     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        symbols.append({
-                            "name": node.name,
-                            "file": relative,
-                            "start_line": node.lineno,
-                            "end_line": getattr(node, "end_lineno", node.lineno),
-                            "type": "function",
-                        })
+                        symbols.append(
+                            {
+                                "name": node.name,
+                                "file": relative,
+                                "start_line": node.lineno,
+                                "end_line": getattr(node, "end_lineno", node.lineno),
+                                "type": "function",
+                            }
+                        )
                     elif isinstance(node, ast.ClassDef):
-                        symbols.append({
-                            "name": node.name,
-                            "file": relative,
-                            "start_line": node.lineno,
-                            "end_line": getattr(node, "end_lineno", node.lineno),
-                            "type": "class",
-                        })
+                        symbols.append(
+                            {
+                                "name": node.name,
+                                "file": relative,
+                                "start_line": node.lineno,
+                                "end_line": getattr(node, "end_lineno", node.lineno),
+                                "type": "class",
+                            }
+                        )
                 continue
 
             symbol_patterns = (
-                (re.compile(
-                    r"^(?:export\s+)?(?:async\s+)?function\s+"
-                    r"([A-Za-z_$][\w$]*)\s*\("
-                ), "function"),
-                (re.compile(
-                    r"^(?:export\s+)?class\s+([A-Za-z_$][\w$]*)"
-                ), "class"),
-                (re.compile(
-                    r"^(?:export\s+)?(?:const|let|var)\s+"
-                    r"([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(?.*=>"
-                ), "function"),
+                (
+                    re.compile(
+                        r"^(?:export\s+)?(?:async\s+)?function\s+"
+                        r"([A-Za-z_$][\w$]*)\s*\("
+                    ),
+                    "function",
+                ),
+                (re.compile(r"^(?:export\s+)?class\s+([A-Za-z_$][\w$]*)"), "class"),
+                (
+                    re.compile(
+                        r"^(?:export\s+)?(?:const|let|var)\s+"
+                        r"([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(?.*=>"
+                    ),
+                    "function",
+                ),
             )
             for line_number, line in enumerate(lines, 1):
                 if len(symbols) >= MAX_SYMBOLS:
@@ -540,13 +574,15 @@ class ReviewContextBuilder:
                 for pattern, symbol_type in symbol_patterns:
                     match = pattern.match(stripped)
                     if match:
-                        symbols.append({
-                            "name": match.group(1),
-                            "file": relative,
-                            "start_line": line_number,
-                            "end_line": line_number,
-                            "type": symbol_type,
-                        })
+                        symbols.append(
+                            {
+                                "name": match.group(1),
+                                "file": relative,
+                                "start_line": line_number,
+                                "end_line": line_number,
+                                "type": symbol_type,
+                            }
+                        )
                         break
 
         return symbols
@@ -556,25 +592,37 @@ class ReviewContextBuilder:
         symbols: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         flows = []
-        auth_symbols = {"auth", "token", "session", "login", "password", "refresh", "jwt"}
+        auth_symbols = {
+            "auth",
+            "token",
+            "session",
+            "login",
+            "password",
+            "refresh",
+            "jwt",
+        }
         security_symbols = {"crypto", "hash", "sign", "verify", "encrypt", "decrypt"}
 
         for sym in symbols:
             name_lower = sym["name"].lower()
 
             if any(a in name_lower for a in auth_symbols):
-                flows.append({
-                    "flow": "authentication",
-                    "functions": [sym["name"]],
-                    "criticality": "high",
-                })
+                flows.append(
+                    {
+                        "flow": "authentication",
+                        "functions": [sym["name"]],
+                        "criticality": "high",
+                    }
+                )
 
             if any(s in name_lower for s in security_symbols):
-                flows.append({
-                    "flow": "security",
-                    "functions": [sym["name"]],
-                    "criticality": "high",
-                })
+                flows.append(
+                    {
+                        "flow": "security",
+                        "functions": [sym["name"]],
+                        "criticality": "high",
+                    }
+                )
 
         seen = set()
         unique_flows = []
@@ -602,7 +650,13 @@ class ReviewContextBuilder:
         total_bytes = 0
         scanned_files = 0
 
-        for pattern in ("test_*.py", "*.test.ts", "*.test.js", "*.spec.ts", "*.spec.js"):
+        for pattern in (
+            "test_*.py",
+            "*.test.ts",
+            "*.test.js",
+            "*.spec.ts",
+            "*.spec.js",
+        ):
             for test_file in self.worktree.rglob(pattern):
                 if scanned_files >= MAX_TEST_FILES or total_bytes >= MAX_TEST_BYTES:
                     self._note_uncertainty(
@@ -636,16 +690,22 @@ class ReviewContextBuilder:
         gaps: list[dict[str, Any]] = []
         for symbol in symbols:
             name = str(symbol.get("name", ""))
-            has_test = bool(name) and re.search(
-                rf"(?<![A-Za-z0-9_$]){re.escape(name)}(?![A-Za-z0-9_$])",
-                test_content,
-            ) is not None
-            gaps.append({
-                "function": name,
-                "has_direct_test": has_test,
-                "coverage_type": "direct" if has_test else "unknown",
-                "risk": "low" if has_test else "medium",
-            })
+            has_test = (
+                bool(name)
+                and re.search(
+                    rf"(?<![A-Za-z0-9_$]){re.escape(name)}(?![A-Za-z0-9_$])",
+                    test_content,
+                )
+                is not None
+            )
+            gaps.append(
+                {
+                    "function": name,
+                    "has_direct_test": has_test,
+                    "coverage_type": "direct" if has_test else "unknown",
+                    "risk": "low" if has_test else "medium",
+                }
+            )
 
         return gaps
 
@@ -655,7 +715,15 @@ class ReviewContextBuilder:
         flows: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         signals = []
-        security_keywords = {"auth", "token", "session", "password", "secret", "key", "crypto"}
+        security_keywords = {
+            "auth",
+            "token",
+            "session",
+            "password",
+            "secret",
+            "key",
+            "crypto",
+        }
 
         flow_functions = set()
         for f in flows:
@@ -665,22 +733,26 @@ class ReviewContextBuilder:
             name_lower = sym["name"].lower()
 
             if any(k in name_lower for k in security_keywords):
-                signals.append({
-                    "type": "security_keyword",
-                    "symbol": sym["name"],
-                    "score": 0.20,
-                })
+                signals.append(
+                    {
+                        "type": "security_keyword",
+                        "symbol": sym["name"],
+                        "score": 0.20,
+                    }
+                )
 
             if sym["name"] in flow_functions:
                 flow_name = next(
                     f["flow"] for f in flows if sym["name"] in f.get("functions", [])
                 )
-                signals.append({
-                    "type": "flow_participation",
-                    "symbol": sym["name"],
-                    "flow": flow_name,
-                    "score": 0.25,
-                })
+                signals.append(
+                    {
+                        "type": "flow_participation",
+                        "symbol": sym["name"],
+                        "flow": flow_name,
+                        "score": 0.25,
+                    }
+                )
 
         return signals
 
@@ -692,7 +764,9 @@ class ReviewContextBuilder:
 
         for f in changed_files:
             if f["change_type"] == "deleted":
-                uncertainties.append(f"Deleted file {f['path']} may have had dependents")
+                uncertainties.append(
+                    f"Deleted file {f['path']} may have had dependents"
+                )
 
         config_files = [f for f in changed_files if "config" in f["path"].lower()]
         if config_files:
@@ -725,7 +799,7 @@ def build_blind_review_packet(
     diff_content: str,
 ) -> dict[str, Any]:
     """Erstellt das Paket für den Blinden Reviewer.
-    
+
     Enthält NICHT: Worker-Report, Worker-Begründungen, Worker-Selbstbewertung.
     """
     diff_envelope = wrap_evidence(
@@ -758,26 +832,30 @@ def build_blind_review_packet(
         "diff_evidence": {
             "trust_level": diff_envelope.trust_level,
             "sha256": diff_envelope.sha256,
-            "suspicious_instruction_spans": len(
-                diff_envelope.suspicious
-            ),
+            "suspicious_instruction_spans": len(diff_envelope.suspicious),
         },
         "affected_flows": review_context.get("affected_flows", []),
         "test_gaps": review_context.get("test_gaps", []),
         "risk_signals": review_context.get("risk_signals", []),
-        "crg_advisory": review_context.get("crg_advisory", {
-            "ok": False,
-            "provider": "code-review-graph",
-            "status": "not-collected",
-            "authoritative": False,
-        }),
+        "crg_advisory": review_context.get(
+            "crg_advisory",
+            {
+                "ok": False,
+                "provider": "code-review-graph",
+                "status": "not-collected",
+                "authoritative": False,
+            },
+        ),
         "crg_authoritative": False,
-        "graphify_advisory": review_context.get("graphify_advisory", {
-            "ok": False,
-            "provider": "graphify",
-            "status": "not-collected",
-            "authoritative": False,
-        }),
+        "graphify_advisory": review_context.get(
+            "graphify_advisory",
+            {
+                "ok": False,
+                "provider": "graphify",
+                "status": "not-collected",
+                "authoritative": False,
+            },
+        ),
         "graphify_authoritative": False,
         "acceptance_criteria": task.get(
             "acceptance_criteria",
