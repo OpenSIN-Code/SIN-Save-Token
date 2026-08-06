@@ -18,6 +18,7 @@ from sin_orca.web_callbacks import (  # noqa: E402
     callback_status,
     cancel_callback,
     open_callback,
+    relay_callback,
     resolve_callback_token,
     resolve_origin_session,
     resolve_origin_terminal,
@@ -320,6 +321,95 @@ def test_bind_then_send_wakes_origin_once(tmp_path: Path) -> None:
         )
 
 
+def test_callback_survives_terminal_restart_and_rebinds_session(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    origin_payload = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build · model",
+    )
+    replacement_payload = terminal_payload(
+        repository,
+        handle="term-restarted",
+        title="OpenCode",
+        preview="Build · model",
+    )
+    sent: list[list[str]] = []
+    with patch("sin_orca.web_callbacks.run_orca", return_value=origin_payload):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0030",
+            origin_terminal="term-origin",
+            origin_session_id="ses_REBOUND123",
+        )
+    with (
+        patch("sin_orca.web_callbacks.run_orca", side_effect=orca_router(replacement_payload, sent)),
+        patch(
+            "sin_orca.web_callbacks.resolve_origin_session",
+            return_value={"id": "ses_REBOUND123"},
+        ),
+    ):
+        result = send_callback(
+            repository=repository,
+            token=opened["callback"],
+            final_status="done",
+            summary="completed after terminal restart",
+        )
+
+    assert result["status"] == "callback-sent"
+    assert result["origin_terminal"] == "term-restarted"
+    assert len(sent) == 1
+    assert callback_status(repository=repository, token=opened["callback"])["status"] == "sent"
+
+
+def test_callback_without_terminal_stays_pending_and_is_relayable(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    origin_payload = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build · model",
+    )
+    offline_payload = terminal_payload(repository)
+    offline_payload["result"]["terminals"] = []
+    replacement_payload = terminal_payload(
+        repository,
+        handle="term-restarted",
+        title="OpenCode",
+        preview="Build · model",
+    )
+    sent: list[list[str]] = []
+    with patch("sin_orca.web_callbacks.run_orca", return_value=origin_payload):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0031",
+            origin_terminal="term-origin",
+            origin_session_id="ses_RELAY123",
+        )
+    with patch("sin_orca.web_callbacks.run_orca", return_value=offline_payload):
+        pending = send_callback(
+            repository=repository,
+            token=opened["callback"],
+            final_status="done",
+            summary="durably queued before delivery",
+        )
+    assert pending["status"] == "callback-pending"
+    persisted = callback_status(repository=repository, token=opened["callback"])
+    assert persisted["status"] == "pending-delivery"
+    assert persisted["callback_status"] == "done"
+    with (
+        patch("sin_orca.web_callbacks.run_orca", side_effect=orca_router(replacement_payload, sent)),
+        patch(
+            "sin_orca.web_callbacks.resolve_origin_session",
+            return_value={"id": "ses_RELAY123"},
+        ),
+    ):
+        relayed = relay_callback(repository=repository, token=opened["callback"])
+    assert relayed["status"] == "callback-sent"
+    assert len(sent) == 1
+
+
 def test_binding_rejects_non_conversation_chatgpt_url(tmp_path: Path) -> None:
     repository = git_repository(tmp_path / "repo")
     payload = terminal_payload(
@@ -494,7 +584,7 @@ def test_dry_run_does_not_consume_callback(tmp_path: Path) -> None:
     )
 
 
-def test_delivery_failure_consumes_capability_without_replay(tmp_path: Path) -> None:
+def test_delivery_failure_stays_pending_for_relay(tmp_path: Path) -> None:
     repository = git_repository(tmp_path / "repo")
     payload = terminal_payload(
         repository,
@@ -520,26 +610,18 @@ def test_delivery_failure_consumes_capability_without_replay(tmp_path: Path) -> 
             origin_session_id="ses_ABC123",
         )
         token = opened["callback"]
-        with pytest.raises(RuntimeError, match="outcome unknown"):
-            send_callback(
-                repository=repository,
-                token=token,
-                final_status="done",
-                summary="implementation complete",
-            )
-
-    state = callback_status(repository=repository, token=token)
-    assert state["status"] == "delivery-failed"
-    assert state["dispatch_started_at"]
-    assert state["delivery_failed_at"]
-    assert "outcome unknown" in state["delivery_error"]
-    with pytest.raises(RuntimeError, match="one-shot"):
-        send_callback(
+        result = send_callback(
             repository=repository,
             token=token,
             final_status="done",
-            summary="must not replay",
+            summary="implementation complete",
         )
+
+    state = callback_status(repository=repository, token=token)
+    assert result["status"] == "callback-pending"
+    assert state["status"] == "pending-delivery"
+    assert state["dispatch_started_at"]
+    assert "outcome unknown" in state["delivery_error"]
 
 
 def test_expired_callback_is_rejected_and_marked(tmp_path: Path) -> None:

@@ -703,6 +703,33 @@ def _terminal_is_still_bound(repository: Path, handle: str) -> bool:
     )
 
 
+def resolve_delivery_terminal(
+    repository: Path,
+    record: dict[str, Any],
+) -> tuple[str | None, str]:
+    """Resolve a live delivery target without guessing between OpenCode sessions."""
+    terminals = list_repository_terminals(repository)
+    origin = str(record.get("origin_terminal") or "")
+    if any(item.get("handle") == origin for item in terminals):
+        return origin, "origin-terminal"
+
+    session = record.get("origin_session")
+    expected_session = session.get("id") if isinstance(session, dict) else None
+    if not isinstance(expected_session, str) or not SESSION_PATTERN.fullmatch(expected_session):
+        return None, "origin-terminal-gone-and-session-unresolved"
+
+    matches = [
+        item
+        for item in terminals
+        if resolve_origin_session(repository, item).get("id") == expected_session
+    ]
+    if len(matches) == 1:
+        return str(matches[0]["handle"]), "rebound-origin-session"
+    if len(matches) > 1:
+        return None, "origin-terminal-gone-and-session-ambiguous"
+    return None, "origin-terminal-gone-and-session-offline"
+
+
 def render_callback_message(
     record: dict[str, Any],
     *,
@@ -740,6 +767,95 @@ def render_callback_message(
     )
 
 
+def _deliver_pending_callback(
+    repository: Path,
+    token: str,
+    record: dict[str, Any],
+    *,
+    dry_run: bool,
+) -> dict[str, Any]:
+    terminal, target_source = resolve_delivery_terminal(repository, record)
+    record["delivery_attempts"] = int(record.get("delivery_attempts") or 0) + 1
+    record["last_delivery_attempt_at"] = isoformat(utc_now())
+    if not terminal:
+        record.update({
+            "status": "pending-delivery",
+            "delivery_reason": target_source,
+        })
+        atomic_write_json(callback_path(repository, token), record)
+        return {
+            "ok": True,
+            "status": "callback-pending",
+            "callback": token,
+            "task_id": record.get("task_id"),
+            "delivery_reason": target_source,
+        }
+
+    message = render_callback_message(
+        record,
+        final_status=str(record["callback_status"]),
+        summary=str(record["summary"]),
+        changed=list(record.get("changed_files") or []),
+        verification=str(record.get("verification") or "unknown"),
+        next_action=str(record.get("next_action") or ""),
+    )
+    if dry_run:
+        return {
+            "ok": True,
+            "status": "callback-dry-run",
+            "callback": token,
+            "origin_terminal": terminal,
+            "target_source": target_source,
+            "message": message,
+        }
+
+    try:
+        run_orca([
+            "terminal",
+            "send",
+            "--terminal",
+            terminal,
+            "--text",
+            message,
+            "--enter",
+        ], timeout=30)
+    except Exception as error:
+        record.update({
+            "status": "pending-delivery",
+            "delivery_reason": "terminal-send-failed",
+            "delivery_error": _compact(str(error), 700) or type(error).__name__,
+        })
+        atomic_write_json(callback_path(repository, token), record)
+        return {
+            "ok": True,
+            "status": "callback-pending",
+            "callback": token,
+            "task_id": record.get("task_id"),
+            "delivery_reason": "terminal-send-failed",
+        }
+
+    record.update({
+        "status": "sent",
+        "delivery_terminal": terminal,
+        "delivery_target_source": target_source,
+        "sent_at": isoformat(utc_now()),
+    })
+    atomic_write_json(callback_path(repository, token), record)
+    return {
+        "ok": True,
+        "status": "callback-sent",
+        "callback": token,
+        "task_id": record.get("task_id"),
+        "callback_status": record.get("callback_status"),
+        "origin_terminal": terminal,
+        "origin_session": record.get("origin_session"),
+        "round": record.get("round"),
+        "max_rounds": record.get("max_rounds"),
+        "conversation": record.get("conversation"),
+        "sent_at": record.get("sent_at"),
+    }
+
+
 def send_callback(
     *,
     repository: str | Path,
@@ -764,96 +880,65 @@ def send_callback(
 
     with callback_lock(root, token):
         record = load_callback(root, token)
-        if record.get("status") != "open":
-            raise RuntimeError(
-                f"callback is already {record.get('status')}; capabilities are one-shot"
+        if record.get("status") == "open":
+            if utc_now() >= _parse_expiry(record):
+                record["status"] = "expired"
+                record["expired_at"] = isoformat(utc_now())
+                atomic_write_json(callback_path(root, token), record)
+                raise RuntimeError("callback capability has expired")
+            action = _compact(next_action or _default_next_action(record), 1800)
+            message = render_callback_message(
+                record,
+                final_status=final_status,
+                summary=rendered_summary,
+                changed=rendered_changed,
+                verification=rendered_verification,
+                next_action=action,
             )
-        if utc_now() >= _parse_expiry(record):
-            record["status"] = "expired"
-            record["expired_at"] = isoformat(utc_now())
-            atomic_write_json(callback_path(root, token), record)
-            raise RuntimeError("callback capability has expired")
-        terminal = str(record.get("origin_terminal") or "")
-        if not terminal or not _terminal_is_still_bound(root, terminal):
-            raise RuntimeError(
-                "origin terminal is no longer connected and writable in the exact repository"
-            )
-        action = _compact(next_action or _default_next_action(record), 1800)
-        message = render_callback_message(
-            record,
-            final_status=final_status,
-            summary=rendered_summary,
-            changed=rendered_changed,
-            verification=rendered_verification,
-            next_action=action,
-        )
-        if dry_run:
-            return {
-                "ok": True,
-                "status": "callback-dry-run",
-                "callback": token,
-                "origin_terminal": terminal,
-                "message": message,
-            }
-
-        message_sha256 = hashlib.sha256(message.encode("utf-8")).hexdigest()
-        record.update(
-            {
-                "status": "dispatching",
+            if dry_run:
+                terminal, target_source = resolve_delivery_terminal(root, record)
+                return {
+                    "ok": True,
+                    "status": "callback-dry-run",
+                    "callback": token,
+                    "origin_terminal": terminal,
+                    "target_source": target_source,
+                    "message": message,
+                }
+            record.update({
+                # Persist the outcome before terminal lookup so a terminal restart
+                # cannot discard the completion event.
+                "status": "pending-delivery",
                 "callback_status": final_status,
                 "dispatch_started_at": isoformat(utc_now()),
                 "summary": rendered_summary,
                 "changed_files": rendered_changed,
                 "verification": rendered_verification,
                 "next_action": action,
-                "message_sha256": message_sha256,
-            }
-        )
-        atomic_write_json(callback_path(root, token), record)
-        try:
-            run_orca(
-                [
-                    "terminal",
-                    "send",
-                    "--terminal",
-                    terminal,
-                    "--text",
-                    message,
-                    "--enter",
-                ],
-                timeout=30,
-            )
-        except Exception as error:
-            record.update(
-                {
-                    "status": "delivery-failed",
-                    "delivery_failed_at": isoformat(utc_now()),
-                    "delivery_error": _compact(str(error), 700) or type(error).__name__,
-                }
-            )
+                "message_sha256": hashlib.sha256(message.encode("utf-8")).hexdigest(),
+            })
             atomic_write_json(callback_path(root, token), record)
-            raise
-        record.update(
-            {
-                "status": "sent",
-                "sent_at": isoformat(utc_now()),
-            }
-        )
-        atomic_write_json(callback_path(root, token), record)
+        elif record.get("status") != "pending-delivery":
+            raise RuntimeError(
+                f"callback is already {record.get('status')}; capabilities are one-shot"
+            )
+        return _deliver_pending_callback(root, token, record, dry_run=dry_run)
 
-    return {
-        "ok": True,
-        "status": "callback-sent",
-        "callback": token,
-        "task_id": record.get("task_id"),
-        "callback_status": final_status,
-        "origin_terminal": record.get("origin_terminal"),
-        "origin_session": record.get("origin_session"),
-        "round": record.get("round"),
-        "max_rounds": record.get("max_rounds"),
-        "conversation": record.get("conversation"),
-        "sent_at": record.get("sent_at"),
-    }
+def relay_callback(
+    *,
+    repository: str | Path,
+    token: str,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Retry a persisted callback-inbox item after a terminal/session restart."""
+    root = resolve_repository(repository)
+    with callback_lock(root, token):
+        record = load_callback(root, token)
+        if record.get("status") == "sent":
+            return {"ok": True, "status": "callback-already-sent", "callback": token}
+        if record.get("status") != "pending-delivery":
+            raise RuntimeError("only a pending-delivery callback can be relayed")
+        return _deliver_pending_callback(root, token, record, dry_run=dry_run)
 
 
 def cancel_callback(

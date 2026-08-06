@@ -62,6 +62,7 @@ from .web_callbacks import (
     callback_status,
     cancel_callback,
     open_callback,
+    relay_callback,
     resolve_callback_token,
     send_callback,
 )
@@ -1854,6 +1855,16 @@ def _cmd_web_callback_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_web_callback_relay(args: argparse.Namespace) -> int:
+    result = relay_callback(
+        repository=args.repo,
+        token=args.callback,
+        dry_run=args.dry_run,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def _cmd_web_callback_cancel(args: argparse.Namespace) -> int:
     result = cancel_callback(
         repository=args.repo,
@@ -2047,6 +2058,14 @@ def main() -> int:
     p.add_argument("--callback", required=True)
 
     p = sub.add_parser(
+        "web-callback-relay",
+        help="Retry a persisted callback delivery after an OpenCode terminal restart",
+    )
+    p.add_argument("--repo", required=True)
+    p.add_argument("--callback", required=True)
+    p.add_argument("--dry-run", action="store_true")
+
+    p = sub.add_parser(
         "web-callback-cancel",
         help="Cancel an unused ChatGPT Web callback capability",
     )
@@ -2083,6 +2102,7 @@ def main() -> int:
         "web-callback-bind": _cmd_web_callback_bind,
         "web-callback-send": _cmd_web_callback_send,
         "web-callback-status": _cmd_web_callback_status,
+        "web-callback-relay": _cmd_web_callback_relay,
         "web-callback-cancel": _cmd_web_callback_cancel,
     }
 
