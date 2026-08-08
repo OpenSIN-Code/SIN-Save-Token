@@ -22,11 +22,11 @@ echo "[1/7] Runtime services"
 curl -sS -m 2 http://127.0.0.1:20128/ >/dev/null 2>&1 \
   && ok "OmniRoute reachable on :20128" \
   || fail "OmniRoute not reachable on :20128"
-curl -sS -m 2 http://127.0.0.1:8012/health 2>/dev/null | grep -q '"status"' \
-  && ok "NIM proxy reachable on :8012" \
-  || fail "NIM proxy not reachable on :8012"
-curl -sS -m 2 http://127.0.0.1:8011/health 2>/dev/null | grep -qi 'healthy\|"status"' \
-  && ok "Cognee reachable on :8011" \
+curl -sS -m 2 http://127.0.0.1:8012/health 2>/dev/null | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"' \
+  && ok "Embedding proxy reachable on :8012" \
+  || fail "Embedding proxy not healthy on :8012"
+curl -sS -m 2 http://127.0.0.1:8011/health 2>/dev/null | grep -Eq '"health"[[:space:]]*:[[:space:]]*"healthy"' \
+  && ok "Cognee healthy on :8011" \
   || fail "Cognee not healthy on :8011"
 
 # 2. Broker policy and runtime configuration.
@@ -118,6 +118,11 @@ if command -v cognee-recall >/dev/null 2>&1; then
 else
   fail "cognee-recall not on PATH"
 fi
+TENCENT_STATUS="$("$ROOT/bin/sin-tencent-memory" status 2>/dev/null)"
+echo "$TENCENT_STATUS" | grep -q '"enabled": false' \
+  && echo "$TENCENT_STATUS" | grep -q '"write_supported": false' \
+  && ok "Tencent provider is disabled and write-incapable by default" \
+  || fail "Tencent provider fail-closed posture drift"
 
 # 7. Benchmark assets must exist and contain no fabricated measurements.
 echo

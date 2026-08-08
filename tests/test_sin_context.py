@@ -10,11 +10,13 @@ from types import ModuleType
 
 ROOT = Path(__file__).resolve().parent.parent
 MODULE_PATH = ROOT / "bin" / "sin-context"
+sys.path.insert(0, str(ROOT / "lib"))
 
-# sin-context has no .py extension, load it manually
-MODULE = ModuleType("sin_context")
+# sin-context has no .py extension, load it manually without shadowing the
+# real lib/sin_context package imported by the broker.
+MODULE = ModuleType("sin_context_cli")
 MODULE.__file__ = str(MODULE_PATH)
-sys.modules["sin_context"] = MODULE
+sys.modules["sin_context_cli"] = MODULE
 exec(
     compile(MODULE_PATH.read_text(encoding="utf-8"), str(MODULE_PATH), "exec"),
     MODULE.__dict__,

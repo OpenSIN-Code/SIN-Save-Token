@@ -57,6 +57,19 @@
       "failure_threshold": 2,
       "cooldown_seconds": 300
     },
+    "tencent-memory": {
+      "argv": [
+        "sin-tencent-memory",
+        "search",
+        "{query}",
+        "--limit",
+        "5"
+      ],
+      "timeout_seconds": 10,
+      "maximum_output_chars": 12000,
+      "failure_threshold": 2,
+      "cooldown_seconds": 300
+    },
     "session-digest": {
       "argv": [
         "session-digest",

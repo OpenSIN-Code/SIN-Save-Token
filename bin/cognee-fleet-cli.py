@@ -50,14 +50,22 @@ def _dataset() -> str:
 
 
 def _req(
-    method: str, path: str, *, data: bytes | None = None, headers: dict | None = None
+    method: str,
+    path: str,
+    *,
+    data: bytes | None = None,
+    headers: dict | None = None,
+    timeout: int = 30,
 ):
     h = {"X-Api-Key": _api_key()}
     if headers:
         h.update(headers)
     req = urllib.request.Request(_base() + path, data=data, headers=h, method=method)
+    # Cognee is a loopback service. Never let inherited HTTP(S)_PROXY settings
+    # route local memory traffic through an external proxy.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(req, timeout=600) as resp:
+        with opener.open(req, timeout=timeout) as resp:
             return resp.status, resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
@@ -67,7 +75,7 @@ def _req(
 
 
 def cmd_status(_: argparse.Namespace) -> int:
-    code, body = _req("GET", "/health")
+    code, body = _req("GET", "/health", timeout=3)
     print(f"health HTTP {code}: {body[:300]}")
     key = _api_key()
     print(
@@ -75,7 +83,7 @@ def cmd_status(_: argparse.Namespace) -> int:
     )
     if not key:
         return 1
-    code, body = _req("GET", "/api/v1/datasets")
+    code, body = _req("GET", "/api/v1/datasets", timeout=10)
     print(f"datasets HTTP {code}: {body[:500]}")
     return 0 if code in (200, 201) else 1
 
@@ -88,12 +96,15 @@ def cmd_recall(ns: argparse.Namespace) -> int:
         "query": ns.query,
         "datasets": [ns.dataset or _dataset()],
         "top_k": ns.top_k,
+        "search_type": "CHUNKS",
+        "only_context": True,
     }
     code, body = _req(
         "POST",
         "/api/v1/recall",
         data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
+        timeout=45,
     )
     if code != 200:
         print(f"error HTTP {code}: {body[:800]}", file=sys.stderr)
@@ -185,6 +196,7 @@ def cmd_remember(ns: argparse.Namespace) -> int:
         "/api/v1/remember",
         data=body,
         headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        timeout=120,
     )
     print(f"HTTP {code}: {resp[:500]}")
     return 0 if code == 200 else 1

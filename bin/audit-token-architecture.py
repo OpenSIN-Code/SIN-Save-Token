@@ -136,6 +136,51 @@ def audit_sst(audit: Audit, root: Path) -> None:
         "brain-sync implementation exposes no reverse command",
     )
 
+    tencent = audit.json_file(root / "config" / "tencent-memory.json")
+    privacy = tencent.get("privacy", {})
+    upstream = tencent.get("upstream", {})
+    audit.require(
+        tencent.get("enabled") is False and tencent.get("write_enabled") is False,
+        "Tencent Memory pilot is disabled and read-only by default",
+    )
+    audit.require(
+        tencent.get("allow_remote") is False
+        and tencent.get("base_url") == "http://127.0.0.1:8420",
+        "Tencent Memory pilot is loopback-only by default",
+    )
+    audit.require(
+        privacy.get("allow_l0_conversation_access") is False
+        and privacy.get("allow_l3_persona_access") is False,
+        "Tencent Memory blocks L0 conversations and L3 persona access",
+    )
+    audit.require(
+        set(privacy.get("allowed_read_endpoints", []))
+        == {"/health", "/v3/atomic/search", "/v3/scenario/ls"},
+        "Tencent Memory read endpoint allowlist is minimal",
+    )
+    audit.require(
+        isinstance(upstream.get("assessed_commit"), str)
+        and len(upstream.get("assessed_commit", "")) == 40,
+        "Tencent Memory upstream is pinned to an assessed commit",
+    )
+    audit.require(
+        "tencent-memory" in runtime.get("providers", {})
+        and not any(
+            "tencent-memory" in route.get("providers", [])
+            for route in routes
+            if isinstance(route, dict)
+        ),
+        "Tencent Memory is registered but not automatically routed",
+    )
+    tencent_adapter = audit.text_file(root / "lib" / "sin_tencent_memory.py")
+    audit.require(
+        "/v3/conversation/add" not in tencent_adapter
+        and "conversation_add" not in tencent_adapter
+        and "/v3/core/read" not in tencent_adapter
+        and "core_read" not in tencent_adapter,
+        "Tencent Memory adapter exposes no raw-conversation or persona path",
+    )
+
 
 def audit_wow(audit: Audit, root: Path) -> None:
     registry = audit.json_file(root / "shared" / "mcp" / "servers.json")

@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "enabled": false,
+  "write_enabled": false,
+  "allow_remote": false,
+  "base_url": "http://127.0.0.1:8420",
+  "timeout_seconds": 8,
+  "maximum_response_bytes": 1048576,
+  "tenancy": {
+    "team_id": "sin",
+    "agent_id": "sin-context",
+    "user_id": "fleet"
+  },
+  "auth": {
+    "api_key_env": "TENCENT_MEMORY_API_KEY",
+    "service_id": "sin-save-token"
+  },
+  "privacy": {
+    "allow_l0_conversation_access": false,
+    "allow_l3_persona_access": false,
+    "allowed_read_endpoints": [
+      "/health",
+      "/v3/atomic/search",
+      "/v3/scenario/ls"
+    ]
+  },
+  "upstream": {
+    "url": "https://github.com/TencentCloud/TencentDB-Agent-Memory.git",
+    "assessed_commit": "fe3230f176f1bf5832fee79d12494bbc2d19a8aa",
+    "api_generation": "v3"
+  }
+}

@@ -19,6 +19,19 @@
 
 set -euo pipefail
 
+# Local memory/LLM sidecars must never traverse inherited HTTP proxy settings.
+# Keep any existing bypass list and add all loopback spellings used by this stack.
+_NO_PROXY_BASE="${NO_PROXY:-${no_proxy:-}}"
+for _host in 127.0.0.1 localhost ::1; do
+  case ",${_NO_PROXY_BASE}," in
+    *",${_host},"*) ;;
+    *) _NO_PROXY_BASE="${_NO_PROXY_BASE:+${_NO_PROXY_BASE},}${_host}" ;;
+  esac
+done
+export NO_PROXY="$_NO_PROXY_BASE"
+export no_proxy="$_NO_PROXY_BASE"
+unset _NO_PROXY_BASE _host
+
 # ── Load OmniRoute Master Key ──────────────────────────────────────────
 if [ -z "${OMNIROUTE_MASTER_KEY:-}" ] && [ -f "$HOME/.omniroute/.env" ]; then
   OMNIROUTE_MASTER_KEY="$(
@@ -54,6 +67,11 @@ export OPENAI_BASE_URL="$OMNIROUTE_URL/v1"
 # Default: NVIDIA NIM (free, reliable, no local proxy needed).
 # Switch: COGNEE_EMBED_BACKEND=nim|gemini|fastembed
 COGNEE_EMBED_BACKEND="${COGNEE_EMBED_BACKEND:-nim}"
+if { [ "$COGNEE_EMBED_BACKEND" = "nim" ] || [ "$COGNEE_EMBED_BACKEND" = "nvidia" ]; } \
+  && [ -z "${NVIDIA_API_KEY:-}" ]; then
+  echo "warn: NVIDIA_API_KEY not set; falling back to Gemini/local embedding proxy" >&2
+  COGNEE_EMBED_BACKEND="gemini"
+fi
 case "$COGNEE_EMBED_BACKEND" in
   nim|nvidia)
     export EMBEDDING_PROVIDER=openai_compatible

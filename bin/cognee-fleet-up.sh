@@ -12,21 +12,38 @@ if ! curl -sS -m 2 -o /dev/null "http://127.0.0.1:20128/" 2>/dev/null; then
 fi
 echo "OmniRoute OK on :20128"
 
-echo "== 2) NIM embed proxy (nemotron-3-embed-1b @ 2048) =="
-if ! curl -sS -m 2 http://127.0.0.1:8012/health 2>/dev/null | grep -q ok; then
-  echo "starting nim-embed-proxy on :8012..."
-  nohup python3 "$ROOT/bin/nim-embed-proxy.py" &>/tmp/nim-embed-proxy.log &
-  sleep 2
-  if ! curl -sS -m 2 http://127.0.0.1:8012/health 2>/dev/null | grep -q ok; then
-    echo "error: nim-embed-proxy failed to start — check /tmp/nim-embed-proxy.log" >&2
-    exit 1
-  fi
-fi
-echo "nim-embed-proxy OK on :8012"
-
-echo "== 3) Cognee API with OmniRoute env =="
+echo "== 2) Embedding backend =="
 # shellcheck disable=SC1091
 source "$ROOT/bin/cognee-omniroute-env.sh"
+case "$COGNEE_EMBED_BACKEND" in
+  nim|nvidia)
+    if ! curl -sS -m 2 http://127.0.0.1:8012/health 2>/dev/null | grep -q ok; then
+      echo "starting nim-embed-proxy on :8012..."
+      nohup python3 "$ROOT/bin/nim-embed-proxy.py" &>/tmp/nim-embed-proxy.log &
+      sleep 2
+    fi
+    ;;
+  gemini|proxy)
+    if ! curl -sS -m 2 http://127.0.0.1:8012/health 2>/dev/null | grep -q ok; then
+      echo "starting Gemini/local embed proxy on :8012..."
+      "$ROOT/bin/cognee-start-embed-proxy.sh"
+    fi
+    ;;
+  fastembed|local|mxbai)
+    echo "using in-process fastembed backend; no :8012 proxy required"
+    ;;
+esac
+if [ "$COGNEE_EMBED_BACKEND" != "fastembed" ] \
+  && [ "$COGNEE_EMBED_BACKEND" != "local" ] \
+  && [ "$COGNEE_EMBED_BACKEND" != "mxbai" ]; then
+  if ! curl -sS -m 2 http://127.0.0.1:8012/health 2>/dev/null | grep -q ok; then
+    echo "error: embedding proxy failed to start on :8012" >&2
+    exit 1
+  fi
+  echo "embedding proxy OK on :8012 backend=$COGNEE_EMBED_BACKEND"
+fi
+
+echo "== 3) Cognee API with OmniRoute env =="
 "$ROOT/bin/cognee-start-omniroute.sh"
 
 echo "== 4) Install fleet CLI wrappers on PATH (~/.local/bin) =="

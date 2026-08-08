@@ -31,9 +31,17 @@ fi
 if command -v lsof >/dev/null 2>&1; then
   OLD="$(lsof -tiTCP:8011 -sTCP:LISTEN 2>/dev/null || true)"
   if [ -n "$OLD" ]; then
-    echo "stopping PID $OLD on :8011"
-    kill "$OLD" 2>/dev/null || true
-    sleep 2
+    for PID in $OLD; do
+      echo "stopping PID $PID on :8011"
+      pkill -TERM -P "$PID" 2>/dev/null || true
+      sleep 1
+      kill "$PID" 2>/dev/null || true
+      sleep 2
+      if kill -0 "$PID" 2>/dev/null; then
+        pkill -KILL -P "$PID" 2>/dev/null || true
+        kill -KILL "$PID" 2>/dev/null || true
+      fi
+    done
   fi
 fi
 
@@ -44,7 +52,7 @@ nohup "$VENV_PY" -m uvicorn cognee.api.client:app --host 127.0.0.1 --port 8011 \
 echo "started cognee pid=$! log=$LOG_DIR/server.log"
 
 for i in $(seq 1 40); do
-  if curl -sS -m 2 http://127.0.0.1:8011/health 2>/dev/null | grep -q healthy; then
+  if curl -sS -m 2 http://127.0.0.1:8011/health 2>/dev/null | grep -Eq '"health"[[:space:]]*:[[:space:]]*"healthy"'; then
     echo "healthy: $(curl -sS -m 2 http://127.0.0.1:8011/health)"
     exit 0
   fi
