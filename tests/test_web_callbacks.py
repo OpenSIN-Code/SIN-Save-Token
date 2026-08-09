@@ -153,6 +153,23 @@ def test_explicit_disconnected_origin_terminal_is_persisted_for_rebind(
     assert opened["origin_terminal_source"] == "explicit-disconnected"
 
 
+def test_explicit_unobserved_origin_terminal_is_persisted_for_recovery(
+    tmp_path: Path,
+) -> None:
+    repository = git_repository(tmp_path / "repo")
+    payload = terminal_payload(repository)
+    payload["result"]["terminals"] = []
+    with patch("sin_orca.web_callbacks.run_orca", return_value=payload):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0047",
+            origin_terminal="term-temporarily-unobserved",
+            origin_session_id="ses_UNOBSERVED123",
+        )
+
+    assert opened["origin_terminal_source"] == "explicit-unobserved"
+
+
 def test_unbounded_callback_round_never_requests_loop_stop() -> None:
     action = _default_next_action(
         {

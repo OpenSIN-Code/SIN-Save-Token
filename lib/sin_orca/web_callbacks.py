@@ -383,6 +383,17 @@ def resolve_origin_terminal(
     if requested:
         requested = requested.strip()
         if requested not in by_handle:
+            if explicit or os.getenv("SIN_GPT_WEB_ORIGIN_TERMINAL"):
+                return (
+                    requested,
+                    "explicit-unobserved",
+                    {
+                        "handle": requested,
+                        "worktreePath": str(repository),
+                        "connected": False,
+                        "writable": False,
+                    },
+                )
             raise RuntimeError("origin terminal is not known for the exact repository")
         source = "explicit" if explicit else "environment"
         if by_handle[requested].get("connected") is False:
