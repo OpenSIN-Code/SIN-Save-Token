@@ -371,6 +371,7 @@ def resolve_origin_terminal(
     requested = (
         explicit
         or os.getenv("SIN_GPT_WEB_ORIGIN_TERMINAL")
+        or os.getenv("SIN_NEVER_END_ORIGIN_TERMINAL")
         or os.getenv("SIN_ORCA_PARENT_TERMINAL")
         or os.getenv("ORCA_TERMINAL_HANDLE")
     )
@@ -383,7 +384,11 @@ def resolve_origin_terminal(
     if requested:
         requested = requested.strip()
         if requested not in by_handle:
-            if explicit or os.getenv("SIN_GPT_WEB_ORIGIN_TERMINAL"):
+            if (
+                explicit
+                or os.getenv("SIN_GPT_WEB_ORIGIN_TERMINAL")
+                or os.getenv("SIN_NEVER_END_ORIGIN_TERMINAL")
+            ):
                 return (
                     requested,
                     "explicit-unobserved",
@@ -544,7 +549,9 @@ def resolve_origin_session(
             "source": "explicit",
             "confidence": "exact",
         }
-    environment = os.getenv("OPENCODE_SESSION_ID")
+    environment = os.getenv("OPENCODE_SESSION_ID") or os.getenv(
+        "SIN_NEVER_END_ORIGIN_SESSION"
+    )
     if environment:
         return {
             "id": _validate_session_id(environment),

@@ -170,6 +170,23 @@ def test_explicit_unobserved_origin_terminal_is_persisted_for_recovery(
     assert opened["origin_terminal_source"] == "explicit-unobserved"
 
 
+def test_never_end_origin_environment_is_used_when_cli_binding_is_absent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = git_repository(tmp_path / "repo")
+    payload = terminal_payload(repository)
+    payload["result"]["terminals"] = []
+    monkeypatch.setenv("SIN_NEVER_END_ORIGIN_TERMINAL", "term-never-end")
+    monkeypatch.setenv("SIN_NEVER_END_ORIGIN_SESSION", "ses_NEVEREND123")
+    with patch("sin_orca.web_callbacks.run_orca", return_value=payload):
+        opened = open_callback(repository=repository, task_id="T-0047")
+
+    assert opened["origin_terminal"] == "term-never-end"
+    assert opened["origin_terminal_source"] == "explicit-unobserved"
+    assert opened["origin_session"]["id"] == "ses_NEVEREND123"
+
+
 def test_unbounded_callback_round_never_requests_loop_stop() -> None:
     action = _default_next_action(
         {
