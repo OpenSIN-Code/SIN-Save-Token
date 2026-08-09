@@ -28,7 +28,9 @@ class CogneeFleetRuntimeTests(unittest.TestCase):
         opener = MagicMock()
         opener.open.return_value = response
 
-        with patch.object(CLI.urllib.request, "build_opener", return_value=opener) as build:
+        with patch.object(
+            CLI.urllib.request, "build_opener", return_value=opener
+        ) as build:
             with patch.object(CLI, "_api_key", return_value="test-key"):
                 code, body = CLI._req("GET", "/health", timeout=3)
 
@@ -64,7 +66,9 @@ class CogneeFleetRuntimeTests(unittest.TestCase):
         self.assertEqual(captured["timeout"], 45)
 
     def test_start_script_rejects_unhealthy_substring_and_reaps_children(self):
-        script = (ROOT / "bin" / "cognee-start-omniroute.sh").read_text(encoding="utf-8")
+        script = (ROOT / "bin" / "cognee-start-omniroute.sh").read_text(
+            encoding="utf-8"
+        )
         self.assertIn('"health"[[:space:]]*:[[:space:]]*"healthy"', script)
         self.assertNotIn("grep -q healthy", script)
         self.assertIn('pkill -TERM -P "$PID"', script)

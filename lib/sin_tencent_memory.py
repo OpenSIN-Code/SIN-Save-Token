@@ -18,10 +18,14 @@ from typing import Any, Mapping
 from urllib.parse import urlparse
 
 
-DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config" / "tencent-memory.json"
+DEFAULT_CONFIG = (
+    Path(__file__).resolve().parent.parent / "config" / "tencent-memory.json"
+)
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SENSITIVE_QUERY_PATTERNS = (
-    re.compile(r"(?i)\b(?:api[_-]?key|authorization|bearer|password|passwd|secret|access[_-]?token|refresh[_-]?token)\s*[:=]\s*\S+"),
+    re.compile(
+        r"(?i)\b(?:api[_-]?key|authorization|bearer|password|passwd|secret|access[_-]?token|refresh[_-]?token)\s*[:=]\s*\S+"
+    ),
     re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"),
     re.compile(r"\b(?:sk|ghp|github_pat)_[A-Za-z0-9_-]{16,}\b"),
 )
@@ -85,13 +89,24 @@ class TencentMemoryConfig:
             base_url=str(raw.get("base_url", "http://127.0.0.1:8420")).rstrip("/"),
             timeout_seconds=int(raw.get("timeout_seconds", 8)),
             maximum_response_bytes=int(raw.get("maximum_response_bytes", 1_048_576)),
-            team_id=env.get("SIN_TENCENT_MEMORY_TEAM_ID", str(tenancy.get("team_id", "sin"))),
-            agent_id=env.get("SIN_TENCENT_MEMORY_AGENT_ID", str(tenancy.get("agent_id", "sin-context"))),
-            user_id=env.get("SIN_TENCENT_MEMORY_USER_ID", str(tenancy.get("user_id", "fleet"))),
+            team_id=env.get(
+                "SIN_TENCENT_MEMORY_TEAM_ID", str(tenancy.get("team_id", "sin"))
+            ),
+            agent_id=env.get(
+                "SIN_TENCENT_MEMORY_AGENT_ID",
+                str(tenancy.get("agent_id", "sin-context")),
+            ),
+            user_id=env.get(
+                "SIN_TENCENT_MEMORY_USER_ID", str(tenancy.get("user_id", "fleet"))
+            ),
             api_key_env=str(auth.get("api_key_env", "TENCENT_MEMORY_API_KEY")),
             service_id=str(auth.get("service_id", "sin-save-token")),
-            allowed_read_endpoints=frozenset(str(item) for item in privacy.get("allowed_read_endpoints", [])),
-            allow_l0_conversation_access=bool(privacy.get("allow_l0_conversation_access", False)),
+            allowed_read_endpoints=frozenset(
+                str(item) for item in privacy.get("allowed_read_endpoints", [])
+            ),
+            allow_l0_conversation_access=bool(
+                privacy.get("allow_l0_conversation_access", False)
+            ),
             allow_l3_persona_access=bool(privacy.get("allow_l3_persona_access", False)),
             upstream_url=str(upstream.get("url", "")),
             assessed_commit=str(upstream.get("assessed_commit", "")),
@@ -108,30 +123,44 @@ class TencentMemoryConfig:
         is_loopback = parsed.hostname.lower() in LOOPBACK_HOSTS
         if not is_loopback:
             if not self.allow_remote:
-                raise TencentMemorySecurityError("remote Tencent Memory endpoint is disabled")
+                raise TencentMemorySecurityError(
+                    "remote Tencent Memory endpoint is disabled"
+                )
             if parsed.scheme != "https":
-                raise TencentMemorySecurityError("remote Tencent Memory endpoint requires HTTPS")
+                raise TencentMemorySecurityError(
+                    "remote Tencent Memory endpoint requires HTTPS"
+                )
 
         if self.write_enabled:
             raise TencentMemorySecurityError(
                 "Tencent writes are intentionally unsupported: MemoryCore v3 exposes conversation ingest, not a safe curated atomic-write API"
             )
         if self.allow_l0_conversation_access:
-            raise TencentMemorySecurityError("L0 conversation access must remain disabled")
+            raise TencentMemorySecurityError(
+                "L0 conversation access must remain disabled"
+            )
         if self.allow_l3_persona_access:
-            raise TencentMemorySecurityError("L3 persona/core access must remain disabled")
+            raise TencentMemorySecurityError(
+                "L3 persona/core access must remain disabled"
+            )
 
         expected = {"/health", "/v3/atomic/search", "/v3/scenario/ls"}
         if self.allowed_read_endpoints != expected:
-            raise TencentMemorySecurityError("Tencent read endpoint allowlist drift detected")
+            raise TencentMemorySecurityError(
+                "Tencent read endpoint allowlist drift detected"
+            )
         if not (1 <= self.timeout_seconds <= 30):
             raise TencentMemorySecurityError("timeout_seconds must be between 1 and 30")
         if not (1024 <= self.maximum_response_bytes <= 4 * 1024 * 1024):
-            raise TencentMemorySecurityError("maximum_response_bytes outside safe bounds")
+            raise TencentMemorySecurityError(
+                "maximum_response_bytes outside safe bounds"
+            )
         if self.api_generation != "v3":
             raise TencentMemorySecurityError("only MemoryCore v3 API is supported")
         if not re.fullmatch(r"[0-9a-f]{40}", self.assessed_commit):
-            raise TencentMemorySecurityError("upstream assessed_commit must be a pinned 40-char Git SHA")
+            raise TencentMemorySecurityError(
+                "upstream assessed_commit must be a pinned 40-char Git SHA"
+            )
 
     @property
     def is_loopback(self) -> bool:
@@ -199,15 +228,21 @@ class TencentMemoryClient:
         if not isinstance(query, str) or not query.strip():
             raise ValueError("query must be non-empty")
         if len(query) > 1000:
-            raise TencentMemorySecurityError("query exceeds 1000-character outbound limit")
+            raise TencentMemorySecurityError(
+                "query exceeds 1000-character outbound limit"
+            )
         for pattern in SENSITIVE_QUERY_PATTERNS:
             if pattern.search(query):
-                raise TencentMemorySecurityError("query appears to contain secret material")
+                raise TencentMemorySecurityError(
+                    "query appears to contain secret material"
+                )
 
     def _headers(self, *, json_body: bool) -> dict[str, str]:
         key = self.environ.get(self.config.api_key_env, "").strip()
         if not self.config.is_loopback and not key:
-            raise TencentMemorySecurityError("remote Tencent Memory endpoint requires an API key")
+            raise TencentMemorySecurityError(
+                "remote Tencent Memory endpoint requires an API key"
+            )
         headers = {
             "Authorization": f"Bearer {key or 'local'}",
             "x-tdai-service-id": self.config.service_id,
@@ -230,11 +265,15 @@ class TencentMemoryClient:
         if path not in self.config.allowed_read_endpoints:
             raise TencentMemorySecurityError(f"endpoint is not allowlisted: {path}")
         if method not in {"GET", "POST"}:
-            raise TencentMemorySecurityError("only read-oriented GET/POST requests are supported")
+            raise TencentMemorySecurityError(
+                "only read-oriented GET/POST requests are supported"
+            )
 
         data = None
         if body is not None:
-            data = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            data = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode(
+                "utf-8"
+            )
         request = urllib.request.Request(
             f"{self.config.base_url}{path}",
             data=data,
@@ -242,15 +281,23 @@ class TencentMemoryClient:
             method=method,
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as response:
+            with urllib.request.urlopen(
+                request, timeout=self.config.timeout_seconds
+            ) as response:
                 payload = response.read(self.config.maximum_response_bytes + 1)
         except urllib.error.HTTPError as error:
-            raise TencentMemoryError(f"MemoryCore HTTP {error.code} for {path}") from error
+            raise TencentMemoryError(
+                f"MemoryCore HTTP {error.code} for {path}"
+            ) from error
         except (urllib.error.URLError, TimeoutError, OSError) as error:
-            raise TencentMemoryError(f"MemoryCore request failed for {path}: {type(error).__name__}") from error
+            raise TencentMemoryError(
+                f"MemoryCore request failed for {path}: {type(error).__name__}"
+            ) from error
 
         if len(payload) > self.config.maximum_response_bytes:
-            raise TencentMemorySecurityError("MemoryCore response exceeds configured size limit")
+            raise TencentMemorySecurityError(
+                "MemoryCore response exceeds configured size limit"
+            )
         try:
             decoded = json.loads(payload.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
