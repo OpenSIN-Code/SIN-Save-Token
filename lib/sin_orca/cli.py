@@ -58,12 +58,18 @@ from .verification import (
     validate_scope,
 )
 from .web_callbacks import (
+    acknowledge_callback,
     bind_callback,
     callback_status,
     cancel_callback,
+    cancel_callback_relay,
+    install_callback_relay,
     open_callback,
     relay_callback,
     resolve_callback_token,
+    resolve_callback_token_for_delivery_id,
+    resolve_callback_token_for_relay,
+    resolve_callback_token_for_status,
     send_callback,
 )
 from .writer_reservation import release_writer, reservation_status
@@ -1844,6 +1850,9 @@ def _cmd_web_callback_send(args: argparse.Namespace) -> int:
         verification=args.verify,
         next_action=args.next_action,
         dry_run=args.dry_run,
+        relay_fallback=args.relay_fallback,
+        relay_interval_seconds=args.relay_interval_seconds,
+        relay_max_attempts=args.relay_max_attempts,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
@@ -1856,10 +1865,14 @@ def _cmd_web_callback_status(args: argparse.Namespace) -> int:
 
 
 def _cmd_web_callback_relay(args: argparse.Namespace) -> int:
+    token = args.callback
+    if token is None:
+        token = resolve_callback_token_for_relay(args.repo, relay_id=args.relay_id)
     result = relay_callback(
         repository=args.repo,
-        token=args.callback,
+        token=token,
         dry_run=args.dry_run,
+        scheduled=args.scheduled,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
@@ -1870,6 +1883,52 @@ def _cmd_web_callback_cancel(args: argparse.Namespace) -> int:
         repository=args.repo,
         token=args.callback,
         reason=args.reason,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_web_callback_relay_install(args: argparse.Namespace) -> int:
+    token = args.callback
+    if token is None:
+        if args.task_id is None or args.round is None:
+            raise ValueError("--task-id requires --round for callback resolution")
+        token = resolve_callback_token_for_status(
+            args.repo,
+            task_id=args.task_id,
+            round_number=args.round,
+            statuses={"pending-delivery"},
+        )
+    result = install_callback_relay(
+        repository=args.repo,
+        token=token,
+        interval_seconds=args.interval_seconds,
+        max_attempts=args.max_attempts,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_web_callback_relay_cancel(args: argparse.Namespace) -> int:
+    result = cancel_callback_relay(
+        repository=args.repo,
+        token=args.callback,
+        reason=args.reason,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_web_callback_ack(args: argparse.Namespace) -> int:
+    token = args.callback
+    if token is None:
+        token = resolve_callback_token_for_delivery_id(
+            args.repo, delivery_id=args.delivery_id
+        )
+    result = acknowledge_callback(
+        repository=args.repo,
+        token=token,
+        delivery_id=args.delivery_id,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
@@ -2049,6 +2108,13 @@ def main() -> int:
     p.add_argument("--verify", default="unknown")
     p.add_argument("--next-action")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument(
+        "--relay-fallback",
+        action="store_true",
+        help="Optionally install a bounded launchd retry relay when delivery is pending",
+    )
+    p.add_argument("--relay-interval-seconds", type=int, default=60)
+    p.add_argument("--relay-max-attempts", type=int, default=3)
 
     p = sub.add_parser(
         "web-callback-status",
@@ -2062,8 +2128,11 @@ def main() -> int:
         help="Retry a persisted callback delivery after an OpenCode terminal restart",
     )
     p.add_argument("--repo", required=True)
-    p.add_argument("--callback", required=True)
+    selector = p.add_mutually_exclusive_group(required=True)
+    selector.add_argument("--callback")
+    selector.add_argument("--relay-id")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--scheduled", action="store_true", help=argparse.SUPPRESS)
 
     p = sub.add_parser(
         "web-callback-cancel",
@@ -2072,6 +2141,35 @@ def main() -> int:
     p.add_argument("--repo", required=True)
     p.add_argument("--callback", required=True)
     p.add_argument("--reason", required=True)
+
+    p = sub.add_parser(
+        "web-callback-relay-install",
+        help="Install an optional bounded launchd relay for one pending callback",
+    )
+    p.add_argument("--repo", required=True)
+    selector = p.add_mutually_exclusive_group(required=True)
+    selector.add_argument("--callback")
+    selector.add_argument("--task-id")
+    p.add_argument("--round", type=int)
+    p.add_argument("--interval-seconds", type=int, default=60)
+    p.add_argument("--max-attempts", type=int, default=3)
+
+    p = sub.add_parser(
+        "web-callback-relay-cancel",
+        help="Cancel an optional callback relay; repeated cancellation is safe",
+    )
+    p.add_argument("--repo", required=True)
+    p.add_argument("--callback", required=True)
+    p.add_argument("--reason", default="manual-cancel")
+
+    p = sub.add_parser(
+        "web-callback-ack",
+        help="Record one OpenCode TUI receipt and cancel any optional relay",
+    )
+    p.add_argument("--repo", required=True)
+    selector = p.add_mutually_exclusive_group(required=True)
+    selector.add_argument("--callback")
+    selector.add_argument("--delivery-id")
 
     args = parser.parse_args()
 
@@ -2104,6 +2202,9 @@ def main() -> int:
         "web-callback-status": _cmd_web_callback_status,
         "web-callback-relay": _cmd_web_callback_relay,
         "web-callback-cancel": _cmd_web_callback_cancel,
+        "web-callback-relay-install": _cmd_web_callback_relay_install,
+        "web-callback-relay-cancel": _cmd_web_callback_relay_cancel,
+        "web-callback-ack": _cmd_web_callback_ack,
     }
 
     try:
