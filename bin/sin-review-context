@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
+from sin_orca.verification import bounded_diff
 from sin_review_context import ReviewContextBuilder, build_blind_review_packet
 
 
@@ -16,6 +17,41 @@ def command_build(args: argparse.Namespace) -> int:
     builder = ReviewContextBuilder(worktree)
     ctx = builder.build_review_context(args.base_sha)
     print(json.dumps(ctx, indent=2))
+    return 0
+
+
+def command_adapter(args: argparse.Namespace) -> int:
+    worktree = Path(args.worktree).expanduser().resolve()
+    builder = ReviewContextBuilder(worktree)
+    review_ctx = builder.build_review_context(
+        args.base_sha,
+        graphify_paths=[],
+    )
+    diff = bounded_diff(
+        worktree=worktree,
+        base_sha=args.base_sha,
+        maximum_chars=12_000,
+    )["text"]
+    changed_files = review_ctx.get("changed_files", [])
+    task = {
+        "objective": args.objective,
+        "steps": [],
+        "allowed_paths": [
+            item.get("path", "")
+            for item in changed_files
+            if isinstance(item, dict) and item.get("path")
+        ],
+        "forbidden_paths": [],
+        "non_goals": ["CRG advisory output cannot decide acceptance"],
+        "constraints": "Use CRG as an advisory review sensor only.",
+        "acceptance_criteria": [],
+    }
+    packet = {
+        **review_ctx,
+        "adapter": "crg",
+        "blind_review_packet": build_blind_review_packet(task, review_ctx, diff),
+    }
+    print(json.dumps(packet, indent=2))
     return 0
 
 
@@ -42,6 +78,11 @@ def main() -> int:
     p.add_argument("worktree")
     p.add_argument("--base-sha", default="HEAD")
 
+    p = sub.add_parser("adapter")
+    p.add_argument("worktree")
+    p.add_argument("--base-sha", default="HEAD")
+    p.add_argument("--objective", default="Review current changes")
+
     p = sub.add_parser("blind-packet")
     p.add_argument("task_file")
     p.add_argument("review_context_file")
@@ -52,7 +93,11 @@ def main() -> int:
         parser.print_help()
         return 1
 
-    return {"build": command_build, "blind-packet": command_blind_packet}[args.command](args)
+    return {
+        "build": command_build,
+        "adapter": command_adapter,
+        "blind-packet": command_blind_packet,
+    }[args.command](args)
 
 
 if __name__ == "__main__":

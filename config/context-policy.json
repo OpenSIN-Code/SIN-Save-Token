@@ -5,6 +5,8 @@
     "simple_tokens": 350,
     "code_navigation_tokens": 650,
     "architecture_tokens": 1200,
+    "research_tokens": 1200,
+    "review_tokens": 1600,
     "memory_tokens": 500,
     "session_resume_tokens": 750,
     "maximum_tokens": 1600
@@ -19,6 +21,26 @@
     "maximum_provider_attempts": 2
   },
   "routes": [
+    {
+      "name": "code_review",
+      "patterns": [
+        "\\b(review|reviewing|diff|blast radius|test gaps?|risk signals?|crg|codepr\u00fcfung|\u00e4nderungen pr\u00fcfen)\\b"
+      ],
+      "providers": [
+        "crg"
+      ],
+      "budget": "review_tokens"
+    },
+    {
+      "name": "research",
+      "patterns": [
+        "\\b(research|researching|investigate|investigation|deep dive|deeptutor|recherche|recherchieren|untersuche|untersuchung)\\b"
+      ],
+      "providers": [
+        "deeptutor"
+      ],
+      "budget": "research_tokens"
+    },
     {
       "name": "code_symbol",
       "patterns": [

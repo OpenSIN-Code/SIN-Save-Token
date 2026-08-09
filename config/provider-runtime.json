@@ -57,6 +57,31 @@
       "failure_threshold": 2,
       "cooldown_seconds": 300
     },
+    "deeptutor": {
+      "argv": [
+        "sin-deeptutor-adapter",
+        "{query}"
+      ],
+      "timeout_seconds": 15,
+      "maximum_output_chars": 16000,
+      "failure_threshold": 2,
+      "cooldown_seconds": 120
+    },
+    "crg": {
+      "argv": [
+        "sin-review-context",
+        "adapter",
+        ".",
+        "--base-sha",
+        "HEAD",
+        "--objective",
+        "{query}"
+      ],
+      "timeout_seconds": 210,
+      "maximum_output_chars": 24000,
+      "failure_threshold": 2,
+      "cooldown_seconds": 300
+    },
     "tencent-memory": {
       "argv": [
         "sin-tencent-memory",

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -28,6 +30,97 @@ class ContextBrokerTests(unittest.TestCase):
     def setUpClass(cls):
         cls.policy = json.loads(
             (ROOT / "config" / "context-policy.json").read_text(encoding="utf-8")
+        )
+
+    def test_routes_review_to_crg_adapter(self):
+        route = MODULE.select_route(
+            "Review the current diff for test gaps and risk signals",
+            self.policy,
+        )
+        self.assertEqual(route["name"], "code_review")
+        self.assertEqual(route["providers"], ["crg"])
+
+    def test_routes_research_to_deeptutor_adapter(self):
+        route = MODULE.select_route(
+            "Research how the authentication flow works",
+            self.policy,
+        )
+        self.assertEqual(route["name"], "research")
+        self.assertEqual(route["providers"], ["deeptutor"])
+
+    def test_deeptutor_adapter_emits_structured_plan(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "bin" / "sin-deeptutor-adapter"),
+                "--subquestion",
+                "What evidence proves the flow?",
+                "How does auth work?",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["adapter"], "deeptutor")
+        self.assertEqual(payload["status"], "in_progress")
+        self.assertTrue(payload["allows_dynamic_subquestions"])
+        self.assertGreater(len(payload["subquestions"]), 1)
+        self.assertTrue(payload["subquestions"][-1]["dynamic"])
+        self.assertIn("citations", payload)
+        self.assertEqual(
+            payload["open_questions"][0],
+            payload["subquestions"][0]["id"],
+        )
+
+    def test_context_provider_wrappers_use_repo_local_adapters(self):
+        expected = MODULE.ProviderOutcome(None, "test")
+        with patch.object(
+            MODULE,
+            "call_runtime_provider",
+            return_value=expected,
+        ) as runtime_call:
+            deeptutor = MODULE.provider_deeptutor(
+                "Research auth",
+                str(ROOT),
+                object(),
+                {},
+            )
+        self.assertIs(deeptutor, expected)
+        self.assertEqual(runtime_call.call_args.args[0], "deeptutor")
+        self.assertEqual(
+            runtime_call.call_args.kwargs["argv_override"][:2],
+            [sys.executable, str(ROOT / "bin" / "sin-deeptutor-adapter")],
+        )
+
+        with patch.object(
+            MODULE,
+            "call_runtime_provider",
+            return_value=expected,
+        ) as runtime_call:
+            crg = MODULE.provider_crg(
+                "Review current diff",
+                str(ROOT),
+                object(),
+                {},
+            )
+        self.assertIs(crg, expected)
+        self.assertEqual(runtime_call.call_args.args[0], "crg")
+        self.assertEqual(
+            runtime_call.call_args.kwargs["argv_override"][:2],
+            [sys.executable, str(ROOT / "bin" / "sin-review-context")],
+        )
+        self.assertIn("adapter", runtime_call.call_args.kwargs["argv_override"])
+        self.assertEqual(
+            runtime_call.call_args.kwargs["argv_override"][-1],
+            "{query}",
+        )
+        self.assertEqual(
+            runtime_call.call_args.kwargs["variables"],
+            {"query": "Review current diff"},
         )
 
     def test_routes_symbol_question_to_simone_first(self):

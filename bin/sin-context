@@ -460,6 +460,49 @@ def provider_cognee(
     )
 
 
+def provider_deeptutor(
+    query: str,
+    cwd: str,
+    runtime: ProviderRuntime,
+    specs: dict[str, ProviderSpec],
+) -> ProviderOutcome:
+    local_adapter = ROOT / "bin" / "sin-deeptutor-adapter"
+    return call_runtime_provider(
+        "deeptutor",
+        cwd=cwd,
+        variables={"query": query},
+        runtime=runtime,
+        specs=specs,
+        argv_override=[sys.executable, str(local_adapter), "{query}"],
+    )
+
+
+def provider_crg(
+    query: str,
+    cwd: str,
+    runtime: ProviderRuntime,
+    specs: dict[str, ProviderSpec],
+) -> ProviderOutcome:
+    local_adapter = ROOT / "bin" / "sin-review-context"
+    return call_runtime_provider(
+        "crg",
+        cwd=cwd,
+        variables={"query": query},
+        runtime=runtime,
+        specs=specs,
+        argv_override=[
+            sys.executable,
+            str(local_adapter),
+            "adapter",
+            ".",
+            "--base-sha",
+            "HEAD",
+            "--objective",
+            "{query}",
+        ],
+    )
+
+
 def provider_session_digest(
     query: str,
     cwd: str,
@@ -514,6 +557,8 @@ PROVIDERS = {
     "simone": provider_simone,
     "sin-code": provider_sin_code,
     "cognee": provider_cognee,
+    "deeptutor": provider_deeptutor,
+    "crg": provider_crg,
     "session-digest": provider_session_digest,
     "agent-grep": provider_agent_grep,
 }
