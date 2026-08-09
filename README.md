@@ -249,6 +249,12 @@ OPENAI_API_KEY="${OPENAI_API_KEY}" sin-token-stack pxpipe-run --model gpt-5.6-so
 Details, Sicherheitsgrenzen, immutable Pins und Update-Prozess:
 [`docs/TOKEN-OPTIMIZER-STACK.md`](docs/TOKEN-OPTIMIZER-STACK.md).
 
+Für claim-fähige Kontext-Benchmarks gilt ein eigener fail-closed A/B/C-Vertrag:
+Baseline und Full-Stack müssen explizit konfiguriert sein und exakte Token-,
+Cache- und Provider-Telemetrie liefern. Fehlen diese Kommandos, bleibt ein
+SST-Smoke bewusst non-claimable. Siehe
+[`docs/CONTEXT-BENCHMARK.md`](docs/CONTEXT-BENCHMARK.md).
+
 **Layer-übergreifende Hebel (Session 3 & 4, alles gated/mandatory):**
 
 **[L0] Baseline-Messung + Modell-Routing** (`verify-tokens` [L0]-Gate):
