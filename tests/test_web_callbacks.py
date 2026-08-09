@@ -62,6 +62,8 @@ def orca_router(payload: dict[str, object], sent: list[list[str]]):
         del timeout
         if arguments[:2] == ["terminal", "list"]:
             return payload
+        if arguments[:2] == ["terminal", "wait"]:
+            return {"ok": True, "result": {"status": "tui-idle"}}
         if arguments[:2] == ["terminal", "send"]:
             sent.append(arguments)
             return {"ok": True, "result": {}}
@@ -480,6 +482,51 @@ def test_callback_without_terminal_stays_pending_and_is_relayable(
     assert "delivery=gptwcd_" in sent[0][sent[0].index("--text") + 1]
 
 
+def test_busy_terminal_keeps_callback_pending_until_tui_is_idle(
+    tmp_path: Path,
+) -> None:
+    repository = git_repository(tmp_path / "repo")
+    payload = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build · model",
+    )
+    sent: list[list[str]] = []
+
+    def busy_router(arguments: list[str], *, timeout: int = 180):
+        del timeout
+        if arguments[:2] == ["terminal", "list"]:
+            return payload
+        if arguments[:2] == ["terminal", "wait"]:
+            raise RuntimeError("terminal did not become idle before timeout")
+        if arguments[:2] == ["terminal", "send"]:
+            sent.append(arguments)
+            return {"ok": True, "result": {}}
+        raise AssertionError(f"unexpected Orca call: {arguments}")
+
+    with patch("sin_orca.web_callbacks.run_orca", side_effect=busy_router):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0047",
+            origin_terminal="term-origin",
+            origin_session_id="ses_BUSY123",
+        )
+        result = send_callback(
+            repository=repository,
+            token=opened["callback"],
+            final_status="done",
+            summary="wait for the active OpenCode turn",
+        )
+
+    assert result["status"] == "callback-pending"
+    assert result["delivery_reason"] == "terminal-not-idle"
+    assert sent == []
+    assert callback_status(repository=repository, token=opened["callback"])[
+        "status"
+    ] == ("pending-delivery")
+
+
 def test_ambiguous_rebind_stays_pending_without_delivery(tmp_path: Path) -> None:
     repository = git_repository(tmp_path / "repo")
     origin_payload = terminal_payload(
@@ -805,6 +852,8 @@ def test_delivery_failure_stays_pending_for_relay(tmp_path: Path) -> None:
         del timeout
         if arguments[:2] == ["terminal", "list"]:
             return payload
+        if arguments[:2] == ["terminal", "wait"]:
+            return {"ok": True, "result": {"status": "tui-idle"}}
         if arguments[:2] == ["terminal", "send"]:
             sends.append(arguments)
             raise RuntimeError("transport outcome unknown")
@@ -1366,6 +1415,8 @@ def test_indeterminate_callback_expires_before_recovery_attempt(
         del timeout
         if arguments[:2] == ["terminal", "list"]:
             return origin_payload
+        if arguments[:2] == ["terminal", "wait"]:
+            return {"ok": True, "result": {"status": "tui-idle"}}
         if arguments[:2] == ["terminal", "send"]:
             raise RuntimeError("transport outcome unknown")
         raise AssertionError(f"unexpected Orca call: {arguments}")

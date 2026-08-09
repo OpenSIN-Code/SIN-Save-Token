@@ -39,6 +39,7 @@ DEFAULT_TTL_MINUTES = 24 * 60
 DEFAULT_MAX_ROUNDS = 50
 DEFAULT_RELAY_INTERVAL_SECONDS = 60
 DEFAULT_RELAY_MAX_ATTEMPTS = 3
+DEFAULT_TUI_IDLE_TIMEOUT_SECONDS = 30
 EXPIRABLE_CALLBACK_STATUSES = {
     "open",
     "pending-delivery",
@@ -1091,6 +1092,32 @@ def resolve_delivery_terminal(
     return None, "origin-terminal-gone-and-session-offline"
 
 
+def wait_for_delivery_terminal_idle(
+    terminal: str,
+    *,
+    timeout_seconds: int = DEFAULT_TUI_IDLE_TIMEOUT_SECONDS,
+) -> None:
+    """Wait until the target TUI can accept a new agent turn.
+
+    A connected terminal can still be consuming the previous OpenCode turn.
+    Sending while it is busy writes input into the PTY without reliably waking
+    the current session, so delivery must wait for Orca's explicit idle state.
+    """
+    run_orca(
+        [
+            "terminal",
+            "wait",
+            "--terminal",
+            terminal,
+            "--for",
+            "tui-idle",
+            "--timeout-ms",
+            str(timeout_seconds * 1000),
+        ],
+        timeout=timeout_seconds + 5,
+    )
+
+
 def render_callback_message(
     record: dict[str, Any],
     *,
@@ -1206,6 +1233,26 @@ def _deliver_pending_callback(
             "origin_terminal": terminal,
             "target_source": target_source,
             "message": message,
+        }
+
+    try:
+        wait_for_delivery_terminal_idle(terminal)
+    except Exception as error:
+        record.update(
+            {
+                "status": "pending-delivery",
+                "delivery_reason": "terminal-not-idle",
+                "delivery_error": _compact(str(error), 700) or type(error).__name__,
+            }
+        )
+        atomic_write_json(callback_path(repository, token), record)
+        return {
+            "ok": True,
+            "status": "callback-pending",
+            "callback": token,
+            "task_id": record.get("task_id"),
+            "delivery_id": record.get("delivery_id"),
+            "delivery_reason": "terminal-not-idle",
         }
 
     try:
