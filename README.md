@@ -410,6 +410,18 @@ und [`scripts/verify-archify-diagrams.mjs`](https://github.com/OpenSIN-Code/wow-
 
 ---
 
+## Architektur
+
+Die Systemarchitektur ist als versionierte Archify-IR, interaktives HTML und Archify-SVG dokumentiert. Die Narrative beschreibt Context-Routing, Memory, Token-Optimierung, Orca-Delegation, Trust-Grenzen und Completion-Gates.
+
+![SIN-Save-Token architecture](docs/sin-save-token-architecture.svg)
+
+- [Architektur-Narrative](docs/architecture.md)
+- [Interaktives Archify-Diagramm](docs/sin-save-token-architecture.html)
+- [Editierbare Archify-IR](docs/sin-save-token-architecture.json)
+
+---
+
 ## Repo-Layout
 
 ```

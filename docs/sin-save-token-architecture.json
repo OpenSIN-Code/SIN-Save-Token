@@ -1,0 +1,207 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "SIN-Save-Token Architecture",
+    "subtitle": "Fleet policy, bounded context, memory, optimization, orchestration, and verification",
+    "output": "sin-save-token-architecture.html",
+    "viewBox": [1180, 720]
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [55, 125],
+    "cols": 6,
+    "gapX": 42,
+    "gapY": 72,
+    "cellW": 145,
+    "cellH": 68
+  },
+  "components": [
+    {
+      "id": "agents",
+      "type": "frontend",
+      "label": "Agent Runtimes",
+      "sublabel": "Claude · Codex · OpenCode · Orca",
+      "row": 0,
+      "col": 0,
+      "size": [150, 68],
+      "tag": "consumers"
+    },
+    {
+      "id": "fleet-policy",
+      "type": "security",
+      "label": "Fleet Policy + Hooks",
+      "sublabel": "install · self-heal · RTK · gates",
+      "row": 0,
+      "col": 1,
+      "size": [150, 68]
+    },
+    {
+      "id": "cli-surface",
+      "type": "backend",
+      "label": "SIN CLI Surface",
+      "sublabel": "context · memory · token · orca",
+      "row": 0,
+      "col": 2,
+      "size": [150, 68]
+    },
+    {
+      "id": "context-broker",
+      "type": "backend",
+      "label": "Context Broker",
+      "sublabel": "route · budget · cache · evidence",
+      "row": 0,
+      "col": 3,
+      "size": [150, 68],
+      "tag": "max 2 providers"
+    },
+    {
+      "id": "provider-runtime",
+      "type": "security",
+      "label": "Provider Runtime",
+      "sublabel": "bounded argv · timeout · circuit breaker",
+      "row": 0,
+      "col": 4,
+      "size": [150, 68]
+    },
+    {
+      "id": "providers",
+      "type": "external",
+      "label": "Intelligence Providers",
+      "sublabel": "Simone · Graphify · SIN · Cognee · CRG",
+      "row": 0,
+      "col": 5,
+      "size": [150, 68],
+      "tag": "selected, not fanned out"
+    },
+    {
+      "id": "memory",
+      "type": "database",
+      "label": "Memory Layer",
+      "sublabel": "L1/L2/L3 · Cognee · session digest",
+      "row": 2,
+      "col": 2,
+      "size": [150, 68]
+    },
+    {
+      "id": "token-stack",
+      "type": "cloud",
+      "label": "Token Optimizer Stack",
+      "sublabel": "Ponytail · Caveman · pxpipe · Gigatoken",
+      "row": 2,
+      "col": 3,
+      "size": [150, 68],
+      "tag": "lossy paths opt-in"
+    },
+    {
+      "id": "orca",
+      "type": "messagebus",
+      "label": "Orca Orchestrator",
+      "sublabel": "same-worktree · callbacks · writer lease",
+      "row": 2,
+      "col": 4,
+      "size": [150, 68]
+    },
+    {
+      "id": "verification",
+      "type": "security",
+      "label": "Verification + Review",
+      "sublabel": "tests · diff gates · blind reviewer · CI",
+      "row": 2,
+      "col": 5,
+      "size": [150, 68],
+      "tag": "controller-owned"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "SIN-Save-Token repository / local control plane",
+      "wraps": [
+        "fleet-policy",
+        "cli-surface",
+        "context-broker",
+        "provider-runtime",
+        "memory",
+        "token-stack",
+        "orca",
+        "verification"
+      ],
+      "pad": 24
+    }
+  ],
+  "connections": [
+    {
+      "from": "agents",
+      "to": "fleet-policy",
+      "variant": "emphasis",
+      "route": "straight"
+    },
+    {
+      "from": "fleet-policy",
+      "to": "cli-surface",
+      "variant": "emphasis",
+      "route": "straight"
+    },
+    {
+      "from": "cli-surface",
+      "to": "context-broker",
+      "label": "query",
+      "variant": "emphasis",
+      "route": "straight"
+    },
+    {
+      "from": "context-broker",
+      "to": "provider-runtime",
+      "label": "route + budget",
+      "labelAt": [785, 207],
+      "variant": "emphasis",
+      "route": "straight"
+    },
+    {
+      "from": "provider-runtime",
+      "to": "providers",
+      "label": "bounded call",
+      "labelAt": [972, 207],
+      "variant": "security",
+      "route": "straight"
+    },
+    {
+      "from": "orca",
+      "to": "verification",
+      "route": "straight"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Fail-closed context",
+      "items": [
+        "Policy route + token budget",
+        "At most two provider attempts",
+        "Repository/config-fingerprinted cache",
+        "Untrusted evidence envelope before model reuse"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Explicit expensive or lossy paths",
+      "items": [
+        "pxpipe and Caveman are opt-in",
+        "Gigatoken uses an explicit tokenizer",
+        "External providers are policy selected",
+        "Token savings never override correctness"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Controller retains authority",
+      "items": [
+        "Same-worktree Orca delegation",
+        "Exclusive repository writer reservation",
+        "Scope/diff/test verification",
+        "Independent review before completion"
+      ]
+    }
+  ]
+}
