@@ -130,6 +130,29 @@ def test_explicit_busy_origin_terminal_is_bound_and_waited_for(
     assert opened["origin_terminal"] == "term-origin"
 
 
+def test_explicit_disconnected_origin_terminal_is_persisted_for_rebind(
+    tmp_path: Path,
+) -> None:
+    repository = git_repository(tmp_path / "repo")
+    payload = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build · model",
+        connected=False,
+    )
+    with patch("sin_orca.web_callbacks.run_orca", return_value=payload):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0047",
+            origin_terminal="term-origin",
+            origin_session_id="ses_DISCONNECTED123",
+        )
+
+    assert opened["origin_terminal"] == "term-origin"
+    assert opened["origin_terminal_source"] == "explicit-disconnected"
+
+
 def test_unbounded_callback_round_never_requests_loop_stop() -> None:
     action = _default_next_action(
         {

@@ -302,6 +302,7 @@ def terminal_records(
     repository: Path,
     *,
     allow_busy: bool = False,
+    allow_disconnected: bool = False,
 ) -> list[dict[str, Any]]:
     terminals = _result_object(value).get("terminals", [])
     if not isinstance(terminals, list):
@@ -322,7 +323,7 @@ def terminal_records(
             exact_worktree = False
         if not exact_worktree:
             continue
-        if item.get("connected") is False:
+        if item.get("connected") is False and not allow_disconnected:
             continue
         if not allow_busy and item.get("writable") is False:
             continue
@@ -349,12 +350,18 @@ def list_repository_terminals(
     repository: Path,
     *,
     allow_busy: bool = False,
+    allow_disconnected: bool = False,
 ) -> list[dict[str, Any]]:
     payload = run_orca(
         ["terminal", "list", "--worktree", f"path:{repository}"],
         timeout=30,
     )
-    return terminal_records(payload, repository, allow_busy=allow_busy)
+    return terminal_records(
+        payload,
+        repository,
+        allow_busy=allow_busy,
+        allow_disconnected=allow_disconnected,
+    )
 
 
 def resolve_origin_terminal(
@@ -367,15 +374,19 @@ def resolve_origin_terminal(
         or os.getenv("SIN_ORCA_PARENT_TERMINAL")
         or os.getenv("ORCA_TERMINAL_HANDLE")
     )
-    records = list_repository_terminals(repository, allow_busy=bool(requested))
+    records = list_repository_terminals(
+        repository,
+        allow_busy=bool(requested),
+        allow_disconnected=bool(requested),
+    )
     by_handle = {str(item["handle"]): item for item in records}
     if requested:
         requested = requested.strip()
         if requested not in by_handle:
-            raise RuntimeError(
-                "origin terminal is not a connected writable terminal in the exact repository"
-            )
+            raise RuntimeError("origin terminal is not known for the exact repository")
         source = "explicit" if explicit else "environment"
+        if by_handle[requested].get("connected") is False:
+            source = f"{source}-disconnected"
         return requested, source, by_handle[requested]
 
     candidates = [item for item in records if _looks_like_opencode(item)]
