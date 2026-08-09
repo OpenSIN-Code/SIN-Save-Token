@@ -297,7 +297,12 @@ def _result_object(value: dict[str, Any]) -> dict[str, Any]:
     return result if isinstance(result, dict) else {}
 
 
-def terminal_records(value: dict[str, Any], repository: Path) -> list[dict[str, Any]]:
+def terminal_records(
+    value: dict[str, Any],
+    repository: Path,
+    *,
+    allow_busy: bool = False,
+) -> list[dict[str, Any]]:
     terminals = _result_object(value).get("terminals", [])
     if not isinstance(terminals, list):
         return []
@@ -317,7 +322,9 @@ def terminal_records(value: dict[str, Any], repository: Path) -> list[dict[str, 
             exact_worktree = False
         if not exact_worktree:
             continue
-        if item.get("connected") is False or item.get("writable") is False:
+        if item.get("connected") is False:
+            continue
+        if not allow_busy and item.get("writable") is False:
             continue
         records.append(dict(item))
     return records
@@ -338,12 +345,16 @@ def _looks_like_opencode(record: dict[str, Any]) -> bool:
     )
 
 
-def list_repository_terminals(repository: Path) -> list[dict[str, Any]]:
+def list_repository_terminals(
+    repository: Path,
+    *,
+    allow_busy: bool = False,
+) -> list[dict[str, Any]]:
     payload = run_orca(
         ["terminal", "list", "--worktree", f"path:{repository}"],
         timeout=30,
     )
-    return terminal_records(payload, repository)
+    return terminal_records(payload, repository, allow_busy=allow_busy)
 
 
 def resolve_origin_terminal(
@@ -356,7 +367,7 @@ def resolve_origin_terminal(
         or os.getenv("SIN_ORCA_PARENT_TERMINAL")
         or os.getenv("ORCA_TERMINAL_HANDLE")
     )
-    records = list_repository_terminals(repository)
+    records = list_repository_terminals(repository, allow_busy=bool(requested))
     by_handle = {str(item["handle"]): item for item in records}
     if requested:
         requested = requested.strip()
@@ -631,10 +642,10 @@ def open_callback(
     task = _validate_task_id(task_id)
     if not 5 <= ttl_minutes <= 7 * 24 * 60:
         raise ValueError("callback TTL must be between 5 and 10080 minutes")
-    if not 1 <= max_rounds <= 500:
-        raise ValueError("max rounds must be between 1 and 500")
-    if not 1 <= round_number <= max_rounds:
-        raise ValueError("round must be between 1 and max rounds")
+    if max_rounds < 0 or max_rounds > 500:
+        raise ValueError("max rounds must be 0 (unbounded) or between 1 and 500")
+    if round_number < 1 or (max_rounds and round_number > max_rounds):
+        raise ValueError("round must be positive and within max rounds")
 
     terminal, terminal_source, terminal_record = resolve_origin_terminal(
         root,
@@ -798,7 +809,8 @@ def _changed_files(values: list[str] | None) -> list[str]:
 
 def _default_next_action(record: dict[str, Any]) -> str:
     round_number = int(record.get("round") or 1)
-    max_rounds = int(record.get("max_rounds") or DEFAULT_MAX_ROUNDS)
+    raw_max_rounds = record.get("max_rounds")
+    max_rounds = DEFAULT_MAX_ROUNDS if raw_max_rounds is None else int(raw_max_rounds)
     conversation = record.get("conversation")
     binding = ""
     if isinstance(conversation, dict):
@@ -809,7 +821,7 @@ def _default_next_action(record: dict[str, Any]) -> str:
                 " Continue the same ChatGPT Web conversation using its saved "
                 f"page/URL binding ({page_id or 'no-page-id'}, {url or 'no-url'})."
             )
-    if round_number >= max_rounds:
+    if max_rounds > 0 and round_number >= max_rounds:
         return (
             "Refresh .sin-gpt-web/taskplan.sqlite3 and TASKPLAN.md through "
             "sin-gpt-web-state, independently verify the evidence, and either "
@@ -1067,7 +1079,7 @@ def resolve_delivery_terminal(
     record: dict[str, Any],
 ) -> tuple[str | None, str]:
     """Resolve a live delivery target without guessing between OpenCode sessions."""
-    terminals = list_repository_terminals(repository)
+    terminals = list_repository_terminals(repository, allow_busy=True)
     origin = str(record.get("origin_terminal") or "")
     if any(item.get("handle") == origin for item in terminals):
         return origin, "origin-terminal"
@@ -1139,7 +1151,8 @@ def render_callback_message(
         f"task={record['task_id']} status={final_status} "
         f"delivery={record['delivery_id']} "
         f"session={session_id or 'unresolved'} "
-        f"round={record.get('round', 1)}/{record.get('max_rounds', DEFAULT_MAX_ROUNDS)}"
+        f"round={record.get('round', 1)}/"
+        f"{'∞' if int(record.get('max_rounds', DEFAULT_MAX_ROUNDS) or 0) == 0 else record.get('max_rounds', DEFAULT_MAX_ROUNDS)}"
     )
     receipt_command = shlex.join(
         [

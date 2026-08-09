@@ -28,6 +28,7 @@ from sin_orca.web_callbacks import (  # noqa: E402
     resolve_origin_session,
     resolve_origin_terminal,
     send_callback,
+    _default_next_action,
 )
 from sin_orca import cli as sin_orca_cli  # noqa: E402
 
@@ -105,6 +106,43 @@ def test_open_binds_exact_terminal_and_session(tmp_path: Path) -> None:
     assert "--task-id T-0020" in template
     assert "--round 3" in template
     assert result["callback"] not in template
+
+
+def test_explicit_busy_origin_terminal_is_bound_and_waited_for(
+    tmp_path: Path,
+) -> None:
+    repository = git_repository(tmp_path / "repo")
+    payload = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build · model",
+        writable=False,
+    )
+    with patch("sin_orca.web_callbacks.run_orca", return_value=payload):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0047",
+            origin_terminal="term-origin",
+            origin_session_id="ses_BUSYORIGIN123",
+        )
+
+    assert opened["origin_terminal"] == "term-origin"
+
+
+def test_unbounded_callback_round_never_requests_loop_stop() -> None:
+    action = _default_next_action(
+        {
+            "round": 500,
+            "max_rounds": 0,
+            "conversation": {
+                "page_id": "page-123",
+                "url": "https://chatgpt.com/c/chat-12345678",
+            },
+        }
+    )
+    assert "do not auto-delegate another round" not in action
+    assert "next highest-priority bounded task" in action
 
 
 def test_multiple_opencode_terminals_require_explicit_handle(
