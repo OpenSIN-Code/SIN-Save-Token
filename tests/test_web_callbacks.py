@@ -412,6 +412,10 @@ def test_bind_then_send_wakes_origin_once(tmp_path: Path) -> None:
     assert "https://chatgpt.com/c/conversation-123" in message
     assert "continue the CEO loop" in message
     assert "RECEIPT_ACTION: sin-orca web-callback-ack" in message
+    assert "POST_COMPLETION_ACTION:" in message
+    assert "sin-gpt-web-archive" in message
+    assert "origin/main" in message
+    assert "Never push before" in message
     assert "--delivery-id gptwcd_" in message
     assert opened["callback"] not in message
     assert "Process this delivery ID at most once" in message

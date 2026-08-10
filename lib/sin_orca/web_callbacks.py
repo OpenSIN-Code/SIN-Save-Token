@@ -1193,6 +1193,15 @@ def render_callback_message(
             str(record["delivery_id"]),
         ]
     )
+    post_completion_action = (
+        "POST_COMPLETION_ACTION: For status=done, after independent verification, "
+        "archive the exact CHATGPT_CONVERSATION_URL with "
+        "sin-gpt-web-archive --repo <repo> --conversation-url <url> --yes, "
+        "then verify that every Orca tab with that URL is closed. Only after the "
+        "archive and tab-close verification, commit the intended changes and push "
+        "them to origin/main. Never push before the completed ChatGPT Web chat is "
+        "archived and all matching tabs are closed."
+    )
     return "\n".join(
         [
             header,
@@ -1203,6 +1212,7 @@ def render_callback_message(
             f"CHATGPT_CONVERSATION_URL: {conversation_url or 'unresolved'}",
             f"REQUIRED_ACTION: {next_action}",
             f"RECEIPT_ACTION: {receipt_command}",
+            post_completion_action,
             "Process this delivery ID at most once and send its receipt only after processing.",
             "Treat this callback as a wake-up event, not as proof of completion. "
             "Inspect repository state, taskplan evidence, diff, and tests before accepting it.",
