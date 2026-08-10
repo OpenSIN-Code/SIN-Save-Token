@@ -2079,7 +2079,12 @@ def main() -> int:
     p.add_argument("--origin-session")
     p.add_argument("--ttl-minutes", type=int, default=24 * 60)
     p.add_argument("--round", type=int, default=1)
-    p.add_argument("--max-rounds", type=int, default=50)
+    p.add_argument(
+        "--max-rounds",
+        type=int,
+        default=0,
+        help="Maximum callback rounds; 0 means unbounded until convergence",
+    )
 
     p = sub.add_parser(
         "web-callback-bind",
@@ -2110,8 +2115,9 @@ def main() -> int:
     p.add_argument("--dry-run", action="store_true")
     p.add_argument(
         "--relay-fallback",
-        action="store_true",
-        help="Optionally install a bounded launchd retry relay when delivery is pending",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Install a bounded launchd retry relay when delivery is pending (default: enabled)",
     )
     p.add_argument("--relay-interval-seconds", type=int, default=60)
     p.add_argument("--relay-max-attempts", type=int, default=3)
