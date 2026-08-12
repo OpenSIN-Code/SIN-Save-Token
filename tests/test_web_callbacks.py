@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
 from sin_orca.web_callbacks import (  # noqa: E402
+    abandon_callback,
     acknowledge_callback,
     bind_callback,
     callback_path,
@@ -22,12 +23,14 @@ from sin_orca.web_callbacks import (  # noqa: E402
     cancel_callback,
     install_callback_relay,
     open_callback,
+    reconcile_callback_handoff,
     relay_callback,
     resolve_callback_token,
     resolve_callback_token_for_relay,
     resolve_origin_session,
     resolve_origin_terminal,
     send_callback,
+    stage_callback_handoff,
     _default_next_action,
 )
 from sin_orca import cli as sin_orca_cli  # noqa: E402
@@ -37,6 +40,39 @@ def git_repository(path: Path) -> Path:
     path.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=path, check=True)
     return path.resolve()
+
+
+def write_taskplan_evidence(
+    repository: Path,
+    task_id: str,
+    *,
+    status: str = "done",
+    evidence: str = "independent tests passed",
+    completion_report: str = "verified completion report",
+    blocked_reason: str = "",
+) -> None:
+    import sqlite3
+
+    state = repository / ".sin-gpt-web"
+    state.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(state / "taskplan.sqlite3")
+    try:
+        connection.execute(
+            """CREATE TABLE tasks(
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                evidence TEXT NOT NULL DEFAULT '',
+                completion_report TEXT NOT NULL DEFAULT '',
+                blocked_reason TEXT NOT NULL DEFAULT ''
+            )"""
+        )
+        connection.execute(
+            "INSERT INTO tasks(id,status,evidence,completion_report,blocked_reason) VALUES(?,?,?,?,?)",
+            (task_id, status, evidence, completion_report, blocked_reason),
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def terminal_payload(
@@ -453,7 +489,7 @@ def test_receipt_acknowledgement_is_idempotent(tmp_path: Path) -> None:
         send_callback(
             repository=repository,
             token=opened["callback"],
-            final_status="done",
+            final_status="failed",
             summary="delivery ready for receipt",
         )
 
@@ -1245,7 +1281,7 @@ def test_receipt_removes_optional_relay_without_polling(
         send_callback(
             repository=repository,
             token=opened["callback"],
-            final_status="done",
+            final_status="failed",
             summary="wait for TUI receipt",
             relay_fallback=True,
         )
@@ -1666,3 +1702,474 @@ def test_cancel_is_idempotent_and_prevents_send(tmp_path: Path) -> None:
             final_status="done",
             summary="should not send",
         )
+
+
+def test_blocked_pending_delivery_can_be_replaced(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    payload = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build",
+        lastOutputAt=100,
+    )
+    with patch("sin_orca.web_callbacks.run_orca", return_value=payload):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0090",
+            origin_terminal="term-origin",
+            origin_session_id="ses_ABC123",
+        )
+    token = opened["callback"]
+    with patch(
+        "sin_orca.web_callbacks._deliver_pending_callback",
+        return_value={"ok": True, "status": "callback-pending"},
+    ):
+        send_callback(
+            repository=repository,
+            token=token,
+            final_status="blocked",
+            summary="connector detached",
+        )
+
+    cancelled = cancel_callback(
+        repository=repository,
+        token=token,
+        reason="replace undelivered blocked callback after connector detachment",
+    )
+
+    assert cancelled["status"] == "callback-cancelled"
+    with pytest.raises(RuntimeError, match="one-shot"):
+        send_callback(
+            repository=repository,
+            token=token,
+            final_status="done",
+            summary="must use a fresh callback",
+        )
+
+
+
+def test_abandon_requires_a_missing_delivery_target_and_preserves_audit(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    origin = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build",
+        lastOutputAt=100,
+    )
+    with patch("sin_orca.web_callbacks.run_orca", return_value=origin):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0144",
+            origin_terminal="term-origin",
+            origin_session_id="ses_ABC123",
+        )
+    token = opened["callback"]
+    record_path = callback_path(repository, token)
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record.update(
+        {
+            "status": "pending-delivery",
+            "callback_status": "done",
+            "delivery_state": "pending",
+        }
+    )
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    no_target = terminal_payload(repository, handle="term-other", title="OpenCode")
+    with patch("sin_orca.web_callbacks.run_orca", return_value=no_target):
+        abandoned = abandon_callback(
+            repository=repository,
+            token=token,
+            reason="origin terminal was removed and exact session is offline",
+        )
+
+    assert abandoned["status"] == "callback-abandoned"
+    assert abandoned["delivery_reason"] == "origin-terminal-gone-and-session-offline"
+    saved = json.loads(record_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "abandoned"
+    assert saved["callback_status"] == "done"
+    assert saved["abandon_reason"].startswith("origin terminal")
+    assert saved["abandon_repository_root_mismatch"] is False
+    assert abandon_callback(
+        repository=repository,
+        token=token,
+        reason="same recovery",
+    )["reused"] is True
+
+
+def test_abandon_refuses_a_resolvable_target_and_handles_orphaned_root(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    origin = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build",
+        lastOutputAt=100,
+    )
+    with patch("sin_orca.web_callbacks.run_orca", return_value=origin):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0145",
+            origin_terminal="term-origin",
+            origin_session_id="ses_ABC123",
+        )
+        with pytest.raises(RuntimeError, match="target still resolves"):
+            abandon_callback(
+                repository=repository,
+                token=opened["callback"],
+                reason="must not abandon live target",
+            )
+
+    token = opened["callback"]
+    record_path = callback_path(repository, token)
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["repository_root"] = str(tmp_path / "removed-worktree")
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    no_target = terminal_payload(repository, handle="term-other", title="OpenCode")
+    with patch("sin_orca.web_callbacks.run_orca", return_value=no_target):
+        abandoned = abandon_callback(
+            repository=repository,
+            token=token,
+            reason="record belongs to removed worktree and cannot be delivered",
+        )
+
+    assert abandoned["status"] == "callback-abandoned"
+    saved = json.loads(record_path.read_text(encoding="utf-8"))
+    assert saved["abandon_repository_root_mismatch"] is True
+
+
+
+def test_prime_agent_callback_uses_exact_daemon_session_and_receipt(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    session_id = "prime-active-1234"
+    inventory = json.dumps(
+        {"sessions": [{"activeSessionId": session_id, "lifecycle": "live"}]}
+    )
+    receipt = json.dumps(
+        {
+            "target": {"activeSessionId": session_id},
+            "deliveryStatus": "queued",
+        }
+    )
+    calls: list[list[str]] = []
+    real_run = subprocess.run
+
+    def prime_run(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if arguments[0] == "git":
+            return real_run(arguments, **kwargs)
+        calls.append(arguments)
+        if arguments[1:3] == ["list", "--json"]:
+            return subprocess.CompletedProcess(arguments, 0, inventory, "")
+        if arguments[1:3] == ["send", session_id]:
+            return subprocess.CompletedProcess(arguments, 0, receipt, "")
+        raise AssertionError(arguments)
+
+    with (
+        patch("sin_orca.web_callbacks.shutil.which", return_value="/usr/local/bin/prime-agent"),
+        patch("sin_orca.web_callbacks.subprocess.run", side_effect=prime_run),
+    ):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0140",
+            prime_agent_session_id=session_id,
+        )
+        delivered = send_callback(
+            repository=repository,
+            token=opened["callback"],
+            final_status="done",
+            summary="native Prime callback delivered",
+        )
+
+    assert opened["origin_agent"] == "prime-agent"
+    assert opened["origin_terminal"] is None
+    assert opened["origin_transport"]["active_session_id"] == session_id
+    assert delivered["status"] == "callback-sent"
+    assert delivered["origin_prime_agent_session"] == session_id
+    assert calls[0][1:] == ["list", "--json"]
+    assert calls[1][1:] == ["list", "--json"]
+    assert calls[2][0:3] == ["/usr/local/bin/prime-agent", "send", session_id]
+    assert calls[2][-1] == "--json"
+    assert "transport=prime-agent" in calls[2][3]
+    assert f"prime_session={session_id}" in calls[2][3]
+    assert "opencode_session=" not in calls[2][3]
+    saved = callback_status(repository=repository, token=opened["callback"])
+    assert saved["status"] == "sent"
+    assert saved["origin_agent"] == "prime-agent"
+
+
+def test_prime_agent_callback_pending_when_exact_session_is_offline(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    session_id = "prime-active-5678"
+    live = json.dumps({"sessions": [{"activeSessionId": session_id, "lifecycle": "live"}]})
+    offline = json.dumps({"sessions": []})
+    real_run = subprocess.run
+    prime_results = iter([live, offline])
+
+    def prime_run(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if arguments[0] == "git":
+            return real_run(arguments, **kwargs)
+        return subprocess.CompletedProcess(arguments, 0, next(prime_results), "")
+
+    with (
+        patch("sin_orca.web_callbacks.shutil.which", return_value="/usr/local/bin/prime-agent"),
+        patch("sin_orca.web_callbacks.subprocess.run", side_effect=prime_run),
+    ):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0141",
+            prime_agent_session_id=session_id,
+        )
+        pending = send_callback(
+            repository=repository,
+            token=opened["callback"],
+            final_status="done",
+            summary="target must remain exact",
+        )
+
+    assert pending["status"] == "callback-pending"
+    assert pending["delivery_reason"] == "prime-agent-session-offline"
+    assert callback_status(repository=repository, token=opened["callback"])["status"] == "pending-delivery"
+
+
+
+def test_abandon_refuses_a_live_prime_agent_target(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    token = "gptwcb_" + "a" * 32
+    record = {
+        "schema_version": 1,
+        "token": token,
+        "status": "pending-delivery",
+        "task_id": "T-0140",
+        "repository_root": str(repository),
+        "origin_agent": "prime-agent",
+        "origin_transport": {
+            "transport": "prime-agent",
+            "active_session_id": "prime-active-9999",
+            "cli": "prime-agent",
+        },
+        "round": 1,
+        "max_rounds": 1,
+        "expires_at": "2026-08-12T00:00:00+00:00",
+        "conversation": None,
+    }
+    callback_path(repository, token).write_text(json.dumps(record), encoding="utf-8")
+    with patch(
+        "sin_orca.web_callbacks.resolve_prime_agent_session",
+        return_value={"transport": "prime-agent", "active_session_id": "prime-active-9999"},
+    ), pytest.raises(RuntimeError, match="target still resolves"):
+        abandon_callback(
+            repository=repository,
+            token=token,
+            reason="must not discard a live Prime callback",
+        )
+
+    saved = json.loads(callback_path(repository, token).read_text(encoding="utf-8"))
+    assert saved["status"] == "pending-delivery"
+
+
+def test_staged_handoff_is_bound_and_direct_mismatch_is_rejected(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    payload = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build · model",
+    )
+    sent: list[list[str]] = []
+    with patch("sin_orca.web_callbacks.run_orca", return_value=payload):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0140",
+            origin_terminal="term-origin",
+            origin_session_id="ses_STAGE123",
+        )
+        bind_callback(
+            repository=repository,
+            token=opened["callback"],
+            page_id="page-stage",
+            conversation_url="https://chatgpt.com/c/stage-handoff-123",
+        )
+        staged = stage_callback_handoff(
+            repository=repository,
+            token=opened["callback"],
+            final_status="done",
+            summary="verified staged outcome",
+            changed=["lib/a.py"],
+            verification="pytest passed",
+        )
+        with pytest.raises(RuntimeError, match="does not match staged"):
+            send_callback(
+                repository=repository,
+                token=opened["callback"],
+                final_status="done",
+                summary="different outcome",
+                changed=["lib/a.py"],
+                verification="pytest passed",
+            )
+
+    assert staged["status"] == "callback-handoff-staged"
+    status = callback_status(repository=repository, token=opened["callback"])
+    assert status["status"] == "open"
+    assert status["completion_handoff_state"] == "staged"
+    assert sent == []
+
+
+def test_tampered_staged_handoff_never_delivers(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    payload = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build · model",
+    )
+    with patch("sin_orca.web_callbacks.run_orca", return_value=payload):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0140",
+            origin_terminal="term-origin",
+            origin_session_id="ses_TAMPER123",
+        )
+        bind_callback(
+            repository=repository,
+            token=opened["callback"],
+            page_id="page-tamper",
+            conversation_url="https://chatgpt.com/c/tamper-handoff-123",
+        )
+        stage_callback_handoff(
+            repository=repository,
+            token=opened["callback"],
+            final_status="done",
+            summary="original outcome",
+            verification="tests passed",
+        )
+    write_taskplan_evidence(repository, "T-0140")
+    path = callback_path(repository, opened["callback"])
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["completion_handoff"]["outcome"]["summary"] = "tampered outcome"
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="MAC validation failed"):
+        reconcile_callback_handoff(repository=repository, token=opened["callback"])
+    assert callback_status(repository=repository, token=opened["callback"])["status"] == "open"
+
+
+def test_reconcile_requires_canonical_done_evidence(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    payload = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build · model",
+    )
+    with patch("sin_orca.web_callbacks.run_orca", return_value=payload):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0140",
+            origin_terminal="term-origin",
+            origin_session_id="ses_EVIDENCE123",
+        )
+        bind_callback(
+            repository=repository,
+            token=opened["callback"],
+            page_id="page-evidence",
+            conversation_url="https://chatgpt.com/c/evidence-handoff-123",
+        )
+        stage_callback_handoff(
+            repository=repository,
+            token=opened["callback"],
+            final_status="done",
+            summary="done must be independently proven",
+            verification="tests passed",
+        )
+    write_taskplan_evidence(
+        repository,
+        "T-0140",
+        status="in_progress",
+        evidence="",
+        completion_report="",
+    )
+
+    with pytest.raises(RuntimeError, match="lacks independent canonical"):
+        reconcile_callback_handoff(repository=repository, token=opened["callback"])
+    assert callback_status(repository=repository, token=opened["callback"])["status"] == "open"
+
+
+def test_reconcile_valid_handoff_delivers_exact_staged_outcome(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    payload = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build · model",
+    )
+    sent: list[list[str]] = []
+    with patch("sin_orca.web_callbacks.run_orca", return_value=payload):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0140",
+            origin_terminal="term-origin",
+            origin_session_id="ses_RECONCILE123",
+        )
+        bind_callback(
+            repository=repository,
+            token=opened["callback"],
+            page_id="page-reconcile",
+            conversation_url="https://chatgpt.com/c/reconcile-handoff-123",
+        )
+        stage_callback_handoff(
+            repository=repository,
+            token=opened["callback"],
+            final_status="done",
+            summary="recover after execution window expiry",
+            changed=["lib/a.py, tests/test_a.py"],
+            verification="focused tests passed",
+        )
+    write_taskplan_evidence(repository, "T-0140")
+
+    with patch(
+        "sin_orca.web_callbacks.run_orca",
+        side_effect=orca_router(payload, sent),
+    ):
+        result = reconcile_callback_handoff(
+            repository=repository,
+            token=opened["callback"],
+        )
+
+    assert result["status"] == "callback-sent"
+    assert result["handoff_reconciled"] is True
+    assert result["taskplan_validation"]["task_status"] == "done"
+    assert len(sent) == 1
+    message = sent[0][sent[0].index("--text") + 1]
+    assert "recover after execution window expiry" in message
+    status = callback_status(repository=repository, token=opened["callback"])
+    assert status["completion_handoff_state"] == "consumed"
+
+
+@pytest.mark.parametrize("transport", [None, {}, {"transport": "opencode"}, {"transport": "prime-agent"}])
+def test_abandon_rejects_malformed_prime_agent_transport(tmp_path: Path, transport: object) -> None:
+    repository = git_repository(tmp_path / "repo")
+    token = "gptwcb_" + "b" * 32
+    record = {
+        "schema_version": 1,
+        "token": token,
+        "status": "pending-delivery",
+        "task_id": "T-0140",
+        "repository_root": str(repository),
+        "origin_agent": "prime-agent",
+        "origin_transport": transport,
+        "round": 1,
+        "max_rounds": 1,
+        "expires_at": "2026-08-12T00:00:00+00:00",
+        "conversation": None,
+    }
+    callback_path(repository, token).write_text(json.dumps(record), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="invalid Prime Agent callback transport"):
+        abandon_callback(
+            repository=repository,
+            token=token,
+            reason="malformed Prime target must fail closed",
+        )
+    saved = json.loads(callback_path(repository, token).read_text(encoding="utf-8"))
+    assert saved["status"] == "pending-delivery"

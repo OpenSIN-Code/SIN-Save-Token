@@ -58,19 +58,23 @@ from .verification import (
     validate_scope,
 )
 from .web_callbacks import (
+    abandon_callback,
     acknowledge_callback,
     bind_callback,
     callback_status,
     cancel_callback,
     cancel_callback_relay,
     install_callback_relay,
+    mark_archive_verified,
     open_callback,
+    reconcile_callback_handoff,
     relay_callback,
     resolve_callback_token,
     resolve_callback_token_for_delivery_id,
     resolve_callback_token_for_relay,
     resolve_callback_token_for_status,
     send_callback,
+    stage_callback_handoff,
 )
 from .writer_reservation import release_writer, reservation_status
 
@@ -1809,6 +1813,7 @@ def _cmd_web_callback_open(args: argparse.Namespace) -> int:
         task_id=args.task_id,
         origin_terminal=args.origin_terminal,
         origin_session_id=args.origin_session,
+        prime_agent_session_id=args.prime_agent_session,
         ttl_minutes=args.ttl_minutes,
         round_number=args.round,
         max_rounds=args.max_rounds,
@@ -1826,6 +1831,48 @@ def _cmd_web_callback_bind(args: argparse.Namespace) -> int:
         title=args.title,
         profile=args.profile,
         chatgpt_project=args.chatgpt_project,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_web_callback_stage(args: argparse.Namespace) -> int:
+    token = args.callback
+    if token is None:
+        if args.task_id is None or args.round is None:
+            raise ValueError("--task-id requires --round for callback resolution")
+        token = resolve_callback_token(
+            args.repo,
+            task_id=args.task_id,
+            round_number=args.round,
+        )
+    result = stage_callback_handoff(
+        repository=args.repo,
+        token=token,
+        final_status=args.status,
+        summary=args.summary,
+        changed=args.changed,
+        verification=args.verify,
+        next_action=args.next_action,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_web_callback_reconcile(args: argparse.Namespace) -> int:
+    token = args.callback
+    if token is None:
+        if args.task_id is None or args.round is None:
+            raise ValueError("--task-id requires --round for callback resolution")
+        token = resolve_callback_token(
+            args.repo,
+            task_id=args.task_id,
+            round_number=args.round,
+        )
+    result = reconcile_callback_handoff(
+        repository=args.repo,
+        token=token,
+        dry_run=args.dry_run,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
@@ -1878,6 +1925,16 @@ def _cmd_web_callback_relay(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_web_callback_abandon(args: argparse.Namespace) -> int:
+    result = abandon_callback(
+        repository=args.repo,
+        token=args.callback,
+        reason=args.reason,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def _cmd_web_callback_cancel(args: argparse.Namespace) -> int:
     result = cancel_callback(
         repository=args.repo,
@@ -1914,6 +1971,23 @@ def _cmd_web_callback_relay_cancel(args: argparse.Namespace) -> int:
         repository=args.repo,
         token=args.callback,
         reason=args.reason,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_web_callback_archive_verified(args: argparse.Namespace) -> int:
+    token = args.callback
+    if token is None:
+        token = resolve_callback_token_for_delivery_id(
+            args.repo, delivery_id=args.delivery_id
+        )
+    result = mark_archive_verified(
+        repository=args.repo,
+        token=token,
+        delivery_id=args.delivery_id,
+        conversation_url=args.conversation_url,
+        closed_tab_count=args.closed_tab_count,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
@@ -2075,7 +2149,9 @@ def main() -> int:
     )
     p.add_argument("--repo", required=True)
     p.add_argument("--task-id", required=True)
-    p.add_argument("--origin-terminal")
+    origin = p.add_mutually_exclusive_group()
+    origin.add_argument("--origin-terminal")
+    origin.add_argument("--prime-agent-session")
     p.add_argument("--origin-session")
     p.add_argument("--ttl-minutes", type=int, default=24 * 60)
     p.add_argument("--round", type=int, default=1)
@@ -2097,6 +2173,32 @@ def main() -> int:
     p.add_argument("--title")
     p.add_argument("--profile", default="OpenSIN")
     p.add_argument("--chatgpt-project")
+
+    p = sub.add_parser(
+        "web-callback-stage",
+        help="Durably stage a callback-bound completion before transport delivery",
+    )
+    p.add_argument("--repo", required=True)
+    selector = p.add_mutually_exclusive_group(required=True)
+    selector.add_argument("--callback")
+    selector.add_argument("--task-id")
+    p.add_argument("--round", type=int)
+    p.add_argument("--status", required=True, choices=["done", "blocked", "failed"])
+    p.add_argument("--summary", required=True)
+    p.add_argument("--changed", action="append")
+    p.add_argument("--verify", default="unknown")
+    p.add_argument("--next-action")
+
+    p = sub.add_parser(
+        "web-callback-reconcile",
+        help="Validate a staged completion against callback identity/task evidence and deliver it",
+    )
+    p.add_argument("--repo", required=True)
+    selector = p.add_mutually_exclusive_group(required=True)
+    selector.add_argument("--callback")
+    selector.add_argument("--task-id")
+    p.add_argument("--round", type=int)
+    p.add_argument("--dry-run", action="store_true")
 
     p = sub.add_parser(
         "web-callback-send",
@@ -2141,6 +2243,14 @@ def main() -> int:
     p.add_argument("--scheduled", action="store_true", help=argparse.SUPPRESS)
 
     p = sub.add_parser(
+        "web-callback-abandon",
+        help="Terminally abandon an active callback only when its exact target is gone",
+    )
+    p.add_argument("--repo", required=True)
+    p.add_argument("--callback", required=True)
+    p.add_argument("--reason", required=True)
+
+    p = sub.add_parser(
         "web-callback-cancel",
         help="Cancel an unused ChatGPT Web callback capability",
     )
@@ -2169,8 +2279,19 @@ def main() -> int:
     p.add_argument("--reason", default="manual-cancel")
 
     p = sub.add_parser(
+        "web-callback-archive-verified",
+        help="Persist exact archive-and-close proof for a completed web callback",
+    )
+    p.add_argument("--repo", required=True)
+    selector = p.add_mutually_exclusive_group(required=True)
+    selector.add_argument("--callback")
+    selector.add_argument("--delivery-id")
+    p.add_argument("--conversation-url", required=True)
+    p.add_argument("--closed-tab-count", required=True, type=int)
+
+    p = sub.add_parser(
         "web-callback-ack",
-        help="Record one OpenCode TUI receipt and cancel any optional relay",
+        help="Record one orchestrator receipt after required completion gates",
     )
     p.add_argument("--repo", required=True)
     selector = p.add_mutually_exclusive_group(required=True)
@@ -2204,12 +2325,16 @@ def main() -> int:
         "rebuild": _cmd_rebuild,
         "web-callback-open": _cmd_web_callback_open,
         "web-callback-bind": _cmd_web_callback_bind,
+        "web-callback-stage": _cmd_web_callback_stage,
+        "web-callback-reconcile": _cmd_web_callback_reconcile,
         "web-callback-send": _cmd_web_callback_send,
         "web-callback-status": _cmd_web_callback_status,
         "web-callback-relay": _cmd_web_callback_relay,
+        "web-callback-abandon": _cmd_web_callback_abandon,
         "web-callback-cancel": _cmd_web_callback_cancel,
         "web-callback-relay-install": _cmd_web_callback_relay_install,
         "web-callback-relay-cancel": _cmd_web_callback_relay_cancel,
+        "web-callback-archive-verified": _cmd_web_callback_archive_verified,
         "web-callback-ack": _cmd_web_callback_ack,
     }
 

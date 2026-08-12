@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import hmac
 import json
 import os
 import plistlib
 import re
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import uuid
 from contextlib import contextmanager
@@ -620,6 +622,47 @@ def resolve_origin_session(
     }
 
 
+def resolve_prime_agent_session(active_session_id: str) -> dict[str, Any]:
+    """Resolve one live Prime Agent daemon session through its public CLI."""
+    rendered = active_session_id.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", rendered):
+        raise ValueError("invalid Prime Agent active session ID")
+    binary = shutil.which("prime-agent")
+    if binary is None:
+        raise RuntimeError("prime-agent CLI is unavailable")
+    try:
+        process = subprocess.run(
+            [binary, "list", "--json"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError("Prime Agent session inventory is unavailable") from error
+    if process.returncode:
+        raise RuntimeError("Prime Agent session inventory failed")
+    try:
+        payload = json.loads(process.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("Prime Agent session inventory was not JSON") from error
+    sessions = payload.get("sessions") if isinstance(payload, dict) else None
+    matches = [
+        item
+        for item in sessions or []
+        if isinstance(item, dict)
+        and item.get("activeSessionId") == rendered
+        and item.get("lifecycle") == "live"
+    ]
+    if len(matches) != 1:
+        raise RuntimeError("Prime Agent active session is not uniquely live")
+    return {
+        "transport": "prime-agent",
+        "active_session_id": rendered,
+        "cli": "prime-agent",
+    }
+
+
 def _validate_task_id(task_id: str) -> str:
     rendered = task_id.strip()
     if not TASK_PATTERN.fullmatch(rendered):
@@ -663,6 +706,7 @@ def open_callback(
     task_id: str,
     origin_terminal: str | None = None,
     origin_session_id: str | None = None,
+    prime_agent_session_id: str | None = None,
     ttl_minutes: int = DEFAULT_TTL_MINUTES,
     round_number: int = 1,
     max_rounds: int = DEFAULT_MAX_ROUNDS,
@@ -676,11 +720,25 @@ def open_callback(
     if round_number < 1 or (max_rounds and round_number > max_rounds):
         raise ValueError("round must be positive and within max rounds")
 
-    terminal, terminal_source, terminal_record = resolve_origin_terminal(
-        root,
-        origin_terminal,
+    if prime_agent_session_id and (origin_terminal or origin_session_id):
+        raise ValueError(
+            "Prime Agent callbacks cannot combine --prime-agent-session with OpenCode origin fields"
+        )
+    prime_transport = (
+        resolve_prime_agent_session(prime_agent_session_id)
+        if prime_agent_session_id
+        else None
     )
-    session = resolve_origin_session(root, terminal_record, origin_session_id)
+    if prime_transport is None:
+        terminal, terminal_source, terminal_record = resolve_origin_terminal(
+            root,
+            origin_terminal,
+        )
+        session = resolve_origin_session(root, terminal_record, origin_session_id)
+    else:
+        terminal = None
+        terminal_source = "prime-agent"
+        session = None
     now = utc_now()
     token = f"gptwcb_{uuid.uuid4().hex}"
     record: dict[str, Any] = {
@@ -696,6 +754,8 @@ def open_callback(
         "origin_terminal": terminal,
         "origin_terminal_source": terminal_source,
         "origin_session": session,
+        "origin_agent": "prime-agent" if prime_transport else "opencode",
+        "origin_transport": prime_transport,
         "round": round_number,
         "max_rounds": max_rounds,
         "conversation": None,
@@ -711,6 +771,8 @@ def open_callback(
         "origin_terminal": terminal,
         "origin_terminal_source": terminal_source,
         "origin_session": session,
+        "origin_agent": record["origin_agent"],
+        "origin_transport": prime_transport,
         "expires_at": record["expires_at"],
         "round": round_number,
         "max_rounds": max_rounds,
@@ -804,6 +866,8 @@ def callback_status(*, repository: str | Path, token: str) -> dict[str, Any]:
         "task_id": record.get("task_id"),
         "origin_terminal": record.get("origin_terminal"),
         "origin_session": record.get("origin_session"),
+        "origin_agent": record.get("origin_agent", "opencode"),
+        "origin_transport": record.get("origin_transport"),
         "round": record.get("round"),
         "max_rounds": record.get("max_rounds"),
         "conversation": record.get("conversation"),
@@ -817,6 +881,16 @@ def callback_status(*, repository: str | Path, token: str) -> dict[str, Any]:
         "receipt_at": record.get("receipt_at"),
         "delivery_id": record.get("delivery_id"),
         "relay_fallback": record.get("relay_fallback"),
+        "completion_handoff_state": (
+            record.get("completion_handoff", {}).get("state")
+            if isinstance(record.get("completion_handoff"), dict)
+            else None
+        ),
+        "completion_handoff_staged_at": (
+            record.get("completion_handoff", {}).get("staged_at")
+            if isinstance(record.get("completion_handoff"), dict)
+            else None
+        ),
     }
 
 
@@ -834,6 +908,210 @@ def _changed_files(values: list[str] | None) -> list[str]:
                 continue
             changed.append(rendered)
     return list(dict.fromkeys(changed))[:100]
+
+
+def _handoff_identity(record: dict[str, Any]) -> dict[str, Any]:
+    """Return the callback identity that a staged completion is bound to."""
+    return {
+        "schema_version": record.get("schema_version"),
+        "task_id": record.get("task_id"),
+        "round": record.get("round"),
+        "repository_root": record.get("repository_root"),
+        "origin_agent": record.get("origin_agent"),
+        "origin_terminal": record.get("origin_terminal"),
+        "origin_session": record.get("origin_session"),
+        "origin_transport": record.get("origin_transport"),
+        "conversation": record.get("conversation"),
+        "relay_id": record.get("relay_id"),
+        "expires_at": record.get("expires_at"),
+    }
+
+
+def _handoff_mac(token: str, payload: dict[str, Any]) -> str:
+    material = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hmac.new(token.encode("utf-8"), material, hashlib.sha256).hexdigest()
+
+
+def stage_callback_handoff(
+    *,
+    repository: str | Path,
+    token: str,
+    final_status: str,
+    summary: str,
+    changed: list[str] | None = None,
+    verification: str = "unknown",
+    next_action: str | None = None,
+) -> dict[str, Any]:
+    """Persist a cryptographically callback-bound completion before delivery.
+
+    This is intentionally separate from transport delivery. If the ChatGPT tool
+    execution window ends after staging but before ``web-callback-send``, the
+    local watchdog can validate this handoff against the exact callback identity
+    and canonical taskplan evidence, then perform the original one-shot send.
+    """
+    root = resolve_repository(repository)
+    if final_status not in FINAL_STATUSES:
+        raise ValueError(
+            "callback status must be one of: " + ", ".join(sorted(FINAL_STATUSES))
+        )
+    rendered_summary = _compact(summary, 700)
+    if not rendered_summary:
+        raise ValueError("callback summary must not be empty")
+    rendered_changed = _changed_files(changed)
+    rendered_verification = _compact(verification, 500) or "unknown"
+    with callback_lock(root, token):
+        record = load_callback(root, token)
+        if _expire_callback_if_needed(root, token, record):
+            raise RuntimeError("callback capability has expired")
+        if record.get("status") != "open":
+            raise RuntimeError("only an open callback can stage completion")
+        conversation = record.get("conversation")
+        if not isinstance(conversation, dict) or not conversation.get("url"):
+            raise RuntimeError("callback must be bound to a canonical conversation before staging")
+        if final_status == "done" and rendered_verification.casefold() in {
+            "unknown",
+            "none",
+            "not-run",
+            "not run",
+        }:
+            raise ValueError("done handoff requires concrete verification")
+        action = _compact(next_action or _default_next_action(record), 1800)
+        payload = {
+            "version": 1,
+            "identity": _handoff_identity(record),
+            "outcome": {
+                "status": final_status,
+                "summary": rendered_summary,
+                "changed_files": rendered_changed,
+                "verification": rendered_verification,
+                "next_action": action,
+            },
+            "staged_at": isoformat(utc_now()),
+        }
+        record["completion_handoff"] = {
+            **payload,
+            "mac_sha256": _handoff_mac(token, payload),
+            "state": "staged",
+        }
+        atomic_write_json(callback_path(root, token), record)
+    return {
+        "ok": True,
+        "status": "callback-handoff-staged",
+        "task_id": record.get("task_id"),
+        "round": record.get("round"),
+        "conversation": record.get("conversation"),
+    }
+
+
+def validate_callback_handoff(
+    repository: Path,
+    token: str,
+    record: dict[str, Any],
+) -> dict[str, Any]:
+    handoff = record.get("completion_handoff")
+    if not isinstance(handoff, dict) or handoff.get("state") != "staged":
+        raise RuntimeError("callback has no staged completion handoff")
+    payload = {
+        "version": handoff.get("version"),
+        "identity": handoff.get("identity"),
+        "outcome": handoff.get("outcome"),
+        "staged_at": handoff.get("staged_at"),
+    }
+    expected = _handoff_mac(token, payload)
+    actual = str(handoff.get("mac_sha256") or "")
+    if not hmac.compare_digest(expected, actual):
+        raise RuntimeError("completion handoff MAC validation failed")
+    if payload.get("identity") != _handoff_identity(record):
+        raise RuntimeError("completion handoff callback identity mismatch")
+    outcome = payload.get("outcome")
+    if not isinstance(outcome, dict) or outcome.get("status") not in FINAL_STATUSES:
+        raise RuntimeError("completion handoff outcome is invalid")
+    if Path(str(record.get("repository_root", ""))).resolve() != repository:
+        raise RuntimeError("completion handoff repository mismatch")
+    return outcome
+
+
+def _validate_taskplan_evidence(
+    repository: Path,
+    *,
+    task_id: str,
+    final_status: str,
+) -> dict[str, Any]:
+    db_path = repository / ".sin-gpt-web" / "taskplan.sqlite3"
+    if not db_path.is_file():
+        raise RuntimeError("canonical taskplan database is missing")
+    connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        integrity = connection.execute("PRAGMA integrity_check").fetchone()
+        if not integrity or integrity[0] != "ok":
+            raise RuntimeError("canonical taskplan integrity check failed")
+        row = connection.execute(
+            "SELECT status,evidence,completion_report,blocked_reason FROM tasks WHERE id=?",
+            (task_id,),
+        ).fetchone()
+    finally:
+        connection.close()
+    if row is None:
+        raise RuntimeError("callback task is missing from canonical taskplan")
+    status = str(row["status"] or "")
+    evidence = str(row["evidence"] or "").strip()
+    report = str(row["completion_report"] or "").strip()
+    blocker = str(row["blocked_reason"] or "").strip()
+    if final_status == "done" and (status != "done" or not evidence or not report):
+        raise RuntimeError("done handoff lacks independent canonical task completion evidence")
+    if final_status == "blocked" and (status != "blocked" or not blocker):
+        raise RuntimeError("blocked handoff lacks canonical task blocker evidence")
+    return {
+        "task_status": status,
+        "evidence_present": bool(evidence),
+        "completion_report_present": bool(report),
+        "blocked_reason_present": bool(blocker),
+    }
+
+
+def reconcile_callback_handoff(
+    *,
+    repository: str | Path,
+    token: str,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Validate a staged completion and perform the original callback send."""
+    root = resolve_repository(repository)
+    with callback_lock(root, token):
+        record = load_callback(root, token)
+        if _expire_callback_if_needed(root, token, record):
+            raise RuntimeError("callback capability has expired")
+        if record.get("status") != "open":
+            return {
+                "ok": True,
+                "status": "callback-handoff-noop",
+                "callback_status": record.get("status"),
+                "task_id": record.get("task_id"),
+                "round": record.get("round"),
+            }
+        outcome = validate_callback_handoff(root, token, record)
+        taskplan = _validate_taskplan_evidence(
+            root,
+            task_id=str(record.get("task_id") or ""),
+            final_status=str(outcome["status"]),
+        )
+    result = send_callback(
+        repository=root,
+        token=token,
+        final_status=str(outcome["status"]),
+        summary=str(outcome["summary"]),
+        changed=list(outcome.get("changed_files") or []),
+        verification=str(outcome.get("verification") or "unknown"),
+        next_action=str(outcome.get("next_action") or ""),
+        dry_run=dry_run,
+        relay_fallback=not dry_run,
+    )
+    result["handoff_reconciled"] = True
+    result["taskplan_validation"] = taskplan
+    return result
 
 
 def _default_next_action(record: dict[str, Any]) -> str:
@@ -1175,11 +1453,24 @@ def render_callback_message(
         conversation.get("url") if isinstance(conversation, dict) else None
     )
     page_id = conversation.get("page_id") if isinstance(conversation, dict) else None
+    transport = record.get("origin_transport")
+    prime_target = (
+        transport.get("active_session_id")
+        if isinstance(transport, dict) and transport.get("transport") == "prime-agent"
+        else None
+    )
+    session_display = (
+        f"prime_session={prime_target} "
+        if prime_target
+        else f"opencode_session={session_id or 'unresolved'} "
+    )
     header = (
         "SIN_GPT_WEB_CALLBACK "
         f"task={record['task_id']} status={final_status} "
         f"delivery={record['delivery_id']} "
-        f"session={session_id or 'unresolved'} "
+        f"{session_display}"
+        f"transport={'prime-agent' if prime_target else 'opencode-terminal'} "
+        f"target={prime_target or session_id or 'unresolved'} "
         f"round={record.get('round', 1)}/"
         f"{'∞' if int(record.get('max_rounds', DEFAULT_MAX_ROUNDS) or 0) == 0 else record.get('max_rounds', DEFAULT_MAX_ROUNDS)}"
     )
@@ -1220,6 +1511,117 @@ def render_callback_message(
     )
 
 
+def _deliver_prime_agent_callback(
+    repository: Path,
+    token: str,
+    record: dict[str, Any],
+    *,
+    dry_run: bool,
+) -> dict[str, Any]:
+    transport = record.get("origin_transport")
+    session_id = (
+        transport.get("active_session_id")
+        if isinstance(transport, dict) and transport.get("transport") == "prime-agent"
+        else None
+    )
+    if not isinstance(session_id, str):
+        raise RuntimeError("invalid Prime Agent callback transport")
+    try:
+        resolve_prime_agent_session(session_id)
+    except RuntimeError:
+        record.update(
+            {
+                "status": "pending-delivery",
+                "delivery_reason": "prime-agent-session-offline",
+            }
+        )
+        atomic_write_json(callback_path(repository, token), record)
+        return {
+            "ok": True,
+            "status": "callback-pending",
+            "callback": token,
+            "task_id": record.get("task_id"),
+            "delivery_reason": "prime-agent-session-offline",
+        }
+    message = render_callback_message(
+        record,
+        final_status=str(record["callback_status"]),
+        summary=str(record["summary"]),
+        changed=list(record.get("changed_files") or []),
+        verification=str(record.get("verification") or "unknown"),
+        next_action=str(record.get("next_action") or ""),
+    )
+    if dry_run:
+        return {
+            "ok": True,
+            "status": "callback-dry-run",
+            "callback": token,
+            "origin_prime_agent_session": session_id,
+            "target_source": "prime-agent-session",
+            "message": message,
+        }
+    binary = shutil.which("prime-agent")
+    if binary is None:
+        raise RuntimeError("prime-agent CLI is unavailable")
+    try:
+        process = subprocess.run(
+            [binary, "send", session_id, message, "--json"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        payload = json.loads(process.stdout) if process.returncode == 0 else None
+        target = payload.get("target") if isinstance(payload, dict) else None
+        if (
+            not isinstance(target, dict)
+            or target.get("activeSessionId") != session_id
+            or payload.get("deliveryStatus") not in {"delivered", "queued"}
+        ):
+            raise RuntimeError("Prime Agent delivery receipt was invalid")
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, RuntimeError) as error:
+        record.update(
+            {
+                "status": "delivery-indeterminate",
+                "delivery_state": "indeterminate",
+                "delivery_reason": "prime-agent-send-indeterminate",
+                "delivery_error": _compact(str(error), 700) or type(error).__name__,
+            }
+        )
+        atomic_write_json(callback_path(repository, token), record)
+        return {
+            "ok": True,
+            "status": "callback-delivery-indeterminate",
+            "callback": token,
+            "task_id": record.get("task_id"),
+            "delivery_id": record.get("delivery_id"),
+            "delivery_reason": "prime-agent-send-indeterminate",
+        }
+    record.update(
+        {
+            "status": "sent",
+            "delivery_state": "sent",
+            "delivery_prime_agent_session": session_id,
+            "delivery_target_source": "prime-agent-session",
+            "delivery_receipt_status": payload["deliveryStatus"],
+            "sent_at": isoformat(utc_now()),
+        }
+    )
+    atomic_write_json(callback_path(repository, token), record)
+    return {
+        "ok": True,
+        "status": "callback-sent",
+        "callback": token,
+        "task_id": record.get("task_id"),
+        "callback_status": record.get("callback_status"),
+        "origin_prime_agent_session": session_id,
+        "round": record.get("round"),
+        "max_rounds": record.get("max_rounds"),
+        "conversation": record.get("conversation"),
+        "sent_at": record.get("sent_at"),
+    }
+
+
 def _deliver_pending_callback(
     repository: Path,
     token: str,
@@ -1250,6 +1652,9 @@ def _deliver_pending_callback(
             "task_id": record.get("task_id"),
             "delivery_id": record.get("delivery_id"),
         }
+    transport = record.get("origin_transport")
+    if isinstance(transport, dict) and transport.get("transport") == "prime-agent":
+        return _deliver_prime_agent_callback(repository, token, record, dry_run=dry_run)
     terminal, target_source = resolve_delivery_terminal(repository, record)
     record["delivery_attempts"] = int(record.get("delivery_attempts") or 0) + 1
     record["last_delivery_attempt_at"] = isoformat(utc_now())
@@ -1397,6 +1802,26 @@ def send_callback(
             raise RuntimeError("callback capability has expired")
         if record.get("status") == "open":
             action = _compact(next_action or _default_next_action(record), 1800)
+            if isinstance(record.get("completion_handoff"), dict):
+                staged = validate_callback_handoff(root, token, record)
+                staged_values = (
+                    str(staged.get("status") or ""),
+                    str(staged.get("summary") or ""),
+                    list(staged.get("changed_files") or []),
+                    str(staged.get("verification") or ""),
+                    str(staged.get("next_action") or ""),
+                )
+                provided_values = (
+                    final_status,
+                    rendered_summary,
+                    rendered_changed,
+                    rendered_verification,
+                    action,
+                )
+                if staged_values != provided_values:
+                    raise RuntimeError(
+                        "callback send does not match staged completion handoff"
+                    )
             delivery_id = f"gptwcd_{uuid.uuid4().hex}"
             message = render_callback_message(
                 {**record, "delivery_id": delivery_id},
@@ -1434,6 +1859,13 @@ def send_callback(
                     ).hexdigest(),
                 }
             )
+            if isinstance(record.get("completion_handoff"), dict):
+                record["completion_handoff"] = {
+                    **record["completion_handoff"],
+                    "state": "consumed",
+                    "consumed_at": isoformat(utc_now()),
+                    "delivery_id": delivery_id,
+                }
             atomic_write_json(callback_path(root, token), record)
         elif record.get("status") == "delivery-indeterminate":
             return _deliver_pending_callback(root, token, record, dry_run=dry_run)
@@ -1494,13 +1926,52 @@ def relay_callback(
         return result
 
 
+def mark_archive_verified(
+    *,
+    repository: str | Path,
+    token: str,
+    delivery_id: str,
+    conversation_url: str,
+    closed_tab_count: int,
+) -> dict[str, Any]:
+    """Persist the exact archive-and-close proof required by a done receipt."""
+    root = resolve_repository(repository)
+    with callback_lock(root, token):
+        record = load_callback(root, token)
+        if record.get("delivery_id") != delivery_id or not DELIVERY_ID_PATTERN.fullmatch(delivery_id):
+            raise RuntimeError("archive proof delivery ID does not match")
+        if record.get("callback_status") != "done":
+            raise RuntimeError("archive proof is valid only for a done callback")
+        conversation = record.get("conversation")
+        expected_url = conversation.get("url") if isinstance(conversation, dict) else None
+        if not expected_url or str(expected_url) != str(conversation_url):
+            raise RuntimeError("archive proof conversation does not match callback binding")
+        if int(closed_tab_count) < 1:
+            raise RuntimeError("archive proof requires at least one closed matching tab")
+        record["archive_gate"] = {
+            "status": "verified",
+            "delivery_id": delivery_id,
+            "conversation_url": str(conversation_url),
+            "closed_tab_count": int(closed_tab_count),
+            "verified_at": isoformat(utc_now()),
+        }
+        atomic_write_json(callback_path(root, token), record)
+    return {
+        "ok": True,
+        "status": "callback-archive-verified",
+        "task_id": record.get("task_id"),
+        "round": record.get("round"),
+        "delivery_id": delivery_id,
+    }
+
+
 def acknowledge_callback(
     *,
     repository: str | Path,
     token: str,
     delivery_id: str,
 ) -> dict[str, Any]:
-    """Record one TUI receipt and remove any optional relay without polling."""
+    """Record one receipt only after any required completion gate is proven."""
     root = resolve_repository(repository)
     with callback_lock(root, token):
         record = load_callback(root, token)
@@ -1520,6 +1991,18 @@ def acknowledge_callback(
             raise RuntimeError("callback capability has expired")
         if record.get("status") not in {"sent", "delivery-indeterminate"}:
             raise RuntimeError("only a delivered callback can be acknowledged")
+        if record.get("callback_status") == "done":
+            gate = record.get("archive_gate")
+            conversation = record.get("conversation")
+            expected_url = conversation.get("url") if isinstance(conversation, dict) else None
+            if (
+                not isinstance(gate, dict)
+                or gate.get("status") != "verified"
+                or gate.get("delivery_id") != delivery_id
+                or gate.get("conversation_url") != expected_url
+                or int(gate.get("closed_tab_count") or 0) < 1
+            ):
+                raise RuntimeError("completed callback archive-and-close gate is not verified")
         record.update(
             {
                 "status": "acknowledged",
@@ -1534,6 +2017,98 @@ def acknowledge_callback(
         "reused": False,
         "task_id": record.get("task_id"),
         "round": record.get("round"),
+    }
+
+
+def abandon_callback(
+    *,
+    repository: str | Path,
+    token: str,
+    reason: str,
+) -> dict[str, Any]:
+    """Terminally abandon an active callback only after its target is absent.
+
+    This is an explicit operator recovery path for orphaned callback records.
+    Unlike ordinary cancellation, it permits a persisted completion that cannot
+    be delivered, but it never abandons a callback whose exact target resolves.
+    The record, delivery data, and original repository claim remain intact for
+    audit; only a terminal ``abandoned`` state is appended.
+    """
+    root = resolve_repository(repository)
+    rendered_reason = _compact(reason, 700)
+    if not rendered_reason:
+        raise ValueError("abandonment reason must not be empty")
+    with callback_lock(root, token):
+        # Deliberately validate the physical, repository-local capability here
+        # without requiring its historical repository_root claim to still exist.
+        # The latter is precisely the orphan-recovery case.
+        path = callback_path(root, token)
+        if not path.is_file():
+            raise RuntimeError(f"callback capability not found: {token}")
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise RuntimeError(f"invalid callback capability: {token}") from error
+        if (
+            not isinstance(record, dict)
+            or record.get("schema_version") != CALLBACK_SCHEMA_VERSION
+            or record.get("token") != token
+        ):
+            raise RuntimeError(f"invalid callback capability: {token}")
+        status = record.get("status")
+        if status == "abandoned":
+            return {
+                "ok": True,
+                "status": "callback-abandoned",
+                "callback": token,
+                "reused": True,
+            }
+        if status not in {"open", "pending-delivery", "delivery-indeterminate"}:
+            raise RuntimeError(
+                f"a {status} callback cannot be abandoned; delivery may have occurred"
+            )
+        transport = record.get("origin_transport")
+        if record.get("origin_agent") == "prime-agent":
+            if not isinstance(transport, dict) or transport.get("transport") != "prime-agent":
+                raise RuntimeError("invalid Prime Agent callback transport")
+            session_id = transport.get("active_session_id")
+            if not isinstance(session_id, str):
+                raise RuntimeError("invalid Prime Agent callback transport")
+            try:
+                resolve_prime_agent_session(session_id)
+            except RuntimeError:
+                target_source = "prime-agent-session-offline"
+            else:
+                raise RuntimeError(
+                    "callback target still resolves; use normal delivery or cancellation"
+                )
+        else:
+            terminal, target_source = resolve_delivery_terminal(root, record)
+            if terminal:
+                raise RuntimeError(
+                    "callback target still resolves; use normal delivery or cancellation"
+                )
+        record.update(
+            {
+                "status": "abandoned",
+                "abandoned_at": isoformat(utc_now()),
+                "abandon_reason": rendered_reason,
+                "abandon_delivery_reason": target_source,
+                "abandon_repository_root_mismatch": (
+                    Path(str(record.get("repository_root", ""))).resolve() != root
+                ),
+            }
+        )
+        _remove_relay_fallback(root, record, reason="callback-abandoned")
+        atomic_write_json(path, record)
+    return {
+        "ok": True,
+        "status": "callback-abandoned",
+        "callback": token,
+        "reused": False,
+        "task_id": record.get("task_id"),
+        "round": record.get("round"),
+        "delivery_reason": target_source,
     }
 
 
@@ -1557,7 +2132,12 @@ def cancel_callback(
                 "callback": token,
                 "reused": True,
             }
-        if status != "open":
+        replaceable_pending = (
+            status == "pending-delivery"
+            and record.get("callback_status") == "blocked"
+            and record.get("delivery_state") == "pending"
+        )
+        if status != "open" and not replaceable_pending:
             raise RuntimeError(
                 f"a {status} callback cannot be cancelled; capabilities are one-shot"
             )
