@@ -302,6 +302,71 @@ def test_session_digest_rejects_unknown_format(tmp_path: Path) -> None:
     assert namespace["_detect"](str(target)) is None
 
 
+def test_session_digest_supports_prime_agent_jsonl(tmp_path: Path) -> None:
+    target = tmp_path / "prime.jsonl"
+    rows = [
+        {
+            "type": "session",
+            "version": 3,
+            "id": "prime-session",
+            "cwd": str(tmp_path),
+            "git": {"commit": "abc123", "branch": "main"},
+        },
+        {
+            "type": "message",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "Implement the closeout watcher."}],
+            },
+        },
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Implemented and verified the watcher."},
+                    {
+                        "type": "toolCall",
+                        "name": "read",
+                        "arguments": {"file_path": "shared/skills/sin-after-work/SKILL.md"},
+                    },
+                ],
+            },
+        },
+        {
+            "type": "message",
+            "message": {
+                "role": "toolResult",
+                "content": [{"type": "text", "text": "raw tool output must not enter digest"}],
+            },
+        },
+    ]
+    target.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    namespace = runpy.run_path(str(ROOT / "bin" / "session-digest"))
+    assert namespace["_detect"](str(target)) == "prime-agent"
+    events = namespace["_adapter_prime_agent"](str(target))
+    assert [event["role"] for event in events] == ["user", "assistant"]
+    assert events[1]["tools"] == ["read"]
+    assert events[1]["files"] == ["shared/skills/sin-after-work/SKILL.md"]
+    digest = namespace["_digest"](events)
+    assert "Implement the closeout watcher" in digest
+    assert "raw tool output" not in digest
+
+
+def test_session_digest_redacts_common_secret_shapes() -> None:
+    namespace = runpy.run_path(str(ROOT / "bin" / "session-digest"))
+    redact = namespace["_redact_sensitive"]
+    text = (
+        "use nvapi-ABCDEFGHIJKLMNOPQRSTUVWXYZ123456 and "
+        "Bearer abcdefghijklmnopqrstuvwxyz.123456 and api_key=super-secret-value"
+    )
+    redacted = redact(text)
+    assert "nvapi-" not in redacted
+    assert "abcdefghijklmnopqrstuvwxyz.123456" not in redacted
+    assert "super-secret-value" not in redacted
+    assert redacted.count("<redacted>") >= 3
+
+
 def test_agent_grep_no_match_message_is_stderr(tmp_path: Path) -> None:
     target = tmp_path / "sample.txt"
     target.write_text("hello\n", encoding="utf-8")

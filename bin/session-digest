@@ -12,16 +12,19 @@ token-saving core: instead of re-reading a 6 MB JSONL or re-deriving context, th
 next session ingests a ~1–2 KB digest.
 
 Design: a thin per-harness *adapter* normalizes a transcript to a list of
-{role, text, tool, files} events; the digester is harness-agnostic. Two adapters
-ship: Claude Code JSONL (`~/.claude/projects/<id>/*.jsonl`) and opencode
-(SQLite at `~/.local/share/opencode/opencode.db`, message+part rows). A mimo
-adapter slots in the same way once its on-disk format is confirmed.
+{role, text, tool, files} events; the digester is harness-agnostic. Three adapters
+ship: Claude Code JSONL (`~/.claude/projects/<id>/*.jsonl`), opencode
+(SQLite at `~/.local/share/opencode/opencode.db`, message+part rows), and
+Prime-Agent JSONL (`~/.prime/agent/sessions/*.jsonl`). A mimo adapter slots in
+the same way once its on-disk format is confirmed.
 
 Usage:
   session-digest <transcript.jsonl>          digest a Claude JSONL file
   session-digest ses_XXXX                     digest an opencode session (by id)
   session-digest --latest                     newest Claude JSONL for cwd
   session-digest --latest --format opencode   newest opencode session for cwd
+  session-digest --latest --format prime-agent newest Prime-Agent session for cwd
+  session-digest <prime.jsonl> --format prime-agent
   session-digest <file> --max-files 20        cap files listed (default 25)
   session-digest <file> --format claude        force adapter (default: auto)
 
@@ -37,6 +40,7 @@ import sqlite3
 
 
 _OPENCODE_DB = os.path.expanduser("~/.local/share/opencode/opencode.db")
+_PRIME_SESSIONS = os.path.expanduser("~/.prime/agent/sessions")
 
 
 # --- adapters: normalize a transcript to events -------------------------------
@@ -173,7 +177,69 @@ def _adapter_opencode(path):
     return events
 
 
-_ADAPTERS = {"claude": _adapter_claude, "opencode": _adapter_opencode}
+def _adapter_prime_agent(path):
+    """Prime-Agent JSONL -> normalized events.
+
+    Prime stores one session header row followed by `message` rows. User and
+    assistant text parts become resume text; assistant `toolCall` parts expose
+    tool names and file-ish inputs without copying tool outputs into the digest.
+    """
+    if not os.path.isfile(path):
+        return []
+    events = []
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict) or row.get("type") != "message":
+                continue
+            msg = row.get("message")
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role", "")
+            if role not in ("user", "assistant"):
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            text_parts, tools, files = [], [], []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                pt = part.get("type")
+                if pt == "text":
+                    text = part.get("text", "")
+                    if isinstance(text, str) and text:
+                        text_parts.append(text)
+                elif pt == "toolCall":
+                    name = part.get("name") or part.get("toolName")
+                    if isinstance(name, str) and name:
+                        tools.append(name)
+                    args = part.get("arguments")
+                    if not isinstance(args, dict):
+                        args = part.get("input")
+                    if isinstance(args, dict):
+                        for key in _OC_FILE_KEYS:
+                            value = args.get(key)
+                            if isinstance(value, str) and value:
+                                files.append(value)
+            events.append({
+                "role": role,
+                "text": "\n".join(t for t in text_parts if t).strip(),
+                "tools": tools,
+                "files": files,
+                "compact": False,
+            })
+    return events
+
+
+_ADAPTERS = {
+    "claude": _adapter_claude,
+    "opencode": _adapter_opencode,
+    "prime-agent": _adapter_prime_agent,
+}
 
 
 def _latest_opencode_session(cwd=None):
@@ -197,8 +263,30 @@ def _latest_opencode_session(cwd=None):
         con.close()
 
 
+def _latest_prime_agent_session(cwd=None):
+    """Newest Prime-Agent top-level session JSONL for cwd, then newest globally."""
+    cwd = os.path.realpath(cwd or os.getcwd())
+    candidates = glob.glob(os.path.join(_PRIME_SESSIONS, "*.jsonl"))
+    if not candidates:
+        return None
+    matching = []
+    for candidate in candidates:
+        try:
+            with open(candidate, "r", encoding="utf-8", errors="replace") as fh:
+                header = json.loads(fh.readline())
+        except (OSError, json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(header, dict) or header.get("type") != "session":
+            continue
+        session_cwd = header.get("cwd")
+        if isinstance(session_cwd, str) and os.path.realpath(session_cwd) == cwd:
+            matching.append(candidate)
+    pool = matching or candidates
+    return max(pool, key=os.path.getmtime) if pool else None
+
+
 def _detect(path):
-    """Sniff format. Claude JSONL file, or opencode session id / db."""
+    """Sniff Claude/Prime JSONL, or opencode session id / db."""
     if path.startswith("ses_"):
         return "opencode"
     if path.endswith(".db"):
@@ -207,6 +295,8 @@ def _detect(path):
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             first = fh.readline()
         d = json.loads(first)
+        if isinstance(d, dict) and d.get("type") == "session" and isinstance(d.get("cwd"), str):
+            return "prime-agent"
         if isinstance(d, dict) and ("sessionId" in d or "session_id" in d or d.get("type") in (
                 "user", "assistant", "ai-title", "system")):
             return "claude"
@@ -217,10 +307,25 @@ def _detect(path):
 
 # --- digest -------------------------------------------------------------------
 _FIRST_SENT = re.compile(r"[^.!?\n]{4,240}[.!?]?")
+_SECRET_PATTERNS = (
+    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{12,}"),
+    re.compile(r"\b(?:sk-|nvapi-|gh[pousr]_|github_pat_)[A-Za-z0-9_-]{12,}\b", re.I),
+    re.compile(
+        r"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password)"
+        r"\b\s*[:=]\s*[^\s,;]{6,}"
+    ),
+)
+
+
+def _redact_sensitive(text):
+    value = text
+    for pattern in _SECRET_PATTERNS:
+        value = pattern.sub(lambda m: f"{m.group(1)}=<redacted>" if m.lastindex else "<redacted>", value)
+    return value
 
 
 def _first_line(text, n=200):
-    text = text.strip().replace("\n", " ")
+    text = _redact_sensitive(text.strip().replace("\n", " "))
     return (text[:n] + "…") if len(text) > n else text
 
 
@@ -346,6 +451,12 @@ def main(argv):
                 sys.stderr.write("session-digest: no opencode session found for cwd\n")
                 return 2
             path, fmt = sid, "opencode"
+        elif want == "prime-agent":
+            path = _latest_prime_agent_session()
+            if not path:
+                sys.stderr.write("session-digest: no Prime-Agent transcript found for cwd\n")
+                return 2
+            fmt = "prime-agent"
         else:
             path = _latest_claude_transcript()
             if not path:
