@@ -14,7 +14,9 @@ graphify-out/
 # local agent/tool state
 .qoder/
 .sin/
+.sin-goal/
 .sin-gpt-web/
+/progress.html
 .skillopt-sleep/
 .mimocode/
 sin_goal_mode.db

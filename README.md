@@ -612,16 +612,20 @@ session-digest --latest                    # Claude: neueste JSONL für cwd
 
 session-digest ses_09d50c0e4ffe…           # opencode: Session per id
 session-digest --latest --format opencode  # opencode: neueste Session für cwd
+session-digest --latest --format prime-agent # Prime-Agent: neueste JSONL für cwd
 # 23/36-Turn-Session  →  375 tok Digest
 ```
 
 Architektur: dünne **Adapter** normalisieren ein Transcript zu Events; der
-Digester ist harness-agnostisch. **Zwei Adapter liefern aus:**
+Digester ist harness-agnostisch. **Drei Adapter liefern aus:**
 - **Claude Code JSONL** (`~/.claude/projects/<id>/*.jsonl`).
 - **opencode** — Transcripts liegen in SQLite (`~/.local/share/opencode/opencode.db`),
   nicht als JSON-Files: eine `message`-Zeile (role) + N `part`-Zeilen (text/tool);
   Tool-Dateipfade in `part.data.state.input.filePath`. Der Adapter setzt Text +
   Tools pro Message aus den Parts zusammen.
+- **Prime-Agent JSONL** (`~/.prime/agent/sessions/*.jsonl`) — Session-Header plus
+  `message`-Zeilen; User/Assistant-Text und Tool-Dateipfade werden normalisiert,
+  rohe Tool-Resultate und Thinking bleiben aus dem Resume-Brief heraus.
 
 Damit ist echtes Cross-Harness-Resume live: einen `orca`-Sub (opencode/mimo)
 laufen lassen → dessen opencode-Session digesten → Claude damit seeden, ohne
