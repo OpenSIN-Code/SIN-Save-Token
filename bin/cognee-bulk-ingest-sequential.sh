@@ -27,12 +27,6 @@ EOF
   exit 2
 fi
 
-if [ -z "${COGNEE_API_KEY:-}" ] && [ -f "$HOME/.cognee-plugin/api_key.json" ]; then
-  COGNEE_API_KEY="$(python3 -c 'import json;from pathlib import Path;d=json.loads(Path.home().joinpath(".cognee-plugin/api_key.json").read_text());print(d.get("api_key")or d.get("key")or"")')"
-  export COGNEE_API_KEY
-fi
-: "${COGNEE_API_KEY:?set COGNEE_API_KEY or api_key.json}"
-
 MAX_DOCS="${COGNEE_BULK_MAX_DOCS:-3}"
 MAX_CHARS="${COGNEE_BULK_MAX_CHARS:-4000}"
 

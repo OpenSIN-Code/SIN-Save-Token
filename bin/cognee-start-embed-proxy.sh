@@ -5,18 +5,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOST="${COGNEE_EMBED_PROXY_HOST:-127.0.0.1}"
 PORT="${COGNEE_EMBED_PROXY_PORT:-8012}"
 VENV_PY="${COGNEE_VENV_PYTHON:-$HOME/.cognee-plugin/venv/bin/python}"
-KEY_FILE="${GEMINI_API_KEY_FILE:-$HOME/.cognee-plugin/secrets/gemini_api_key}"
+KEY_FILE="${GEMINI_API_KEY_FILE:-}"
+SIN_INFISICAL="${SIN_INFISICAL_BIN:-$HOME/.local/bin/sin-infisical}"
 LOG_DIR="${COGNEE_EMBED_PROXY_LOG_DIR:-$HOME/.cognee-plugin/logs}"
 mkdir -p "$LOG_DIR"
 
 if [ ! -x "$VENV_PY" ]; then
   echo "error: cognee venv python missing: $VENV_PY" >&2
   exit 1
-fi
-
-if [ ! -f "$KEY_FILE" ]; then
-  echo "warn: no Gemini key at $KEY_FILE — proxy will use local mxbai only" >&2
-  echo "  store key:  umask 077; cat > $KEY_FILE  # paste key, Ctrl-D; chmod 600 $KEY_FILE" >&2
 fi
 
 # Free port if occupied by old proxy
@@ -34,10 +30,16 @@ export COGNEE_EMBED_PROXY_PORT="$PORT"
 export EMBEDDING_DIMENSIONS="${EMBEDDING_DIMENSIONS:-1024}"
 export GEMINI_EMBED_MODEL="${GEMINI_EMBED_MODEL:-gemini-embedding-001}"
 export COGNEE_FALLBACK_EMBED_MODEL="${COGNEE_FALLBACK_EMBED_MODEL:-mixedbread-ai/mxbai-embed-large-v1}"
-export GEMINI_API_KEY_FILE="$KEY_FILE"
+if [ -n "$KEY_FILE" ]; then export GEMINI_API_KEY_FILE="$KEY_FILE"; fi
 
-nohup "$VENV_PY" "$ROOT/bin/cognee-embed-proxy.py" \
-  >"$LOG_DIR/embed-proxy.log" 2>&1 &
+if [ -n "${GEMINI_API_KEY:-}" ]; then
+  nohup "$VENV_PY" "$ROOT/bin/cognee-embed-proxy.py" >"$LOG_DIR/embed-proxy.log" 2>&1 &
+elif [ -x "$SIN_INFISICAL" ]; then
+  nohup "$SIN_INFISICAL" agent run --keys GEMINI_API_KEY -- "$VENV_PY" "$ROOT/bin/cognee-embed-proxy.py" >"$LOG_DIR/embed-proxy.log" 2>&1 &
+else
+  echo "error: GEMINI_API_KEY not set and sin-infisical unavailable" >&2
+  exit 1
+fi
 echo "started embed-proxy pid=$! log=$LOG_DIR/embed-proxy.log"
 
 for i in $(seq 1 30); do

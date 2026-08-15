@@ -2,7 +2,7 @@
 """Fleet-wide Cognee CLI (any agent: Claude / Codex / OpenCode / MiMo / Cline / Orca).
 
 Talks HTTP to the shared Cognee API (default http://127.0.0.1:8011).
-Auth: COGNEE_API_KEY or ~/.cognee-plugin/api_key.json
+Auth: optional COGNEE_API_KEY for authenticated deployments; loopback fleet runtime needs none
 Dataset: COGNEE_PLUGIN_DATASET (default sin-fleet)
 
 Usage:
@@ -24,17 +24,7 @@ from pathlib import Path
 
 
 def _api_key() -> str:
-    k = (os.environ.get("COGNEE_API_KEY") or "").strip()
-    if k:
-        return k
-    p = Path.home() / ".cognee-plugin" / "api_key.json"
-    if p.is_file():
-        try:
-            d = json.loads(p.read_text(encoding="utf-8"))
-            return str(d.get("api_key") or d.get("key") or "").strip()
-        except (OSError, ValueError):
-            pass
-    return ""
+    return (os.environ.get("COGNEE_API_KEY") or "").strip()
 
 
 def _base() -> str:
@@ -57,7 +47,10 @@ def _req(
     headers: dict | None = None,
     timeout: int = 30,
 ):
-    h = {"X-Api-Key": _api_key()}
+    h = {}
+    key = _api_key()
+    if key:
+        h["X-Api-Key"] = key
     if headers:
         h.update(headers)
     req = urllib.request.Request(_base() + path, data=data, headers=h, method=method)
@@ -79,19 +72,14 @@ def cmd_status(_: argparse.Namespace) -> int:
     print(f"health HTTP {code}: {body[:300]}")
     key = _api_key()
     print(
-        f"api_key: {'set' if key else 'MISSING'}  base={_base()}  dataset={_dataset()}"
+        f"api_key: {'set' if key else 'not-required-local'}  base={_base()}  dataset={_dataset()}"
     )
-    if not key:
-        return 1
     code, body = _req("GET", "/api/v1/datasets", timeout=10)
     print(f"datasets HTTP {code}: {body[:500]}")
     return 0 if code in (200, 201) else 1
 
 
 def cmd_recall(ns: argparse.Namespace) -> int:
-    if not _api_key():
-        print("error: no COGNEE_API_KEY", file=sys.stderr)
-        return 1
     payload = {
         "query": ns.query,
         "datasets": [ns.dataset or _dataset()],
@@ -153,9 +141,6 @@ def cmd_remember(ns: argparse.Namespace) -> int:
       - refuse files larger than 50k unless COGNEE_ALLOW_COSTLY=1
       - bulk script still requires COGNEE_ALLOW_COSTLY=1
     """
-    if not _api_key():
-        print("error: no COGNEE_API_KEY", file=sys.stderr)
-        return 1
     costly = os.environ.get("COGNEE_ALLOW_COSTLY", "").strip().lower() in (
         "1",
         "true",

@@ -47,7 +47,7 @@ curl http://localhost:20128/v1/embeddings \
 ```bash
 source bin/cognee-omniroute-env.sh
 bin/cognee-start-omniroute.sh
-# mint api key once → ~/.cognee-plugin/api_key.json
+# local single-user runtime: no Cognee API-key file required; Gemini is injected by SIN-Infisical
 export COGNEE_API_KEY=… COGNEE_PLUGIN_DATASET=sin-fleet
 ```
 

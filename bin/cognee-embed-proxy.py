@@ -9,13 +9,14 @@ Dim contract:
   Both paths MUST return the same dimension (default 1024) so Lance vectors
   stay compatible. Gemini uses output_dimensionality; local uses mxbai-large.
 
-Auth for Cognee: any Bearer token accepted (local only). Gemini key is loaded
-from ~/.cognee-plugin/secrets/gemini_api_key (chmod 600) — never from argv.
+Auth for Cognee: local loopback runtime. Gemini key is read from GEMINI_API_KEY
+injected by SIN-Infisical; GEMINI_API_KEY_FILE remains a compatibility fallback.
 
 Env:
   COGNEE_EMBED_PROXY_PORT   default 8012
   COGNEE_EMBED_PROXY_HOST   default 127.0.0.1
-  GEMINI_API_KEY_FILE       default ~/.cognee-plugin/secrets/gemini_api_key
+  GEMINI_API_KEY            preferred, injected by SIN-Infisical
+  GEMINI_API_KEY_FILE       compatibility fallback
   GEMINI_EMBED_MODEL        default gemini-embedding-001
   EMBEDDING_DIMENSIONS      default 1024
   COGNEE_FALLBACK_EMBED_MODEL  default mixedbread-ai/mxbai-embed-large-v1
@@ -42,12 +43,8 @@ GEMINI_MODEL = os.environ.get("GEMINI_EMBED_MODEL", "gemini-embedding-001")
 FALLBACK_MODEL = os.environ.get(
     "COGNEE_FALLBACK_EMBED_MODEL", "mixedbread-ai/mxbai-embed-large-v1"
 )
-KEY_FILE = Path(
-    os.environ.get(
-        "GEMINI_API_KEY_FILE",
-        str(Path.home() / ".cognee-plugin" / "secrets" / "gemini_api_key"),
-    )
-).expanduser()
+KEY_FILE = Path(os.environ.get("GEMINI_API_KEY_FILE", str(Path.home() / ".cognee-plugin" / "secrets" / "gemini_api_key"))).expanduser()
+GEMINI_API_KEY_ENV = (os.environ.get("GEMINI_API_KEY") or "").strip()
 FORCE_LOCAL = os.environ.get("COGNEE_EMBED_FORCE_LOCAL", "").strip().lower() in (
     "1",
     "true",
@@ -63,6 +60,8 @@ def _log(msg: str) -> None:
 
 
 def _load_gemini_key() -> str:
+    if GEMINI_API_KEY_ENV:
+        return GEMINI_API_KEY_ENV
     if not KEY_FILE.is_file():
         return ""
     try:
