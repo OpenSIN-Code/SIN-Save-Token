@@ -14,8 +14,10 @@
     "graphify": {
       "argv": [
         "graphify",
-        "explain",
-        "{query}"
+        "query",
+        "{query}",
+        "--budget",
+        "1600"
       ],
       "timeout_seconds": 120,
       "maximum_output_chars": 16000,

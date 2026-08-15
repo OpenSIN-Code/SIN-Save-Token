@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""Minimal loopback-only Simone MCP adapter for sin-context.
+
+The adapter intentionally exposes only read-only symbol retrieval. It keeps the
+MCP session id returned by initialize, sends notifications/initialized, and
+passes the current working directory as Simone's workspace root.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from http.client import HTTPConnection
+from pathlib import Path
+from urllib.parse import urlsplit
+
+ENDPOINT = os.environ.get("SIMONE_MCP_URL", "http://127.0.0.1:8234/mcp")
+ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"}
+SYMBOL_TOOL = "sin_simone_mcp_symbol_search"
+REFERENCE_TOOL = "sin_simone_mcp_find_references"
+
+
+class SimoneClient:
+    def __init__(self, endpoint: str) -> None:
+        self.parsed = urlsplit(endpoint)
+        if self.parsed.scheme != "http" or self.parsed.hostname not in ALLOWED_HOSTS:
+            raise ValueError("SIMONE_MCP_URL must be loopback HTTP")
+        self.session_id: str | None = None
+
+    @property
+    def path(self) -> str:
+        path = self.parsed.path or "/mcp"
+        if self.parsed.query:
+            path = f"{path}?{self.parsed.query}"
+        return path
+
+    def rpc(self, payload: dict, *, notification: bool = False) -> dict:
+        connection = HTTPConnection(self.parsed.hostname, self.parsed.port or 80, timeout=8)
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        if self.session_id:
+            headers["Mcp-Session-Id"] = self.session_id
+        connection.request("POST", self.path, body=json.dumps(payload), headers=headers)
+        response = connection.getresponse()
+        content_type = response.getheader("Content-Type", "")
+        returned_session = response.getheader("Mcp-Session-Id")
+        if returned_session:
+            self.session_id = returned_session
+        body = response.read()
+        status = response.status
+        connection.close()
+
+        if status >= 300:
+            raise RuntimeError(f"Simone MCP HTTP {status}")
+        if notification or status == 202 or not body:
+            return {}
+
+        text = body.decode("utf-8", errors="replace")
+        if "text/event-stream" in content_type:
+            data_lines = [line[5:].strip() for line in text.splitlines() if line.startswith("data:")]
+            if not data_lines:
+                raise RuntimeError("Simone MCP returned empty event stream")
+            text = data_lines[-1]
+        data = json.loads(text)
+        if data.get("error"):
+            error = data["error"]
+            message = error.get("message") if isinstance(error, dict) else str(error)
+            raise RuntimeError(message or "Simone MCP error")
+        result = data.get("result", {})
+        return result if isinstance(result, dict) else {"value": result}
+
+    def initialize(self) -> None:
+        self.rpc(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": {"name": "sin-context-simone", "version": "1"},
+                },
+            }
+        )
+        self.rpc(
+            {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+            notification=True,
+        )
+
+    def tools(self) -> set[str]:
+        result = self.rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+        return {
+            str(item.get("name"))
+            for item in result.get("tools", [])
+            if isinstance(item, dict) and item.get("name")
+        }
+
+    def call_tool(self, name: str, arguments: dict) -> dict:
+        return self.rpc(
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+            }
+        )
+
+
+def _extract_text(result: dict) -> str:
+    chunks: list[str] = []
+    for item in result.get("content", []):
+        if isinstance(item, dict) and item.get("type") == "text" and item.get("text"):
+            chunks.append(str(item["text"]))
+    if chunks:
+        return "\n".join(chunks)
+    structured = result.get("structuredContent")
+    if structured is not None:
+        return json.dumps(structured, ensure_ascii=False)
+    if result:
+        return json.dumps(result, ensure_ascii=False)
+    return ""
+
+
+def _looks_like_reference_query(query: str) -> bool:
+    q = query.casefold()
+    return any(token in q for token in ("references", "referenced", "calls ", "callers", "usages", "used by"))
+
+
+def _symbol_hint(query: str) -> str:
+    # Keep this deliberately conservative. Simone's symbol search handles the
+    # natural-language query itself; reference lookup benefits from the final
+    # code-like token when one is present.
+    tokens = [token.strip("`'\"()[]{}.,:;?!") for token in query.split()]
+    code_like = [token for token in tokens if token and all(c.isalnum() or c in "_." for c in token)]
+    return code_like[-1] if code_like else query
+
+
+def main(argv: list[str]) -> int:
+    if not argv:
+        print("usage: simone-query <query>", file=sys.stderr)
+        return 2
+    query = " ".join(argv).strip()
+    root = str(Path.cwd().resolve())
+    try:
+        client = SimoneClient(ENDPOINT)
+        client.initialize()
+        tools = client.tools()
+
+        if _looks_like_reference_query(query) and REFERENCE_TOOL in tools:
+            result = client.call_tool(REFERENCE_TOOL, {"symbol": _symbol_hint(query), "root": root})
+            text = _extract_text(result).strip()
+            if text and '"count": 0' not in text:
+                print(text)
+                return 0
+
+        if SYMBOL_TOOL not in tools:
+            print("error: Simone exposes no supported symbol-search tool", file=sys.stderr)
+            return 3
+        result = client.call_tool(SYMBOL_TOOL, {"query": query, "root": root})
+        text = _extract_text(result).strip()
+        if text:
+            print(text)
+        return 0
+    except Exception as exc:
+        print(f"error: Simone unavailable: {exc}", file=sys.stderr)
+        return 3
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

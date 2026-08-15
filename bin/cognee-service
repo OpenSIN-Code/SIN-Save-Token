@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="${SIN_REPO:-$HOME/dev/SIN-Save-Token}"
+# Secrets must already be injected by sin-infisical agent run. This service
+# script only derives non-secret Cognee/OpenAI-compatible runtime settings.
+source "$ROOT/bin/cognee-omniroute-env.sh"
+
+export ENABLE_BACKEND_ACCESS_CONTROL=false
+export REQUIRE_AUTHENTICATION=false
+export CACHING="${CACHING:-false}"
+export COGNEE_HOT_TELEMETRY_DISABLED="${COGNEE_HOT_TELEMETRY_DISABLED:-true}"
+export TELEMETRY_DISABLED="${TELEMETRY_DISABLED:-true}"
+export ENABLE_TELEMETRY="${ENABLE_TELEMETRY:-false}"
+
+exec "$HOME/.cognee-plugin/venv/bin/python" -m uvicorn cognee.api.client:app \
+  --host 127.0.0.1 --port "${COGNEE_PORT:-8011}"
