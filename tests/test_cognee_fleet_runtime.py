@@ -73,6 +73,8 @@ class CogneeFleetRuntimeTests(unittest.TestCase):
         self.assertNotIn("grep -q healthy", script)
         self.assertIn('pkill -TERM -P "$PID"', script)
         self.assertIn('kill -KILL "$PID"', script)
+        self.assertIn("export ENABLE_BACKEND_ACCESS_CONTROL=false", script)
+        self.assertIn("export REQUIRE_AUTHENTICATION=false", script)
 
     def test_environment_adds_loopback_no_proxy(self):
         script = (ROOT / "bin" / "cognee-omniroute-env.sh").read_text(encoding="utf-8")

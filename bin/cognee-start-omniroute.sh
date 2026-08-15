@@ -7,6 +7,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT/bin/cognee-omniroute-env.sh"
 
+# This fleet runtime is loopback-only and single-user. Cognee defaults newer
+# releases to multi-tenant auth, which invalidates the local fleet CLI contract.
+# Make the intended local posture explicit instead of minting/rotating API keys.
+export ENABLE_BACKEND_ACCESS_CONTROL=false
+export REQUIRE_AUTHENTICATION=false
+
 # Require OmniRoute
 if ! curl -sS -m 2 -o /dev/null "http://127.0.0.1:20128/" 2>/dev/null; then
   echo "error: OmniRoute not reachable on :20128 — start: omniroute serve" >&2
