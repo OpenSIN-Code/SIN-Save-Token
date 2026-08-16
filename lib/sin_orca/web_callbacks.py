@@ -25,6 +25,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import urlparse
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from .dispatch import run_git, run_orca
 from .state import atomic_write_json
@@ -35,6 +37,7 @@ TOKEN_PATTERN = re.compile(r"^gptwcb_[0-9a-f]{32}$")
 RELAY_ID_PATTERN = re.compile(r"^gptwcr_[0-9a-f]{32}$")
 DELIVERY_ID_PATTERN = re.compile(r"^gptwcd_[0-9a-f]{32}$")
 SESSION_PATTERN = re.compile(r"^ses_[A-Za-z0-9]+$")
+DSH_SESSION_PATTERN = re.compile(r"^session-[0-9a-fA-F-]{36}$")
 TASK_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 FINAL_STATUSES = {"done", "blocked", "failed"}
 DEFAULT_TTL_MINUTES = 24 * 60
@@ -663,6 +666,91 @@ def resolve_prime_agent_session(active_session_id: str) -> dict[str, Any]:
     }
 
 
+def resolve_dsh_session(
+    session_id: str,
+    repository: str | Path,
+) -> dict[str, Any]:
+    """Resolve one exact persisted top-level DSH session for a repository."""
+    rendered = session_id.strip()
+    if not DSH_SESSION_PATTERN.fullmatch(rendered):
+        raise ValueError("invalid DeepSeek Harness session ID")
+    root = resolve_repository(repository)
+    dsh_home = Path(os.environ.get("DSH_HOME", str(Path.home() / ".dsh"))).expanduser()
+    session_root = Path(
+        os.environ.get("SIN_DSH_SESSION_ROOT", str(dsh_home / "sessions-sin"))
+    ).expanduser()
+    matches: list[dict[str, Any]] = []
+    if session_root.is_dir():
+        for path in session_root.rglob("session.jsonl"):
+            try:
+                with path.open("r", encoding="utf-8") as handle:
+                    first = handle.readline()
+                header = json.loads(first)
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(header, dict) or header.get("type") != "session":
+                continue
+            if header.get("id") != rendered:
+                continue
+            if int(header.get("delegationDepth") or 0) != 0:
+                raise RuntimeError("DeepSeek Harness callback target is not a top-level session")
+            cwd = header.get("cwd")
+            if not isinstance(cwd, str) or Path(cwd).expanduser().resolve() != root:
+                raise RuntimeError("DeepSeek Harness callback repository identity mismatch")
+            matches.append({"path": str(path), "cwd": cwd})
+    if len(matches) != 1:
+        raise RuntimeError("DeepSeek Harness session is not uniquely persisted for this repository")
+    api_url = os.environ.get("SIN_DSH_CALLBACK_URL", "http://127.0.0.1:61368").rstrip("/")
+    parsed = urlparse(api_url)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
+        raise RuntimeError("DeepSeek Harness callback host must be loopback HTTP")
+    return {
+        "transport": "deepseek-harness",
+        "session_id": rendered,
+        "api_url": api_url,
+        "session_log": matches[0]["path"],
+        "cli": "dsh",
+    }
+
+
+def _post_dsh_session_prompt(
+    *,
+    api_url: str,
+    session_id: str,
+    message: str,
+    timeout_seconds: int = 30,
+) -> dict[str, Any]:
+    rpc_id = str(uuid.uuid4())
+    body = {
+        "type": "client-request",
+        "rpcId": rpc_id,
+        "method": "session.prompt",
+        "payload": {
+            "sessionId": session_id,
+            "mode": "queue",
+            "content": [{"type": "text", "text": message}],
+        },
+    }
+    request = urllib_request.Request(
+        f"{api_url.rstrip('/')}/api/session.prompt",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"content-type": "application/json"},
+        method="POST",
+    )
+    opener = urllib_request.build_opener(urllib_request.ProxyHandler({}))
+    with opener.open(request, timeout=timeout_seconds) as response:
+        payload = json.load(response)
+    if not isinstance(payload, dict) or payload.get("type") != "server-response":
+        raise RuntimeError("DeepSeek Harness callback response envelope is invalid")
+    if payload.get("rpcId") != rpc_id:
+        raise RuntimeError("DeepSeek Harness callback RPC identity mismatch")
+    result = payload.get("result")
+    value = result.get("value") if isinstance(result, dict) and result.get("ok") is True else None
+    if not isinstance(value, dict) or value.get("accepted") is not True:
+        raise RuntimeError("DeepSeek Harness callback was not accepted")
+    return payload
+
+
 def _validate_task_id(task_id: str) -> str:
     rendered = task_id.strip()
     if not TASK_PATTERN.fullmatch(rendered):
@@ -707,6 +795,7 @@ def open_callback(
     origin_terminal: str | None = None,
     origin_session_id: str | None = None,
     prime_agent_session_id: str | None = None,
+    dsh_session_id: str | None = None,
     ttl_minutes: int = DEFAULT_TTL_MINUTES,
     round_number: int = 1,
     max_rounds: int = DEFAULT_MAX_ROUNDS,
@@ -720,25 +809,38 @@ def open_callback(
     if round_number < 1 or (max_rounds and round_number > max_rounds):
         raise ValueError("round must be positive and within max rounds")
 
-    if prime_agent_session_id and (origin_terminal or origin_session_id):
+    selected_origins = sum(
+        bool(value)
+        for value in (prime_agent_session_id, dsh_session_id, origin_terminal or origin_session_id)
+    )
+    if selected_origins > 1:
         raise ValueError(
-            "Prime Agent callbacks cannot combine --prime-agent-session with OpenCode origin fields"
+            "callback origin must be exactly one of DeepSeek Harness, Prime Agent, or OpenCode fields"
         )
     prime_transport = (
         resolve_prime_agent_session(prime_agent_session_id)
         if prime_agent_session_id
         else None
     )
-    if prime_transport is None:
+    dsh_transport = (
+        resolve_dsh_session(dsh_session_id, root)
+        if dsh_session_id
+        else None
+    )
+    if prime_transport is None and dsh_transport is None:
         terminal, terminal_source, terminal_record = resolve_origin_terminal(
             root,
             origin_terminal,
         )
         session = resolve_origin_session(root, terminal_record, origin_session_id)
+        origin_agent = "opencode"
+        origin_transport = None
     else:
         terminal = None
-        terminal_source = "prime-agent"
+        terminal_source = "deepseek-harness" if dsh_transport else "prime-agent"
         session = None
+        origin_agent = "deepseek-harness" if dsh_transport else "prime-agent"
+        origin_transport = dsh_transport or prime_transport
     now = utc_now()
     token = f"gptwcb_{uuid.uuid4().hex}"
     record: dict[str, Any] = {
@@ -754,8 +856,8 @@ def open_callback(
         "origin_terminal": terminal,
         "origin_terminal_source": terminal_source,
         "origin_session": session,
-        "origin_agent": "prime-agent" if prime_transport else "opencode",
-        "origin_transport": prime_transport,
+        "origin_agent": origin_agent,
+        "origin_transport": origin_transport,
         "round": round_number,
         "max_rounds": max_rounds,
         "conversation": None,
@@ -772,7 +874,7 @@ def open_callback(
         "origin_terminal_source": terminal_source,
         "origin_session": session,
         "origin_agent": record["origin_agent"],
-        "origin_transport": prime_transport,
+        "origin_transport": origin_transport,
         "expires_at": record["expires_at"],
         "round": round_number,
         "max_rounds": max_rounds,
@@ -1459,18 +1561,30 @@ def render_callback_message(
         if isinstance(transport, dict) and transport.get("transport") == "prime-agent"
         else None
     )
-    session_display = (
-        f"prime_session={prime_target} "
-        if prime_target
-        else f"opencode_session={session_id or 'unresolved'} "
+    dsh_target = (
+        transport.get("session_id")
+        if isinstance(transport, dict) and transport.get("transport") == "deepseek-harness"
+        else None
     )
+    if dsh_target:
+        session_display = f"dsh_session={dsh_target} "
+        transport_name = "deepseek-harness"
+        target = dsh_target
+    elif prime_target:
+        session_display = f"prime_session={prime_target} "
+        transport_name = "prime-agent"
+        target = prime_target
+    else:
+        session_display = f"opencode_session={session_id or 'unresolved'} "
+        transport_name = "opencode-terminal"
+        target = session_id or "unresolved"
     header = (
         "SIN_GPT_WEB_CALLBACK "
         f"task={record['task_id']} status={final_status} "
         f"delivery={record['delivery_id']} "
         f"{session_display}"
-        f"transport={'prime-agent' if prime_target else 'opencode-terminal'} "
-        f"target={prime_target or session_id or 'unresolved'} "
+        f"transport={transport_name} "
+        f"target={target} "
         f"round={record.get('round', 1)}/"
         f"{'∞' if int(record.get('max_rounds', DEFAULT_MAX_ROUNDS) or 0) == 0 else record.get('max_rounds', DEFAULT_MAX_ROUNDS)}"
     )
@@ -1509,6 +1623,121 @@ def render_callback_message(
             "Inspect repository state, taskplan evidence, diff, and tests before accepting it.",
         ]
     )
+
+
+def _deliver_dsh_callback(
+    repository: Path,
+    token: str,
+    record: dict[str, Any],
+    *,
+    dry_run: bool,
+) -> dict[str, Any]:
+    transport = record.get("origin_transport")
+    session_id = (
+        transport.get("session_id")
+        if isinstance(transport, dict) and transport.get("transport") == "deepseek-harness"
+        else None
+    )
+    api_url = transport.get("api_url") if isinstance(transport, dict) else None
+    if not isinstance(session_id, str) or not isinstance(api_url, str):
+        raise RuntimeError("invalid DeepSeek Harness callback transport")
+    try:
+        resolve_dsh_session(session_id, repository)
+    except (RuntimeError, ValueError):
+        record.update(
+            {
+                "status": "pending-delivery",
+                "delivery_reason": "dsh-session-offline",
+            }
+        )
+        atomic_write_json(callback_path(repository, token), record)
+        return {
+            "ok": True,
+            "status": "callback-pending",
+            "callback": token,
+            "task_id": record.get("task_id"),
+            "delivery_reason": "dsh-session-offline",
+        }
+    message = render_callback_message(
+        record,
+        final_status=str(record["callback_status"]),
+        summary=str(record["summary"]),
+        changed=list(record.get("changed_files") or []),
+        verification=str(record.get("verification") or "unknown"),
+        next_action=str(record.get("next_action") or ""),
+    )
+    if dry_run:
+        return {
+            "ok": True,
+            "status": "callback-dry-run",
+            "callback": token,
+            "origin_dsh_session": session_id,
+            "target_source": "dsh-session",
+            "message": message,
+        }
+    try:
+        _post_dsh_session_prompt(
+            api_url=api_url,
+            session_id=session_id,
+            message=message,
+        )
+    except urllib_error.HTTPError as error:
+        record.update(
+            {
+                "status": "pending-delivery",
+                "delivery_state": "pending",
+                "delivery_reason": f"dsh-host-http-{error.code}",
+            }
+        )
+        atomic_write_json(callback_path(repository, token), record)
+        return {
+            "ok": True,
+            "status": "callback-pending",
+            "callback": token,
+            "task_id": record.get("task_id"),
+            "delivery_reason": record["delivery_reason"],
+        }
+    except (OSError, TimeoutError, urllib_error.URLError, RuntimeError, json.JSONDecodeError) as error:
+        record.update(
+            {
+                "status": "delivery-indeterminate",
+                "delivery_state": "indeterminate",
+                "delivery_reason": "dsh-session-prompt-indeterminate",
+                "delivery_error": _compact(str(error), 700) or type(error).__name__,
+            }
+        )
+        atomic_write_json(callback_path(repository, token), record)
+        return {
+            "ok": True,
+            "status": "callback-delivery-indeterminate",
+            "callback": token,
+            "task_id": record.get("task_id"),
+            "delivery_id": record.get("delivery_id"),
+            "delivery_reason": "dsh-session-prompt-indeterminate",
+        }
+    record.update(
+        {
+            "status": "sent",
+            "delivery_state": "sent",
+            "delivery_dsh_session": session_id,
+            "delivery_target_source": "dsh-session",
+            "delivery_receipt_status": "accepted",
+            "sent_at": isoformat(utc_now()),
+        }
+    )
+    atomic_write_json(callback_path(repository, token), record)
+    return {
+        "ok": True,
+        "status": "callback-sent",
+        "callback": token,
+        "task_id": record.get("task_id"),
+        "callback_status": record.get("callback_status"),
+        "origin_dsh_session": session_id,
+        "round": record.get("round"),
+        "max_rounds": record.get("max_rounds"),
+        "conversation": record.get("conversation"),
+        "sent_at": record.get("sent_at"),
+    }
 
 
 def _deliver_prime_agent_callback(
@@ -1653,6 +1882,8 @@ def _deliver_pending_callback(
             "delivery_id": record.get("delivery_id"),
         }
     transport = record.get("origin_transport")
+    if isinstance(transport, dict) and transport.get("transport") == "deepseek-harness":
+        return _deliver_dsh_callback(repository, token, record, dry_run=dry_run)
     if isinstance(transport, dict) and transport.get("transport") == "prime-agent":
         return _deliver_prime_agent_callback(repository, token, record, dry_run=dry_run)
     terminal, target_source = resolve_delivery_terminal(repository, record)
@@ -2068,7 +2299,21 @@ def abandon_callback(
                 f"a {status} callback cannot be abandoned; delivery may have occurred"
             )
         transport = record.get("origin_transport")
-        if record.get("origin_agent") == "prime-agent":
+        if record.get("origin_agent") == "deepseek-harness":
+            if not isinstance(transport, dict) or transport.get("transport") != "deepseek-harness":
+                raise RuntimeError("invalid DeepSeek Harness callback transport")
+            session_id = transport.get("session_id")
+            if not isinstance(session_id, str):
+                raise RuntimeError("invalid DeepSeek Harness callback transport")
+            try:
+                resolve_dsh_session(session_id, root)
+            except (RuntimeError, ValueError):
+                target_source = "dsh-session-offline"
+            else:
+                raise RuntimeError(
+                    "callback target still resolves; use normal delivery or cancellation"
+                )
+        elif record.get("origin_agent") == "prime-agent":
             if not isinstance(transport, dict) or transport.get("transport") != "prime-agent":
                 raise RuntimeError("invalid Prime Agent callback transport")
             session_id = transport.get("active_session_id")

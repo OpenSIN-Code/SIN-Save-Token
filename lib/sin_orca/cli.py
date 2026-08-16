@@ -1814,6 +1814,7 @@ def _cmd_web_callback_open(args: argparse.Namespace) -> int:
         origin_terminal=args.origin_terminal,
         origin_session_id=args.origin_session,
         prime_agent_session_id=args.prime_agent_session,
+        dsh_session_id=args.dsh_session,
         ttl_minutes=args.ttl_minutes,
         round_number=args.round,
         max_rounds=args.max_rounds,
@@ -2152,6 +2153,7 @@ def main() -> int:
     origin = p.add_mutually_exclusive_group()
     origin.add_argument("--origin-terminal")
     origin.add_argument("--prime-agent-session")
+    origin.add_argument("--dsh-session")
     p.add_argument("--origin-session")
     p.add_argument("--ttl-minutes", type=int, default=24 * 60)
     p.add_argument("--round", type=int, default=1)
@@ -2202,7 +2204,7 @@ def main() -> int:
 
     p = sub.add_parser(
         "web-callback-send",
-        help="Send ChatGPT Web completion to the exact originating OpenCode terminal",
+        help="Send ChatGPT Web completion to the exact originating DSH, Prime Agent, or OpenCode session",
     )
     p.add_argument("--repo", required=True)
     selector = p.add_mutually_exclusive_group(required=True)

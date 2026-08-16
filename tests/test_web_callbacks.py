@@ -2173,3 +2173,107 @@ def test_abandon_rejects_malformed_prime_agent_transport(tmp_path: Path, transpo
         )
     saved = json.loads(callback_path(repository, token).read_text(encoding="utf-8"))
     assert saved["status"] == "pending-delivery"
+
+
+def _write_dsh_session(root: Path, repository: Path, session_id: str) -> Path:
+    path = root / "sessions-sin" / "repo" / session_id / "session.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "type": "session",
+                "version": 0,
+                "id": session_id,
+                "createdAt": 1,
+                "cwd": str(repository),
+                "delegationDepth": 0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_dsh_callback_binds_exact_persisted_session(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    dsh_home = tmp_path / "dsh"
+    session_id = "session-11111111-2222-3333-4444-555555555555"
+    session_log = _write_dsh_session(dsh_home, repository, session_id)
+
+    with patch.dict("os.environ", {"DSH_HOME": str(dsh_home)}, clear=False):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-DSH1",
+            dsh_session_id=session_id,
+            ttl_minutes=60,
+        )
+
+    assert opened["origin_agent"] == "deepseek-harness"
+    assert opened["origin_terminal"] is None
+    assert opened["origin_session"] is None
+    assert opened["origin_transport"] == {
+        "transport": "deepseek-harness",
+        "session_id": session_id,
+        "api_url": "http://127.0.0.1:61368",
+        "session_log": str(session_log),
+        "cli": "dsh",
+    }
+
+
+def test_dsh_callback_rejects_repository_identity_mismatch(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    other = git_repository(tmp_path / "other")
+    dsh_home = tmp_path / "dsh"
+    session_id = "session-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    _write_dsh_session(dsh_home, other, session_id)
+
+    with patch.dict("os.environ", {"DSH_HOME": str(dsh_home)}, clear=False):
+        with pytest.raises(RuntimeError, match="repository identity mismatch"):
+            open_callback(
+                repository=repository,
+                task_id="T-DSH2",
+                dsh_session_id=session_id,
+                ttl_minutes=60,
+            )
+
+
+def test_dsh_callback_delivers_to_exact_session_prompt_rpc(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    dsh_home = tmp_path / "dsh"
+    session_id = "session-01234567-89ab-cdef-0123-456789abcdef"
+    _write_dsh_session(dsh_home, repository, session_id)
+    write_taskplan_evidence(repository, "T-DSH3")
+
+    with patch.dict("os.environ", {"DSH_HOME": str(dsh_home)}, clear=False):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-DSH3",
+            dsh_session_id=session_id,
+            ttl_minutes=60,
+        )
+        bind_callback(
+            repository=repository,
+            token=opened["callback"],
+            page_id="page-dsh",
+            conversation_url="https://chatgpt.com/c/12345678-abcd-efgh-ijkl-1234567890ab",
+            title="DSH callback test",
+        )
+        with patch("sin_orca.web_callbacks._post_dsh_session_prompt") as deliver:
+            result = send_callback(
+                repository=repository,
+                token=opened["callback"],
+                final_status="done",
+                summary="DSH callback verified",
+                changed=["none"],
+                verification="tests pass",
+            )
+
+    assert result["status"] == "callback-sent"
+    assert result["origin_dsh_session"] == session_id
+    deliver.assert_called_once()
+    kwargs = deliver.call_args.kwargs
+    assert kwargs["session_id"] == session_id
+    assert kwargs["api_url"] == "http://127.0.0.1:61368"
+    assert "transport=deepseek-harness" in kwargs["message"]
+    assert f"dsh_session={session_id}" in kwargs["message"]
