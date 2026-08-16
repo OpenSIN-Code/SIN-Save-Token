@@ -2,19 +2,25 @@
 # Source before starting Cognee (or use bin/cognee-start-omniroute.sh / cognee-fleet-up.sh).
 #
 # Architecture:
-#   LLM (cognify/recall answers): OmniRoute :20128 → NVIDIA z-ai/glm-5.2
+#   LLM (cognify/recall answers): OmniRoute :20128 → auto/best-free fleet combo
 #   Embeddings (vectors):         NVIDIA NIM nv-embedqa-e5-v5 @ 1024-dim (free ~40 RPM)
 #                                 fallback: COGNEE_EMBED_BACKEND=gemini|fastembed
 #
+# Why a fleet combo for Cognee?
+#   Cognee is domain-memory extraction, not character/media identity production.
+#   The exact provider may rotate behind OmniRoute as credentials/quotas change,
+#   while the memory contract stays provider-neutral. The combo must still be
+#   live-probed and return non-empty chat content before promotion.
+#
 # Cost:
-#   - GLM 5.2 via the NVIDIA provider pool (preferred free/runtime-key path)
+#   - auto/best-free prefers currently healthy free/eligible chat capacity
 #   - NVIDIA NIM embed: free tier (~40 RPM)
 #   - Bulk: requires COGNEE_ALLOW_COSTLY=1 (see docs/COGNEE-COST-POLICY.md)
 #
 # Prerequisites:
-#   - OmniRoute on :20128 with Vercel AI Gateway provider
-#   - OMNIROUTE_MASTER_KEY set or in ~/.omniroute/.env
-#   - NVIDIA_API_KEY in env (free from build.nvidia.com)
+#   - OmniRoute on :20128 with at least one healthy chat provider in auto/best-free
+#   - OMNIROUTE_MASTER_KEY injected by SIN-Infisical or set in the runtime
+#   - NVIDIA_API_KEY only when COGNEE_EMBED_BACKEND=nim
 #   - cognee venv (plugin venv)
 
 set -euo pipefail
@@ -53,13 +59,15 @@ export OMNIROUTE_MASTER_KEY
 
 OMNIROUTE_URL="${OMNIROUTE_URL:-http://127.0.0.1:20128}"
 
-# ── LLM (GLM 5.2 via OmniRoute's NVIDIA pool) ─────────────────────────
-# Do not default Cognee to Vercel AI Gateway here: its free tier can advertise
-# GLM 5.2 in /v1/models while rejecting completions with HTTP 403. The NVIDIA
-# route is covered by the existing pooled runtime credentials and is probed by
-# the fleet E2E gate.
+# ── LLM (provider-neutral healthy fleet route through OmniRoute) ──────
+# Live verification on 2026-08-16 showed the previous NVIDIA default had no
+# active credentials. Vercel chat aliases were also unsuitable for Cognee on
+# the current account pool (credit-card gate / unavailable advertised models).
+# auto/best-free returned a real non-empty completion through OmniRoute and is
+# therefore the bounded default for domain-memory extraction. Override only
+# after a fresh non-empty chat + cognify probe.
 export LLM_PROVIDER=openai
-export LLM_MODEL="${LLM_MODEL:-openai/nvidia/z-ai/glm-5.2}"
+export LLM_MODEL="${LLM_MODEL:-openai/auto/best-free}"
 export LLM_ENDPOINT="$OMNIROUTE_URL/v1"
 export LLM_API_KEY="$OMNIROUTE_MASTER_KEY"
 export OPENAI_API_KEY="$OMNIROUTE_MASTER_KEY"

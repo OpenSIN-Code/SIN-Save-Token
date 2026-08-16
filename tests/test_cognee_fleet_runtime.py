@@ -82,6 +82,13 @@ class CogneeFleetRuntimeTests(unittest.TestCase):
         self.assertIn('export NO_PROXY="$_NO_PROXY_BASE"', script)
         self.assertIn('export no_proxy="$_NO_PROXY_BASE"', script)
 
+    def test_cognee_llm_default_uses_verified_provider_neutral_fleet_route(self):
+        script = (ROOT / "bin" / "cognee-omniroute-env.sh").read_text(encoding="utf-8")
+        self.assertIn('export LLM_PROVIDER=openai', script)
+        self.assertIn('openai/auto/best-free', script)
+        self.assertNotIn('openai/nvidia/z-ai/glm-5.2', script)
+        self.assertIn('Override only', script)
+
 
 if __name__ == "__main__":
     unittest.main()
