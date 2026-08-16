@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 import traceback
 import urllib.error
@@ -53,6 +54,7 @@ FORCE_LOCAL = os.environ.get("COGNEE_EMBED_FORCE_LOCAL", "").strip().lower() in 
 
 _stats = {"gemini_ok": 0, "fallback_ok": 0, "errors": 0, "last_backend": None}
 _fallback_engine = None
+_fallback_lock = threading.Lock()
 
 
 def _log(msg: str) -> None:
@@ -174,10 +176,16 @@ def _local_embed(texts: list[str]) -> list[list[float]]:
     global _fallback_engine
     from fastembed import TextEmbedding  # type: ignore
 
-    if _fallback_engine is None:
-        _log(f"loading local fallback {FALLBACK_MODEL} dims={DIMS}")
-        _fallback_engine = TextEmbedding(FALLBACK_MODEL)
-    vecs = list(_fallback_engine.embed(texts))
+    # onnxruntime inference on this shared model becomes dramatically slower
+    # when multiple ThreadingHTTPServer workers enter the same session at once.
+    # Keep HTTP concurrency, but serialize the local model initialization and
+    # inference. This preserves the exact mxbai vector contract while avoiding
+    # CPU/CoreML execution-provider contention.
+    with _fallback_lock:
+        if _fallback_engine is None:
+            _log(f"loading local fallback {FALLBACK_MODEL} dims={DIMS}")
+            _fallback_engine = TextEmbedding(FALLBACK_MODEL)
+        vecs = list(_fallback_engine.embed(texts))
     out = []
     for v in vecs:
         arr = list(map(float, v))
