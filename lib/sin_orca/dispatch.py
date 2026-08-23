@@ -759,8 +759,31 @@ def dispatch_task(
     prompt_file = task_dir(task_id, root) / "worker-prompt.md"
     prompt_file.write_text(prompt, encoding="utf-8")
     prompt_file.chmod(0o600)
+    bootstrap = (
+        "STRICT SIN WORKER TASK\n"
+        f"Read the complete immutable worker contract at {prompt_file}. "
+        f"Verify task {task_id} and hash {task['task_hash']}, then execute it exactly. "
+        "Send the required ack before inspecting or editing repository files."
+    )
 
     try:
+        # A freshly created agent terminal can exist before its TUI accepts input.
+        # Waiting for the TUI and sending a compact file pointer avoids both the
+        # launch race and multi-kilobyte bracketed-paste submissions that can stay
+        # stranded in an interactive composer instead of being executed.
+        run_orca(
+            [
+                "terminal",
+                "wait",
+                "--terminal",
+                terminal,
+                "--for",
+                "tui-idle",
+                "--timeout-ms",
+                "30000",
+            ],
+            timeout=35,
+        )
         run_orca(
             [
                 "terminal",
@@ -768,7 +791,7 @@ def dispatch_task(
                 "--terminal",
                 terminal,
                 "--text",
-                prompt,
+                bootstrap,
                 "--enter",
             ]
         )
