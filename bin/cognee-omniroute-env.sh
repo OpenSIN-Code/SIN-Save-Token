@@ -2,18 +2,18 @@
 # Source before starting Cognee (or use bin/cognee-start-omniroute.sh / cognee-fleet-up.sh).
 #
 # Architecture:
-#   LLM (cognify/recall answers): OmniRoute :20128 → auto/best-free fleet combo
+#   LLM (cognify/recall answers): OmniRoute :20128 → Vercel AI Gateway / OpenAI GPT-4.1
 #   Embeddings (vectors):         NVIDIA NIM nv-embedqa-e5-v5 @ 1024-dim (free ~40 RPM)
 #                                 fallback: COGNEE_EMBED_BACKEND=gemini|fastembed
 #
-# Why a fleet combo for Cognee?
-#   Cognee is domain-memory extraction, not character/media identity production.
-#   The exact provider may rotate behind OmniRoute as credentials/quotas change,
-#   while the memory contract stays provider-neutral. The combo must still be
-#   live-probed and return non-empty chat content before promotion.
+# Why a pinned verified route for Cognee?
+#   Cognee's structured-output extraction is sensitive to aliases that can drift
+#   onto unavailable or empty-response models. Keep the provider behind OmniRoute,
+#   but pin the upstream model to a freshly live-probed structured-chat-capable
+#   route. Change this only after a non-empty chat + cognify probe.
 #
 # Cost:
-#   - auto/best-free prefers currently healthy free/eligible chat capacity
+#   - LLM usage follows the connected Vercel AI Gateway/OpenAI account quota
 #   - NVIDIA NIM embed: free tier (~40 RPM)
 #   - Bulk: requires COGNEE_ALLOW_COSTLY=1 (see docs/COGNEE-COST-POLICY.md)
 #
@@ -59,15 +59,14 @@ export OMNIROUTE_MASTER_KEY
 
 OMNIROUTE_URL="${OMNIROUTE_URL:-http://127.0.0.1:20128}"
 
-# ── LLM (provider-neutral healthy fleet route through OmniRoute) ──────
-# Live verification on 2026-08-16 showed the previous NVIDIA default had no
-# active credentials. Vercel chat aliases were also unsuitable for Cognee on
-# the current account pool (credit-card gate / unavailable advertised models).
-# auto/best-free returned a real non-empty completion through OmniRoute and is
-# therefore the bounded default for domain-memory extraction. Override only
+# ── LLM (pinned verified route through OmniRoute) ────────────────────
+# Live verification on 2026-08-23: `vercel-ai-gateway/openai/gpt-4.1`
+# returned a real non-empty JSON completion through OmniRoute in ~2.2s.
+# The previous NVIDIA `z-ai/glm-5.2` route reached EOL on 2026-08-21,
+# and `auto/best-free` currently has no reliable bounded latency. Override only
 # after a fresh non-empty chat + cognify probe.
 export LLM_PROVIDER=openai
-export LLM_MODEL="${LLM_MODEL:-openai/auto/best-free}"
+export LLM_MODEL="${LLM_MODEL:-openai/vercel-ai-gateway/openai/gpt-4.1}"
 export LLM_ENDPOINT="$OMNIROUTE_URL/v1"
 export LLM_API_KEY="$OMNIROUTE_MASTER_KEY"
 export OPENAI_API_KEY="$OMNIROUTE_MASTER_KEY"

@@ -135,7 +135,7 @@ def _multipart_file(content: bytes, filename: str, dataset: str) -> tuple[bytes,
 
 
 def cmd_remember(ns: argparse.Namespace) -> int:
-    """Write path — uses GLM 5.2 via OmniRoute for cognify (real money).
+    """Write path — uses the pinned verified OmniRoute LLM for cognify (real money).
 
     Soft cost notice (does not block agents). Hard caps:
       - refuse files larger than 50k unless COGNEE_ALLOW_COSTLY=1
@@ -154,7 +154,7 @@ def cmd_remember(ns: argparse.Namespace) -> int:
             print(
                 f"REFUSED: file {len(content)} bytes > {hard_cap}. "
                 "For large re-ingest set COGNEE_ALLOW_COSTLY=1 "
-                "(GLM 5.2 cognify via OmniRoute is paid).",
+                "(Cognee cognify via the pinned OmniRoute LLM is paid).",
                 file=sys.stderr,
             )
             return 2
@@ -170,7 +170,7 @@ def cmd_remember(ns: argparse.Namespace) -> int:
         filename = "note.txt"
     if not costly and not os.environ.get("COGNEE_QUIET_COST", ""):
         print(
-            "note: remember/cognify uses GLM 5.2 via OmniRoute (subscription credits). "
+            "note: remember/cognify uses the pinned verified LLM via OmniRoute (subscription credits). "
             "Prefer short durable notes, not whole READMEs. "
             "COGNEE_QUIET_COST=1 to silence.",
             file=sys.stderr,

@@ -16,7 +16,7 @@ Any agent / Orca
 # NEVER commit. NEVER paste keys into chat/commits.
 # NVIDIA_API_KEY: free from build.nvidia.com (env var, no file needed)
 # OMNIROUTE_MASTER_KEY: in ~/.omniroute/.env (chmod 600)
-# Vercel credit card: required for GLM 5.2 via Vercel AI Gateway
+# Vercel AI Gateway/OpenAI quota: required for the pinned Cognee LLM route
 ```
 
 ## Embed backends
@@ -42,7 +42,7 @@ bin/cognee-start-omniroute.sh
 |--------|--------|------|
 | fleet-up / nim-embed-proxy | no | — |
 | NVIDIA NIM embed | no (free tier ~40 RPM) | — |
-| `cognee-remember` | **yes** (GLM 5.2 cognify) | soft warn |
+| `cognee-remember` | **yes** (pinned OmniRoute LLM cognify) | soft warn |
 | bulk re-ingest | **yes expensive** | `COGNEE_ALLOW_COSTLY=1` |
 
 ## Everyday

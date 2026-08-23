@@ -508,7 +508,7 @@ Agents → cognee-recall / cognee-remember
 cognee-status
 curl -s http://127.0.0.1:8012/health    # nim ok/error stats
 cognee-recall "What is L2 core MCP?"
-cognee-remember "short durable decision"   # uses GLM 5.2 for cognify
+cognee-remember "short durable decision"   # uses the pinned verified OmniRoute LLM for cognify
 ```
 
 ### Cost & ops
@@ -516,7 +516,7 @@ cognee-remember "short durable decision"   # uses GLM 5.2 for cognify
 | Path | Cost |
 |------|------|
 | Embed (NVIDIA NIM free tier) | $0, ~40 RPM |
-| `remember` / cognify | **GLM 5.2 via OmniRoute** — requires credit card on Vercel |
+| `remember` / cognify | **Pinned Vercel AI Gateway/OpenAI route via OmniRoute** — consumes connected account quota |
 | Bulk re-ingest | `COGNEE_ALLOW_COSTLY=1` required |
 
 Full policy, backends, reindex: **[docs/COGNEE-COST-POLICY.md](docs/COGNEE-COST-POLICY.md)**.

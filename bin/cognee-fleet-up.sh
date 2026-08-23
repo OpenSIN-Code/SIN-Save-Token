@@ -5,7 +5,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-echo "== 1) OmniRoute (GLM 5.2 LLM) =="
+echo "== 1) OmniRoute (pinned verified LLM) =="
 if ! curl -sS -m 2 -o /dev/null "http://127.0.0.1:20128/" 2>/dev/null; then
   echo "error: OmniRoute not reachable on :20128 — start: omniroute serve" >&2
   exit 1
@@ -77,7 +77,7 @@ Ready — all agents share the same HTTP API + CLI (0 always-on MCP tax):
   cognee-remember --file path/to/note.md
 
 Embed: NVIDIA NIM nemotron-3-embed-1b @ 2048 (free, proxy :8012).
-LLM: GLM 5.2 via OmniRoute :20128 (Vercel AI Gateway).
+LLM: OpenAI GPT-4.1 via Vercel AI Gateway through OmniRoute :20128.
 
 Claude Code (extra): plugin auto-inject
   export COGNEE_PLUGIN_DATASET=sin-fleet
