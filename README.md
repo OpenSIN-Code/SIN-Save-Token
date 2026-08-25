@@ -418,7 +418,7 @@ Die fachliche Context-/Memory-Control-Plane ist hier kanonisch dokumentiert. Die
 
 Die Detailflüsse sind getrennt:
 
-- [Architektur-Narrative](docs/architecture.md)
+- [Architektur-Narrative](docs/ARCHITECTURE.md)
 - [Memory-Control-Plane](docs/MEMORY_CONTROL_PLANE.md)
 - [Memory-Write-Flow – interaktiv](docs/diagrams/memory-write.workflow.html) · [IR](docs/diagrams/memory-write.workflow.json)
 - [Recall-/Kontext-Flow – interaktiv](docs/diagrams/context-recall.workflow.html) · [IR](docs/diagrams/context-recall.workflow.json)

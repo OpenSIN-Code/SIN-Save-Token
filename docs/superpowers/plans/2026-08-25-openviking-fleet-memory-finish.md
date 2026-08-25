@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3, OpenViking 0.3.22, Docker, Tailscale Serve, OmniRoute OpenAI-compatible gateway, GitNexus, Archify 2.11, pytest.
 
-**Spec:** `docs/MEMORY_CONTROL_PLANE.md`, `docs/architecture.md`, repository `AGENTS.md`, and the architecture decision established in this workstream.
+**Spec:** `docs/MEMORY_CONTROL_PLANE.md`, `docs/ARCHITECTURE.md`, repository `AGENTS.md`, and the architecture decision established in this workstream.
 
 ## Global Constraints
 
@@ -110,7 +110,7 @@
 - Create: `docs/diagrams/deployment-topology.architecture.html`
 - Create: optimized image assets under `docs/assets/architecture/`
 - Modify: `README.md`
-- Modify: `docs/architecture.md`
+- Modify: `docs/ARCHITECTURE.md`
 - Modify: `docs/MEMORY_CONTROL_PLANE.md`
 
 **Interfaces:**
