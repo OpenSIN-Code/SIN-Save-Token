@@ -19,17 +19,17 @@ exec(
 
 class MemoryWriteTests(unittest.TestCase):
     def test_identical_text_is_duplicate(self):
-        left = "We decided that Cognee owns durable domain memory and Simone owns project code facts."
+        left = "We decided that OpenViking owns durable semantic domain memory and GitNexus owns project code facts."
         right = left
         self.assertEqual(MODULE.similarity(left, right), 1.0)
 
     def test_similar_decisions_are_detected(self):
-        left = "Cognee is the canonical owner of durable domain decisions across all agents."
-        right = "Cognee is the canonical owner of durable domain decisions for the full agent fleet."
+        left = "OpenViking is the canonical owner of durable domain decisions across all agents."
+        right = "OpenViking is the canonical owner of durable domain decisions for the full agent fleet."
         self.assertGreater(MODULE.similarity(left, right), 0.4)
 
     def test_unrelated_memories_are_not_duplicates(self):
-        left = "Cognee stores durable architecture decisions."
+        left = "OpenViking stores durable architecture decisions."
         right = "Graphify determines callers and symbol dependencies."
         self.assertLess(MODULE.similarity(left, right), 0.2)
 
@@ -55,7 +55,7 @@ class MemoryWriteTests(unittest.TestCase):
             }
         }
         problem = MODULE.validate(
-            "Cognee is the canonical durable domain-memory owner.", "decision", policy
+            "OpenViking is the canonical durable domain-memory owner.", "decision", policy
         )
         self.assertIsNone(problem)
 

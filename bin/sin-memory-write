@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Validated, deduplicated fleet-memory writer."""
+"""Validated single-writer gateway for canonical OpenViking durable memory.
+
+OpenViking owns semantic memory content. The local SQLite database is an audit
+receipt ledger only: new writes store hashes, provenance, backend receipts and
+lifecycle metadata, never a second copy of the semantic memory text.
+"""
 
 from __future__ import annotations
 
@@ -9,16 +14,22 @@ import json
 import os
 import re
 import sqlite3
-import subprocess
 import sys
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+LIB = ROOT / "lib"
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+
+from sin_memory_gateway import OpenVikingCLIBackend, SinMemoryGateway  # noqa: E402
+
 POLICY_FILE = ROOT / "config" / "context-policy.json"
 LEDGER_FILE = Path.home() / ".local" / "share" / "sin-save-token" / "memory.sqlite3"
-
 WORD_RE = re.compile(r"[A-Za-zÀ-ÿ0-9_]+")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def normalize(text: str) -> str:
@@ -29,10 +40,7 @@ def shingles(text: str, size: int = 3) -> set[tuple[str, ...]]:
     words = normalize(text).split()
     if len(words) < size:
         return {tuple(words)} if words else set()
-    return {
-        tuple(words[index : index + size])
-        for index in range(len(words) - size + 1)
-    }
+    return {tuple(words[index : index + size]) for index in range(len(words) - size + 1)}
 
 
 def similarity(left: str, right: str) -> float:
@@ -44,82 +52,149 @@ def similarity(left: str, right: str) -> float:
 
 
 def initialize(path: Path) -> sqlite3.Connection:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path)
+    """Open the audit DB without mutating the legacy semantic-memory table."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    connection = sqlite3.connect(path, timeout=10)
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA synchronous=FULL")
+    connection.execute("PRAGMA busy_timeout=10000")
     connection.execute(
         """
-        CREATE TABLE IF NOT EXISTS memories (
-            id TEXT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS memory_receipts (
+            record_id TEXT PRIMARY KEY,
             memory_type TEXT NOT NULL,
             scope TEXT NOT NULL,
-            content TEXT NOT NULL,
             source TEXT NOT NULL,
+            evidence_sha256 TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            content_digest TEXT NOT NULL UNIQUE,
+            receipt_id TEXT NOT NULL UNIQUE,
+            record_hash TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            backend_ref TEXT,
+            committed_at TEXT NOT NULL,
             created_at INTEGER NOT NULL,
-            provider TEXT NOT NULL
+            status TEXT NOT NULL,
+            supersedes TEXT
         )
         """
     )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_memory_receipts_scope ON memory_receipts(scope, created_at DESC)"
+    )
     connection.commit()
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
     return connection
 
 
-def validate(
-    text: str,
-    memory_type: str,
-    policy: dict,
-) -> str | None:
+def validate(text: str, memory_type: str, policy: dict) -> str | None:
     write_policy = policy["write_policy"]
-
     if memory_type not in write_policy["allowed_types"]:
         return f"unsupported memory type: {memory_type}"
-
     if len(text) < int(write_policy["minimum_length"]):
         return "memory is too short to preserve meaningful context"
-
     if len(text) > int(write_policy["maximum_length"]):
         return "memory is too long; store one atomic fact or decision"
-
     for pattern in write_policy["reject_patterns"]:
         if re.search(pattern, text.strip(), re.IGNORECASE):
             return f"unverified/speculative memory rejected by pattern: {pattern}"
-
     return None
 
 
-def existing_duplicate(
+def canonical_payload(memory_type: str, scope: str, source: str, text: str) -> dict[str, str]:
+    return {
+        "type": memory_type,
+        "scope": scope,
+        "source": source,
+        "content": text.strip(),
+    }
+
+
+def content_digest(memory_type: str, scope: str, source: str, text: str) -> str:
+    serialized = json.dumps(
+        canonical_payload(memory_type, scope, source, text),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def existing_receipt_duplicate(connection: sqlite3.Connection, digest: str) -> str | None:
+    row = connection.execute(
+        "SELECT record_id FROM memory_receipts WHERE content_digest = ?",
+        (digest,),
+    ).fetchone()
+    return str(row[0]) if row else None
+
+
+def existing_legacy_duplicate(
     connection: sqlite3.Connection,
     text: str,
     threshold: float,
 ) -> tuple[str, float] | None:
+    """Consult the old table only to prevent duplicate migration/writes.
+
+    New canonical writes never add semantic content to this legacy table.
+    """
+    exists = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memories'"
+    ).fetchone()
+    if not exists:
+        return None
     rows = connection.execute(
         "SELECT id, content FROM memories ORDER BY created_at DESC LIMIT 500"
     ).fetchall()
-
     best: tuple[str, float] | None = None
     for memory_id, existing_text in rows:
         score = similarity(text, existing_text)
         if best is None or score > best[1]:
-            best = (memory_id, score)
-
+            best = (str(memory_id), score)
     if best is not None and best[1] >= threshold:
         return best
     return None
 
 
-def write_cognee(text: str) -> bool:
-    try:
-        process = subprocess.run(
-            ["cognee-remember", text],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-            env=os.environ.copy(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+def safe_identifier(prefix: str, value: str) -> str:
+    clean = value.strip()
+    if SAFE_ID_RE.fullmatch(clean):
+        return clean
+    return f"{prefix}-{hashlib.sha256(clean.encode('utf-8')).hexdigest()[:24]}"
 
-    return process.returncode == 0
+
+def source_file(source: str) -> Path | None:
+    candidates = [source]
+    if ":" in source:
+        candidates.append(source.split(":", 1)[0])
+    for value in candidates:
+        candidate = Path(value).expanduser()
+        if candidate.is_file():
+            return candidate.resolve()
+    return None
+
+
+def derive_evidence_sha256(source: str, text: str, explicit: str | None) -> str:
+    if explicit:
+        normalized = explicit.strip().lower()
+        if not SHA256_RE.fullmatch(normalized):
+            raise ValueError("--evidence-sha256 must be 64 lowercase hex characters")
+        return normalized
+    backing = source_file(source)
+    if backing is not None:
+        return hashlib.sha256(backing.read_bytes()).hexdigest()
+    # Compatibility path for callers that historically supplied only a source
+    # label. This binds the claim to its declared origin and exact statement;
+    # callers with independent evidence should pass --evidence-sha256.
+    material = json.dumps(
+        {"source": source.strip(), "content": text.strip()},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
 def main() -> int:
@@ -128,16 +203,13 @@ def main() -> int:
     parser.add_argument(
         "--type",
         required=True,
-        choices=[
-            "decision",
-            "constraint",
-            "verified_fact",
-            "gotcha",
-            "resolved_failure",
-        ],
+        choices=["decision", "constraint", "verified_fact", "gotcha", "resolved_failure"],
     )
     parser.add_argument("--scope", default="fleet")
     parser.add_argument("--source", required=True)
+    parser.add_argument("--evidence-sha256")
+    parser.add_argument("--actor", default=os.environ.get("SIN_MEMORY_ACTOR", "sin-memory-write"))
+    parser.add_argument("--supersedes")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -147,58 +219,111 @@ def main() -> int:
         print(f"REJECTED: {problem}", file=sys.stderr)
         return 2
 
-    connection = initialize(LEDGER_FILE)
-    threshold = float(policy["write_policy"]["duplicate_similarity"])
-    duplicate = existing_duplicate(connection, args.text, threshold)
+    try:
+        evidence_sha256 = derive_evidence_sha256(
+            args.source,
+            args.text,
+            args.evidence_sha256,
+        )
+    except ValueError as error:
+        print(f"REJECTED: {error}", file=sys.stderr)
+        return 2
 
-    if duplicate:
-        memory_id, score = duplicate
-        print(f"SKIPPED duplicate={memory_id} similarity={score:.3f}")
-        return 0
-
-    canonical = {
-        "type": args.type,
-        "scope": args.scope,
-        "source": args.source,
-        "content": args.text.strip(),
+    digest = content_digest(args.type, args.scope, args.source, args.text)
+    record_id = "mem-" + digest[:20]
+    actor = safe_identifier("actor", args.actor)
+    provenance = {
+        "source": safe_identifier("src", args.source),
+        "evidence_sha256": evidence_sha256,
+        "actor": actor,
     }
-    serialized = json.dumps(canonical, ensure_ascii=False, sort_keys=True)
-    memory_id = hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:20]
 
     if args.dry_run:
         print(
             json.dumps(
-                {"id": memory_id, **canonical},
+                {
+                    "id": record_id,
+                    "type": args.type,
+                    "scope": args.scope,
+                    "source": args.source,
+                    "evidence_sha256": evidence_sha256,
+                    "actor": actor,
+                    "content_digest": digest,
+                    "provider": "openviking",
+                },
                 ensure_ascii=False,
                 indent=2,
             )
         )
         return 0
 
-    # Cognee is the canonical domain-memory owner.
-    if not write_cognee(serialized):
-        print("ERROR: cognee write failed; local ledger not committed", file=sys.stderr)
+    connection = initialize(LEDGER_FILE)
+    duplicate = existing_receipt_duplicate(connection, digest)
+    if duplicate:
+        print(f"SKIPPED duplicate={duplicate} provider=openviking")
+        return 0
+
+    # During migration, the old content table may contain this statement even
+    # though no OpenViking receipt exists yet. Do not suppress it: migration
+    # needs to create the first canonical OpenViking copy. For normal new writes
+    # the receipt digest is the authoritative duplicate check.
+    threshold = float(policy["write_policy"]["duplicate_similarity"])
+    legacy_duplicate = existing_legacy_duplicate(connection, args.text, threshold)
+
+    try:
+        backend = OpenVikingCLIBackend(
+            account=os.environ.get("SIN_MEMORY_ACCOUNT", "sin-fleet"),
+            user=os.environ.get("SIN_MEMORY_USER", "default"),
+            agent_id=os.environ.get("SIN_MEMORY_AGENT_ID", "sin-memory-gateway"),
+        )
+    except Exception as error:
+        print(f"ERROR: OpenViking backend unavailable: {error}", file=sys.stderr)
         return 3
 
+    result = SinMemoryGateway(backend).commit_record(
+        record_id=record_id,
+        content=args.text,
+        provenance=provenance,
+        supersedes=args.supersedes,
+    )
+    if not result.accepted or result.receipt is None:
+        print(f"ERROR: OpenViking write failed: {result.reason or 'no committed receipt'}", file=sys.stderr)
+        return 3
+
+    receipt = result.receipt
     connection.execute(
         """
-        INSERT INTO memories(
-            id, memory_type, scope, content, source, created_at, provider
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO memory_receipts(
+            record_id, memory_type, scope, source, evidence_sha256, actor,
+            content_digest, receipt_id, record_hash, provider, backend_ref,
+            committed_at, created_at, status, supersedes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            memory_id,
+            record_id,
             args.type,
             args.scope,
-            args.text.strip(),
             args.source,
+            evidence_sha256,
+            actor,
+            digest,
+            receipt.receipt_id,
+            receipt.record_hash,
+            receipt.backend,
+            receipt.backend_ref,
+            receipt.committed_at or "",
             int(time.time()),
-            "cognee",
+            receipt.status.value,
+            args.supersedes,
         ),
     )
     connection.commit()
 
-    print(f"STORED {memory_id} provider=cognee")
+    suffix = f" legacy_similar={legacy_duplicate[0]}" if legacy_duplicate else ""
+    print(
+        f"STORED {record_id} provider=openviking receipt={receipt.receipt_id} "
+        f"backend_ref={receipt.backend_ref or '-'}{suffix}"
+    )
     return 0
 
 

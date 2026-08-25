@@ -445,18 +445,25 @@ def provider_sin_code(
     )
 
 
-def provider_cognee(
+def provider_openviking(
     query: str,
     cwd: str,
     runtime: ProviderRuntime,
     specs: dict[str, ProviderSpec],
 ) -> ProviderOutcome:
+    local_adapter = ROOT / "bin" / "openviking-recall"
+    argv_override = (
+        [sys.executable, str(local_adapter), "{query}"]
+        if local_adapter.is_file()
+        else None
+    )
     return call_runtime_provider(
-        "cognee",
+        "openviking",
         cwd=cwd,
         variables={"query": query},
         runtime=runtime,
         specs=specs,
+        argv_override=argv_override,
     )
 
 
@@ -556,7 +563,7 @@ PROVIDERS = {
     "gitnexus": provider_gitnexus,
     "simone": provider_simone,
     "sin-code": provider_sin_code,
-    "cognee": provider_cognee,
+    "openviking": provider_openviking,
     "deeptutor": provider_deeptutor,
     "crg": provider_crg,
     "session-digest": provider_session_digest,

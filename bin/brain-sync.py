@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Controlled one-way export from gbrain to canonical Cognee memory.
+"""Controlled one-way export from gbrain to canonical OpenViking memory through sin-memory-write.
 
-There is deliberately no automatic Cognee -> gbrain bulk sync.
-Cognee owns durable domain memory. Automatic bidirectional replication creates
+There is deliberately no automatic OpenViking -> gbrain bulk sync.
+OpenViking owns durable semantic domain memory. Automatic bidirectional replication creates
 duplicates, feedback loops, stale copies, and higher retrieval cost.
 """
 
@@ -50,7 +50,6 @@ def run(argv: list[str], timeout: int = 30) -> tuple[str, int]:
             check=False,
             env={
                 **os.environ,
-                "OPENAI_BASE_URL": "http://127.0.0.1:8012/v1",
             },
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -206,7 +205,7 @@ def status(connection: sqlite3.Connection) -> int:
             {
                 "exported_pages": count,
                 "newest_export_unix": newest,
-                "direction": "gbrain -> cognee",
+                "direction": "gbrain -> openviking",
                 "automatic_reverse_sync": False,
             },
             indent=2,

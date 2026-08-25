@@ -2,8 +2,13 @@
 set -euo pipefail
 
 ROOT="${SIN_REPO:-$HOME/dev/SIN-Save-Token}"
-# Secrets must already be injected by sin-infisical agent run. This service
-# script only derives non-secret Cognee/OpenAI-compatible runtime settings.
+# Secrets must already be injected by sin-infisical agent run. Prefer the
+# verified first NVIDIA pool slot when the compatibility NVIDIA_API_KEY alias
+# is absent; never persist or print the value here.
+if [ -z "${NVIDIA_API_KEY:-}" ] && [ -n "${NVIDIA_API_KEY_1:-}" ]; then
+  export NVIDIA_API_KEY="$NVIDIA_API_KEY_1"
+fi
+# This service script only derives non-secret Cognee/OpenAI-compatible runtime settings.
 source "$ROOT/bin/cognee-omniroute-env.sh"
 
 export ENABLE_BACKEND_ACCESS_CONTROL=false

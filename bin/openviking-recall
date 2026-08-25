@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""Bounded OpenViking-only durable-memory retrieval for ``sin-context``.
+
+The adapter intentionally has no Cognee/SIN-Brain fallback.  It asks the one
+canonical OpenViking account/user scope for memory context and returns only
+memory hits, preferring OpenViking's context-aware search with find as a same-
+backend fallback.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from typing import Any
+
+MAX_OUTPUT_CHARS = 16_000
+
+
+def identity() -> tuple[str, str, str]:
+    return (
+        os.environ.get("SIN_MEMORY_ACCOUNT", "sin-fleet"),
+        os.environ.get("SIN_MEMORY_USER", ""),
+        os.environ.get("SIN_MEMORY_AGENT_ID", "sin-context"),
+    )
+
+
+def safe_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    for key in (
+        "SIN_MANIFEST_HMAC_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+    ):
+        environment.pop(key, None)
+    return environment
+
+
+def run_ov(command: str, query: str, limit: int) -> tuple[Any | None, str]:
+    executable = shutil.which("ov")
+    if executable is None:
+        return None, "OpenViking `ov` CLI is not installed"
+    account, user, agent_id = identity()
+    argv = [
+        executable,
+        "-o",
+        "json",
+        "--account",
+        account,
+        "--agent-id",
+        agent_id,
+        command,
+        query,
+        "--node-limit",
+        str(limit),
+        "--level",
+        "0",
+        "--level",
+        "1",
+        "--level",
+        "2",
+        "--threshold=-1",
+    ]
+    try:
+        process = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+            env=safe_environment(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return None, str(error)
+    if process.returncode != 0:
+        return None, process.stderr.strip() or process.stdout.strip() or "OpenViking failed"
+    payload = None
+    for candidate in reversed(process.stdout.splitlines()):
+        candidate = candidate.strip()
+        if not candidate:
+            continue
+        try:
+            payload = json.loads(candidate)
+            break
+        except json.JSONDecodeError:
+            continue
+    if payload is None:
+        return None, "OpenViking returned non-JSON output"
+    if isinstance(payload, dict) and "result" in payload:
+        payload = payload["result"]
+    return payload, ""
+
+
+def memory_hits(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    values = payload.get("memories")
+    if not isinstance(values, list):
+        return []
+    selected: list[dict[str, Any]] = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        selected.append(
+            {
+                key: item[key]
+                for key in (
+                    "uri",
+                    "score",
+                    "level",
+                    "context_type",
+                    "abstract",
+                    "overview",
+                    "content",
+                    "category",
+                    "tags",
+                )
+                if key in item
+            }
+        )
+    return selected
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("query", nargs="+")
+    parser.add_argument("--limit", type=int, default=5)
+    args = parser.parse_args()
+    query = " ".join(args.query).strip()
+    if not query:
+        print("query must not be empty", file=sys.stderr)
+        return 2
+    limit = max(1, min(args.limit, 20))
+
+    payload, error = run_ov("search", query, limit)
+    hits = memory_hits(payload)
+    method = "search"
+    if not hits:
+        fallback, fallback_error = run_ov("find", query, limit)
+        fallback_hits = memory_hits(fallback)
+        if fallback_hits:
+            payload, hits, method = fallback, fallback_hits, "find"
+        elif error or fallback_error:
+            print(error or fallback_error, file=sys.stderr)
+            return 3
+
+    if not hits:
+        print("no OpenViking memory results", file=sys.stderr)
+        return 3
+
+    account, user, _ = identity()
+    result = {
+        "provider": "openviking",
+        "method": method,
+        "account": account,
+        "memories": hits[:limit],
+    }
+    if user:
+        result["user"] = user
+    output = json.dumps(
+        result,
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    if len(output) > MAX_OUTPUT_CHARS:
+        output = output[:MAX_OUTPUT_CHARS] + "\n[… OpenViking output truncated]"
+    print(output)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
