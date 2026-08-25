@@ -127,17 +127,17 @@ Do **not** stack four overlapping brains. Use each tool for its job:
 
 | Backend | Role | Always-on? |
 |---------|------|------------|
-| **graphify** | Code structure graph (symbols, calls, blast radius) — **0 LLM tokens** | CLI on demand |
+| **GitNexus** | Canonical repository code-intelligence graph (symbols, calls, flows, blast radius) | CLI/MCP on demand |
 | **claude-mem** | Session observation stream — what happened in chats | Yes (shared worker+DB) |
-| **cognee fleet** | Domain knowledge graph — multi-agent CLI (`cognee-recall` / `remember`) | HTTP :8011; embed Gemini+local fallback; **not** always-on MCP |
+| **OpenViking** | Canonical durable semantic/domain memory — multi-agent CLI (`sin-context`, `openviking-recall`, `sin-memory-write`) | Central private OCI service; **not** always-on MCP |
 | **session-digest / dream** | Resume briefs + promote durable lessons into memory | CLI on demand |
 | **simone** | Code AST/LSP + hybrid memory (Qdrant+Neo4j) | optional MCP; fix or demote if down |
 
 **Rules:**
-1. Prefer graphify before broad grep for structural questions.
-2. Prefer claude-mem / cognee recall before re-reading transcripts.
+1. Prefer GitNexus before broad grep for structural/code-architecture questions; use Graphify only for explicit mixed-corpus code+docs/cross-repo work.
+2. Prefer bounded OpenViking recall for durable decisions/policies and session-digest/claude-mem only for session-local continuation.
 3. Do not add a new memory MCP without a measured ROI gate (`memory-scope --audit` pattern).
-4. Cognee fleet is hybrid production path: CLI for all agents; short `remember` free of flags; bulk needs `COGNEE_ALLOW_COSTLY=1`. See `docs/COGNEE-COST-POLICY.md` + README.
+4. OpenViking is the production semantic-memory path for all agents. `sin-memory-write` is the single verified writer; Cognee is retired/non-default compatibility only. See README and the legacy note in `docs/COGNEE-COST-POLICY.md`.
 
 ### Phase 4 — Evaluate frontier additions (backlog, measure before adopting)
 - **context-mode** (BM25 retrieval on compaction, ~98% context-bloat reduction claimed) — complements rtk (rtk=CLI, context-mode=MCP output). Pilot in one runtime.

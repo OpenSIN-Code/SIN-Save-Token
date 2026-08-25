@@ -89,7 +89,7 @@ class CrossRepositoryArchitectureContractTests(unittest.TestCase):
                         "autoInjectContext": False,
                         "autoSync": False,
                         "extractKnowledge": False,
-                        "canonicalMemoryProvider": "cognee",
+                        "canonicalMemoryProvider": "openviking",
                         "role": "archive-and-plan-store",
                     }
                 },
@@ -121,10 +121,10 @@ class CrossRepositoryArchitectureContractTests(unittest.TestCase):
                 "config/context-policy.json",
                 {
                     "routes": [
-                        {"name": "code_symbol", "providers": ["simone", "graphify"]},
+                        {"name": "code_symbol", "providers": ["gitnexus", "simone"]},
                         {
                             "name": "code_architecture",
-                            "providers": ["graphify", "gitnexus"],
+                            "providers": ["gitnexus", "sin-code"],
                         },
                     ],
                     "context_maximum_tokens": 1600,
@@ -158,6 +158,12 @@ class CrossRepositoryArchitectureContractTests(unittest.TestCase):
                             "argv": ["gitnexus-query"],
                             "timeout_seconds": 120,
                             "failure_threshold": 2,
+                            "cooldown_seconds": 300,
+                        },
+                        "sin-code": {
+                            "argv": ["sin", "code", "map"],
+                            "timeout_seconds": 120,
+                            "failure_threshold": 3,
                             "cooldown_seconds": 300,
                         },
                     },

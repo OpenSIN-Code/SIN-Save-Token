@@ -63,7 +63,7 @@ def build(root: Path) -> None:
                 "autoInjectContext": False,
                 "autoSync": False,
                 "extractKnowledge": False,
-                "canonicalMemoryProvider": "cognee",
+                "canonicalMemoryProvider": "openviking",
                 "role": "archive-and-plan-store",
             }
         },

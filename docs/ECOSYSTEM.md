@@ -38,7 +38,7 @@ Re-run either installer anytime; both are idempotent.
 | MCP server list | wow `shared/mcp/servers.json` | Merged into real agent configs |
 | L2 budget / task-profile policy | wow `shared/mcp/servers.json` + `task-profiles.json` | wow generator/doctor + SST `verify-tokens` |
 | L1 rtk behavior | SST hooks + `rtk` binary | Claude PreToolUse, opencode plugin, Codex RTK.md |
-| L3 memory backends | SST: claude-mem (session) + Cognee fleet CLI (domain graph) | All runtimes |
+| L3 memory backends | SST: OpenViking (canonical durable semantic memory) + session-digest/claude-mem as bounded continuation aids | All runtimes |
 | agent-grep binary | SST `bin/agent-grep` | wow doctor PATH check; house rules |
 
 ## Health commands
@@ -82,13 +82,12 @@ Core allowlist (current): **empty**. Tool access is selected per task, not globa
 ## Memory stack (current + proposed)
 
 ```
-code structure         graphify (CLI, 0 LLM)
-code symbols/LSP       Simone (primary for symbol navigation)
-session observations   claude-mem (short-lived, pull-based)
-domain graph memory    Cognee fleet (only canonical durable memory; CLI HTTP :8011)
-                         embed: NVIDIA NIM / local fallback (:8012)
-                         LLM cognify: OmniRoute
-curated staging         gbrain → one-way curated export to Cognee
+code structure         GitNexus (canonical repository graph)
+mixed corpus graph     Graphify (explicit code+docs/cross-repo only)
+code symbols fallback  Simone
+session observations   claude-mem/session-digest (short-lived, pull-based)
+domain semantic memory OpenViking (only canonical durable semantic memory)
+curated staging         gbrain → one-way curated export through sin-memory-write to OpenViking
 archive / plans         global-brain, on-demand; no default prompt injection
 resume / lessons        session-digest, dream (SST CLIs)
 ```

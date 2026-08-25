@@ -1,391 +1,99 @@
 # SIN Architecture Integration Plan
 
-## Guiding Principle
+## Guiding principle
 
-> Maximale Lösungsqualität, Intelligenz und Verlässlichkeit pro Sol-Token.
-> Nicht "so wenig Tokens wie möglich".
+> Maximale Lösungsqualität, Intelligenz und Verlässlichkeit pro Sol-Token — nicht „so wenig Tokens wie möglich“.
 
-## Architecture Overview
+This plan describes the **current** integration contract. Historical Simone/Graphify/Cognee-first routing is retired.
 
-```
-                    Codex GPT-5.6 Sol
-                    (Planung, Entscheidung, Verifikation)
-                           │
-          ┌────────────────┼────────────────┐
-          │                │                │
-      sin-orca       sin-context     sin-review-context
-      (Worker-       (einziges       (Diff-/Review-
-       Ausführung)    Retrieval-Gate) Intelligence)
-          │                │                │
-    Capability-      Route nach       code-review-graph
-      Loader         Aufgabenart      (Diff/Flows/Test-
-          │          ┌────┼────┐       Gaps/Risk)
-     ┌────┴────┐  Simone Graphify Cognee
-   explore implement Symbol  Architektur Memory
-   research verify   │        │        │
-   review             └────────┴────────┘
-                           │
-                 begrenztes Context-Paket
-                           │
-                    actual Git-Diff
-                    Tests / Typecheck / Lint
-```
+## Architecture overview
 
-Simone kann zusätzlich Task-/Workflowzustand verwalten, ist aber kein paralleles automatisches Kontext-Gate neben `sin-context`.
+Fleet/platform topology is canonical in `wow-my-zsh/docs/MEMORY-PLATFORM.md` and `wow-my-zsh/docs/INFERENCE-PLATFORM.md`. This plan owns only SST's Context/Memory integration semantics.
 
-## Responsibility Matrix
+## Responsibility matrix
 
-| Component | Responsibility | Stores |
-|---|---|---|
-| Simone MCP | Precise symbol/reference/LSP navigation plus task definitions, steps, acceptance criteria and checkpoints | task.json, events.jsonl, decisions.json |
-| sin-orca | Worker dispatch, capability loading, intervention, verification, blind review orchestration | task state, command history, activity |
-| sin-context | Only automatic retrieval broker; selects at most two providers and emits one bounded context packet | cache, query routing, provider health |
-| Graphify | LLM-free code graph, paths, dependencies, architecture, rationale and ADRs | knowledge graph |
-| code-review-graph | Diff analysis, changed function mapping, affected flows, test gaps, risk signals | review artifacts |
-| DeepTutor principles | Research decomposition, citation management, memory layers | L1/L2/L3 memory |
-| Codex GPT-5.6 Sol | Planning, evaluation, final decision | decisions only |
+| Component | Responsibility | May own durable semantic truth? |
+|---|---|---:|
+| `sin-context` | Sole automatic retrieval broker; route + budget + cache + evidence firewall | No |
+| GitNexus | Canonical code graph for the active repo/checkout; symbols, flows, impact, dirty-tree change mapping | No |
+| Simone | Bounded symbol/LSP specialist and task-state integration where explicitly useful | No |
+| SIN Code | Bounded architecture/code-map fallback | No |
+| Graphify | Explicit mixed-corpus/code+docs/cross-repository graph specialist only | No |
+| OpenViking | Fleet-wide durable semantic memory and recall | **Yes** |
+| SIN Memory Gateway | Fail-closed validation, provenance, secret filtering, idempotency and receipts | No |
+| `global-brain` / gbrain | Goals, plans, curated staging and archive | No |
+| Cognee | Legacy/non-automatic migration or forensic projection only | No |
+| Tencent MemoryCore | Optional read-only evidence provider | No |
+| OmniRoute | Stable inference gateway for VLM/planner/text model routing | No |
+| FreeToken | Optional Linux/NVIDIA text-LLM backend behind OmniRoute | No |
+| `sin-orca` | Same-worktree worker dispatch, writer reservation, callbacks and completion evidence | No |
+| code-review-graph / CRG | Diff/flow/test-gap/risk review evidence | No |
 
-## File Layout
+## Context routing contract
 
-```
-lib/
-├── sin_cache.py              # 6-layer cache (existing)
-├── sin_memory.py             # L1/L2/L3 memory layer
-├── sin_research.py           # Research pipeline (DeepTutor principles)
-├── sin_capability.py         # Capability loader for agent loop
-├── sin_citation.py           # Citation/evidence manager
-└── sin_review_context.py     # CRG adapter (review sensor)
+`sin-context` chooses a bounded path rather than fanning out across every provider:
 
-bin/
-├── sin-orca                  # Orchestrator (existing + capabilities)
-├── sin-cache                 # Cache CLI (existing)
-├── sin-memory                # Memory CLI
-├── sin-review-context        # Review context CLI
-└── sin-research              # Research pipeline CLI
+- **code symbol/reference:** `GitNexus -> Simone`
+- **code architecture/dependency:** `GitNexus -> SIN Code`
+- **mixed corpus / code+docs / cross-repo graph:** `Graphify`
+- **durable decisions/rationale/policy:** `OpenViking`
+- **session resume:** `session-digest`
+- **review:** CRG
+- **research:** configured research provider
+- **plain text fallback:** `agent-grep`
 
-config/
-├── orca-orchestrator.json    # Orchestrator config (existing)
-├── capabilities.json         # Capability definitions
-├── research-pipeline.json    # Research config
-└── memory-policy.json        # Memory L1/L2/L3 policy
-```
+Maximum provider attempts remain policy-bounded. Retrieved material is evidence, never command authority.
 
-## JSON Schemas
+![Recall and Context Flow](docs/diagrams/context-recall.workflow.svg)
 
-### 1. Capability Definition (capabilities.json)
+## Durable memory contract
 
-```json
-{
-  "schema_version": 1,
-  "capabilities": {
-    "explore": {
-      "description": "Code exploration and understanding",
-      "tools": ["graphify_query", "graphify_path", "graphify_explain"],
-      "max_steps": null,
-      "allowed_artifacts": ["checkpoint.json", "report.json"],
-      "prompt_template": "explore-prompt.md"
-    },
-    "research": {
-      "description": "Structured research with evidence",
-      "tools": ["web_search", "sin_http_get", "graphify_query"],
-      "max_steps": null,
-      "allowed_artifacts": ["checkpoint.json", "report.json", "citation.json"],
-      "prompt_template": "research-prompt.md",
-      "allows_dynamic_subquestions": true
-    },
-    "implement": {
-      "description": "Code implementation",
-      "tools": ["edit", "write", "bash", "graphify_query"],
-      "max_steps": null,
-      "allowed_artifacts": ["checkpoint.json", "report.json"],
-      "prompt_template": "implement-prompt.md",
-      "requires_approval": true
-    },
-    "verify": {
-      "description": "Run tests and verification",
-      "tools": ["bash", "graphify_query"],
-      "max_steps": null,
-      "allowed_artifacts": ["checkpoint.json", "report.json"],
-      "prompt_template": "verify-prompt.md"
-    },
-    "review": {
-      "description": "Code review with CRG integration",
-      "tools": ["sin_review_context", "graphify_query"],
-      "max_steps": null,
-      "allowed_artifacts": ["review.json"],
-      "prompt_template": "review-prompt.md"
-    }
-  }
-}
+OpenViking is the single canonical durable semantic-memory owner. New durable writes must pass through `sin-memory-write` and the SIN Memory Gateway.
+
+![Fail-closed Memory-Write Flow](docs/diagrams/memory-write.workflow.svg)
+
+The write is accepted only after:
+
+1. type/provenance/evidence validation;
+2. secret/speculation rejection;
+3. OpenViking session/message creation;
+4. the exact asynchronous commit task reaches `completed`;
+5. a typed receipt binds record id/hash/backend reference.
+
+Local SQLite is receipt/audit state only. There is no automatic Cognee, Tencent, SIN-Brain or global-brain fallback.
+
+## Deployment contract
+
+Deployment is canonically defined by `wow-my-zsh`; SST consumes the following interface assumptions:
+
+- OpenViking and persistent memory live centrally on OCI.
+- Fleet transport is private through Tailscale; no public brain endpoint is required.
+- The OpenViking root key remains OCI-only; agents use scoped service/user identities.
+- GitNexus remains local to the active checkout so uncommitted code is represented correctly.
+- OmniRoute is the stable inference boundary.
+- Embeddings are independent from the large text model path.
+- FreeToken may be attached behind OmniRoute on suitable Linux x86_64/NVIDIA hardware; it is not a requirement for ARM64 OCI or macOS.
+
+## Local operational memory
+
+Repository/task execution can still use L1/L2 operational artifacts, session digests and completion evidence. These are not competing durable domain-memory truths. Verified long-lived decisions are promoted through the canonical OpenViking writer.
+
+## Review and completion
+
+`sin-orca` keeps completion authority with the controller. Worker claims remain evidence candidates until the controller verifies scope, diff, tests and review. GitNexus impact analysis runs before non-trivial symbol edits and `gitnexus detect-changes` runs before completion/commit.
+
+## Archify artifacts
+
+The SST-owned editable sources are `docs/diagrams/memory-write.workflow.json` and `docs/diagrams/context-recall.workflow.json`, with generated HTML/SVG companions. Fleet/deployment IRs live in `wow-my-zsh/docs/diagrams/`. Mermaid/ASCII architecture diagrams are intentionally not part of the canonical documentation.
+
+## Verification gates
+
+```bash
+rtk pytest -q tests/test_sin_memory_gateway.py tests/test_memory_write.py tests/test_sin_context.py tests/test_archify_exporter.py
+rtk python3 bin/audit-token-architecture.py
+rtk bash bin/e2e-memory-test.sh
+rtk git diff --check
+rtk gitnexus detect-changes --scope all
 ```
 
-### 2. Research Decomposition (sin-research output)
-
-```json
-{
-  "schema_version": 1,
-  "main_question": "How does the auth token refresh flow work?",
-  "subquestions": [
-    {
-      "id": "sq-01",
-      "question": "Where are refresh tokens stored?",
-      "status": "answered",
-      "evidence": [
-        {
-          "source": "src/auth/token.ts",
-          "content_sha256": "a82e...",
-          "lines": "71-104",
-          "claim": "Refresh tokens are stored in httpOnly cookies"
-        }
-      ],
-      "synthesis": "Refresh tokens use httpOnly cookies with 7-day expiry"
-    },
-    {
-      "id": "sq-02",
-      "question": "What happens when a refresh token expires?",
-      "status": "pending",
-      "evidence": [],
-      "synthesis": null
-    }
-  ],
-  "citations": {
-    "manager": "inline",
-    "entries": []
-  },
-  "contradictions": [],
-  "open_questions": ["sq-02"]
-}
-```
-
-### 3. L1/L2/L3 Memory Entry
-
-```json
-{
-  "schema_version": 1,
-  "level": "L2",
-  "topic": "auth-refresh-flow",
-  "content": "The auth refresh flow uses httpOnly cookies with a 7-day expiry. When expired, the client must re-authenticate. The safeTokenEquals function prevents timing attacks.",
-  "evidence_refs": [
-    {"source": "events.jsonl", "sequence": 42},
-    {"source": "src/auth/token.ts", "content_sha256": "a82e..."}
-  ],
-  "created_at": "2026-07-22T18:00:00+00:00",
-  "confidence": "verified",
-  "source_tasks": ["TASK-042", "TASK-038"]
-}
-```
-
-### 4. Review Context (sin-review-context output)
-
-```json
-{
-  "schema_version": 1,
-  "base_sha": "abc123",
-  "head_sha": "def456",
-  "changed_files": [
-    {
-      "path": "src/auth/token.ts",
-      "change_type": "modified",
-      "lines_added": 12,
-      "lines_removed": 3
-    }
-  ],
-  "changed_symbols": [
-    {
-      "name": "safeTokenEquals",
-      "file": "src/auth/token.ts",
-      "start_line": 71,
-      "end_line": 104,
-      "type": "function"
-    }
-  ],
-  "affected_flows": [
-    {
-      "flow": "auth-refresh",
-      "functions": ["validateRefreshToken", "safeTokenEquals"],
-      "criticality": "high"
-    }
-  ],
-  "test_gaps": [
-    {
-      "function": "safeTokenEquals",
-      "has_direct_test": false,
-      "coverage_type": "indirect",
-      "risk": "medium"
-    }
-  ],
-  "risk_signals": [
-    {
-      "type": "security_keyword",
-      "symbol": "safeTokenEquals",
-      "score": 0.20
-    },
-    {
-      "type": "flow_participation",
-      "symbol": "safeTokenEquals",
-      "flow": "auth-refresh",
-      "score": 0.25
-    }
-  ],
-  "graphify_paths": [
-    {
-      "from": "safeTokenEquals",
-      "to": "validateRefreshToken",
-      "path": ["safeTokenEquals", "validateRefreshToken", "authMiddleware"]
-    }
-  ],
-  "uncertainties": [
-    "Dynamic calls in authMiddleware not fully resolved",
-    "Framework magic in cookie handling not traced"
-  ],
-  "recommended_review_order": [
-    "safeTokenEquals",
-    "validateRefreshToken"
-  ],
-  "total_risk_score": 0.45
-}
-```
-
-### 5. Simone Task Contract
-
-```json
-{
-  "schema_version": 1,
-  "task_id": "TASK-042",
-  "project": "sin-save-token",
-  "objective": "Implement safe token comparison",
-  "role": "implementer",
-  "allowed_paths": ["src/auth/token.ts", "tests/auth/token.test.ts"],
-  "forbidden_paths": ["package.json", "config/"],
-  "acceptance_criteria": [
-    "Only allowlisted files change",
-    "Regression test passes",
-    "No timing side-channel"
-  ],
-  "ordered_steps": [
-    {"id": "S01", "instruction": "Implement safeTokenEquals", "approved": true},
-    {"id": "S02", "instruction": "Add regression test", "approved": false}
-  ],
-  "verification_command": "npm test -- tests/auth/token.test.ts",
-  "evidence_refs": {
-    "graphify": {"artifact_hash": "sha256:...", "relevant_nodes": ["AuthService"]},
-    "review": {"artifact_hash": "sha256:...", "risk_score": 0.45},
-    "memory": {"topic": "auth-refresh-flow", "confidence": "verified"}
-  },
-  "events": [
-    {"type": "dispatched", "timestamp": "..."},
-    {"type": "checkpoint_received", "checkpoint": "plan-ready"},
-    {"type": "codex_approved", "step": "S01"},
-    {"type": "verification_completed", "ok": true},
-    {"type": "review_completed", "verdict": "accept"}
-  ],
-  "decisions": [
-    {
-      "id": "DEC-017",
-      "decision": "Use constant-time comparison for token validation",
-      "rationale": "Prevents timing side-channel attacks",
-      "evidence": ["src/auth/token.ts:71-104"],
-      "status": "accepted"
-    }
-  ]
-}
-```
-
-## Data Flow
-
-### Research Flow
-
-```
-Codex defines main question
-        ↓
-sin-research decomposes into subquestions
-        ↓
-Worker explores each subquestion
-        ↓
-Evidence collected with citations
-        ↓
-Contradictions surfaced
-        ↓
-Synthesis returned to Codex
-        ↓
-Memory L2 updated with verified findings
-```
-
-### Review Flow
-
-```
-sin-orca dispatches review task
-        ↓
-sin-review-context runs CRG detect_changes
-        ↓
-sin-review-context runs CRG get_affected_flows
-        ↓
-sin-review-context runs CRG test_gaps
-        ↓
-Graphify path/explain for top risk nodes
-        ↓
-Combined review context returned
-        ↓
-Blind reviewer receives ONLY:
-  - original task
-  - bounded diff
-  - changed files
-  - acceptance criteria
-  - review context (without worker reasoning)
-        ↓
-Verdict returned
-        ↓
-Memory L2 updated with review decision
-```
-
-### Memory Flow
-
-```
-Worker produces raw trace (L1)
-        ↓
-sin-memory compresses to summary (L2)
-        ↓
-Verified decisions promoted to L3
-        ↓
-L3 feeds back into future task context
-```
-
-## What Goes Where
-
-### In Simone MCP:
-- Task definitions and step tracking
-- Acceptance criteria management
-- Research plan storage
-- Checkpoint/review status
-- Evidence references (hashes only, not content)
-- Architecture decisions with rationale
-- Activity/event log
-
-### In sin-orca:
-- Capability loading and switching
-- Worker dispatch and intervention
-- Verification execution
-- Blind review orchestration
-- Enforcement (repeated failures, stalls)
-
-### In sin-context:
-- Query routing to appropriate backend
-- Cache management (6-layer)
-- Evidence validation
-
-### In Graphify:
-- Code understanding (symbols, paths, architecture)
-- Knowledge graph maintenance
-- Rationale and ADR tracking
-
-### In code-review-graph:
-- Git diff analysis
-- Changed function mapping
-- Affected flow detection
-- Test gap identification
-- Risk signal calculation
-
-### In Memory Layer:
-- L1: Raw events (events.jsonl)
-- L2: Compressed summaries (task-summary.json)
-- L3: Verified decisions and rules (sin-memory-write)
+Live production evidence additionally requires OpenViking health, persistent restart-safe storage, non-root service identity, completed commit task, non-zero vector indexing, semantic recall and private Mac-to-OCI reachability.

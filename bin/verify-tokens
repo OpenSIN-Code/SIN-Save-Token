@@ -445,19 +445,28 @@ BUDGET_PY
 rc=$?
 [ "$rc" -ne 0 ] && FAIL=1
 
-# ── L3: claude-mem single shared worker/DB ───────────────────────────
-say "\n[L3] shared memory (claude-mem)"
-WORKERS=$(pgrep -fl "claude-mem" 2>/dev/null | grep -c "start" || true)
-if [ "${WORKERS:-0}" -ge 1 ]; then
-  pass "claude-mem worker running (shared by Claude Code + opencode)"
+# ── L3: canonical OpenViking memory plane ─────────────────────────────
+say "\n[L3] canonical memory (OpenViking)"
+if command -v openviking-recall >/dev/null 2>&1; then
+  pass "openviking-recall on PATH"
 else
-  warn "no claude-mem 'start' worker detected (may be idle)"
+  fail "openviking-recall missing — run SIN-Save-Token/bin/install.sh"
 fi
-if [ -f "$HOME/.claude-mem/claude-mem.db" ]; then
-  pass "single DB at ~/.claude-mem/claude-mem.db"
+if command -v sin-memory-write >/dev/null 2>&1; then
+  pass "sin-memory-write single-writer gateway on PATH"
 else
-  warn "claude-mem DB not found at default path"
+  fail "sin-memory-write missing — run SIN-Save-Token/bin/install.sh"
 fi
+if command -v ov >/dev/null 2>&1; then
+  if ov -o json health >/dev/null 2>&1; then
+    pass "OpenViking configured and reachable"
+  else
+    warn "OpenViking CLI present but configured backend is currently unreachable"
+  fi
+else
+  warn "OpenViking ov CLI not installed on this host"
+fi
+# claude-mem may remain a local/session sidecar, but is not canonical domain memory.
 
 # ── opencode L1 ──────────────────────────────────────────────────────
 say "\n[opencode]"
@@ -507,13 +516,18 @@ for cand in \
 done
 [ "$orca_found" -eq 1 ] || fail "sub-agent preamble missing TOKEN-SAVINGS STANDARD block (checked bundle + Orca template paths)"
 
-# The Orca preamble must ALSO carry the code-intel/verify pointers so subs
-# discover graphify + sin verify (same discoverability guarantee as the 4 files).
+# The Orca preamble must ALSO carry the code-intel/memory/verify pointers so subs
+# discover GitNexus + OpenViking + sin verify.
 if [ -n "$ORCA_PREAMBLE" ]; then
-  if grep -qi "graphify query" "$ORCA_PREAMBLE"; then
-    pass "graphify pointer baked into Orca preamble"
+  if grep -qi "GitNexus" "$ORCA_PREAMBLE" && grep -qi "gitnexus impact" "$ORCA_PREAMBLE"; then
+    pass "GitNexus-first pointer baked into Orca preamble"
   else
-    fail "graphify pointer missing in Orca preamble ($ORCA_PREAMBLE) — subs won't query the graph before grepping"
+    fail "GitNexus-first pointer missing in Orca preamble ($ORCA_PREAMBLE)"
+  fi
+  if grep -qi "openviking-recall" "$ORCA_PREAMBLE" && grep -qi "sin-memory-write" "$ORCA_PREAMBLE"; then
+    pass "OpenViking memory pointer baked into Orca preamble"
+  else
+    fail "OpenViking memory pointer missing in Orca preamble ($ORCA_PREAMBLE)"
   fi
   if grep -qi "sin verify" "$ORCA_PREAMBLE"; then
     pass "sin verify pointer baked into Orca preamble"
@@ -540,12 +554,12 @@ for pf in \
   fi
 done
 
-# ── graphify: installed + pointer present (LLM-free code-graph, ~25x fewer tokens) ──
-say "\n[graphify code-graph]"
-if command -v graphify >/dev/null 2>&1; then
-  pass "graphify on PATH"
+# ── GitNexus: canonical repository intelligence, every runtime discovers it ──
+say "\n[GitNexus code-intelligence]"
+if command -v gitnexus >/dev/null 2>&1; then
+  pass "gitnexus on PATH"
 else
-  warn "graphify NOT on PATH — install: uv tool install graphifyy (then 'graphify update .')"
+  fail "gitnexus NOT on PATH — repository intelligence unavailable"
 fi
 for pf in \
   "$HOME/.config/opencode/AGENTS.md" \
@@ -553,10 +567,10 @@ for pf in \
   "$HOME/.codex/AGENTS.md" \
   "$HOME/Library/Application Support/orca/codex-runtime-home/home/AGENTS.md"; do
   [ -f "$pf" ] || continue
-  if grep -qi "graphify query" "$pf"; then
-    pass "graphify pointer present ($(basename "$(dirname "$pf")")/$(basename "$pf"))"
+  if grep -qi "GitNexus" "$pf"; then
+    pass "GitNexus pointer present ($(basename "$(dirname "$pf")")/$(basename "$pf"))"
   else
-    fail "graphify pointer missing in $pf (agents won't query the graph before grepping)"
+    fail "GitNexus pointer missing in $pf"
   fi
 done
 

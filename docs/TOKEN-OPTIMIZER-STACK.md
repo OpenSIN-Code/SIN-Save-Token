@@ -141,8 +141,7 @@ child exits.
   copied to supported runtimes; no upstream global hook installation occurs.
 - `rtk` remains the shell/log compressor. Gigatoken measures and segments exact
   tokenizer output; it does not replace RTK or reduce prompt size by itself.
-- `sin-context`, Simone, Graphify, and `agent-grep` remain the exact-text
-  retrieval path. pxpipe is never inserted into retrieval automatically.
+- `sin-context` remains the only automatic retrieval broker. GitNexus is primary for code, OpenViking is canonical for durable memory, Simone/SIN Code are bounded code fallbacks, Graphify is explicit mixed-corpus only, and `agent-grep` is the text fallback. pxpipe is never inserted into retrieval automatically.
 - Orca workers and ChatGPT Web handoffs keep task packets, checkpoints, patch
   anchors, IDs, and protocol state as text.
 

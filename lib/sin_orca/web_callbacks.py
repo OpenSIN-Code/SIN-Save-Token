@@ -1070,8 +1070,7 @@ def stage_callback_handoff(
         if record.get("status") != "open":
             raise RuntimeError("only an open callback can stage completion")
         conversation = record.get("conversation")
-        if not isinstance(conversation, dict) or not conversation.get("url"):
-            raise RuntimeError("callback must be bound to a canonical conversation before staging")
+        conversation_bound = isinstance(conversation, dict) and bool(conversation.get("url"))
         if final_status == "done" and rendered_verification.casefold() in {
             "unknown",
             "none",
@@ -1079,17 +1078,33 @@ def stage_callback_handoff(
             "not run",
         }:
             raise ValueError("done handoff requires concrete verification")
+        taskplan_validation = None
+        delivery_mode = "callback-bound"
+        if not conversation_bound:
+            # A missing browser binding must never be papered over by inventing a
+            # conversation.  The only safe fallback is a distinct origin wake-up
+            # backed by the canonical taskplan/report.  It does not become a
+            # normal completion callback and therefore carries no archive authority.
+            taskplan_validation = _validate_taskplan_evidence(
+                root,
+                task_id=str(record.get("task_id") or ""),
+                final_status=final_status,
+            )
+            delivery_mode = "origin-reconcile-unbound"
         action = _compact(next_action or _default_next_action(record), 1800)
+        outcome = {
+            "status": final_status,
+            "summary": rendered_summary,
+            "changed_files": rendered_changed,
+            "verification": rendered_verification,
+            "next_action": action,
+        }
+        if delivery_mode != "callback-bound":
+            outcome["delivery_mode"] = delivery_mode
         payload = {
             "version": 1,
             "identity": _handoff_identity(record),
-            "outcome": {
-                "status": final_status,
-                "summary": rendered_summary,
-                "changed_files": rendered_changed,
-                "verification": rendered_verification,
-                "next_action": action,
-            },
+            "outcome": outcome,
             "staged_at": isoformat(utc_now()),
         }
         record["completion_handoff"] = {
@@ -1104,6 +1119,8 @@ def stage_callback_handoff(
         "task_id": record.get("task_id"),
         "round": record.get("round"),
         "conversation": record.get("conversation"),
+        "delivery_mode": delivery_mode,
+        "taskplan_validation": taskplan_validation,
     }
 
 
@@ -1200,17 +1217,27 @@ def reconcile_callback_handoff(
             task_id=str(record.get("task_id") or ""),
             final_status=str(outcome["status"]),
         )
-    result = send_callback(
-        repository=root,
-        token=token,
-        final_status=str(outcome["status"]),
-        summary=str(outcome["summary"]),
-        changed=list(outcome.get("changed_files") or []),
-        verification=str(outcome.get("verification") or "unknown"),
-        next_action=str(outcome.get("next_action") or ""),
-        dry_run=dry_run,
-        relay_fallback=not dry_run,
-    )
+    if outcome.get("delivery_mode") == "origin-reconcile-unbound":
+        result = _deliver_unbound_origin_reconciliation(
+            repository=root,
+            token=token,
+            outcome=outcome,
+            taskplan_validation=taskplan,
+            dry_run=dry_run,
+            relay_fallback=not dry_run,
+        )
+    else:
+        result = send_callback(
+            repository=root,
+            token=token,
+            final_status=str(outcome["status"]),
+            summary=str(outcome["summary"]),
+            changed=list(outcome.get("changed_files") or []),
+            verification=str(outcome.get("verification") or "unknown"),
+            next_action=str(outcome.get("next_action") or ""),
+            dry_run=dry_run,
+            relay_fallback=not dry_run,
+        )
     result["handoff_reconciled"] = True
     result["taskplan_validation"] = taskplan
     return result
@@ -1539,6 +1566,70 @@ def wait_for_delivery_terminal_idle(
     )
 
 
+def _render_unbound_origin_reconciliation_message(
+    record: dict[str, Any],
+    *,
+    summary: str,
+    changed: list[str],
+    verification: str,
+    next_action: str,
+) -> str:
+    """Render a wake-up that cannot be mistaken for a canonical callback."""
+    transport = record.get("origin_transport")
+    if isinstance(transport, dict) and transport.get("transport") == "deepseek-harness":
+        transport_name = "deepseek-harness"
+        target = str(transport.get("session_id") or "unresolved")
+    elif isinstance(transport, dict) and transport.get("transport") == "prime-agent":
+        transport_name = "prime-agent"
+        target = str(transport.get("active_session_id") or "unresolved")
+    else:
+        transport_name = "opencode-terminal"
+        session = record.get("origin_session")
+        target = (
+            str(session.get("id") or "unresolved")
+            if isinstance(session, dict)
+            else str(record.get("origin_terminal") or "unresolved")
+        )
+    reconciliation = record.get("origin_reconciliation")
+    outcome_status = (
+        str(reconciliation.get("outcome_status") or "unknown")
+        if isinstance(reconciliation, dict)
+        else "unknown"
+    )
+    receipt_command = shlex.join(
+        [
+            "sin-orca",
+            "web-callback-ack",
+            "--repo",
+            str(record["repository_root"]),
+            "--delivery-id",
+            str(record["delivery_id"]),
+        ]
+    )
+    return "\n".join(
+        [
+            "SIN_GPT_WEB_ORIGIN_RECONCILE "
+            f"task={record['task_id']} outcome={outcome_status} "
+            f"delivery={record['delivery_id']} transport={transport_name} "
+            f"target={target} round={record.get('round', 1)}",
+            "REASON: The callback was never bound to a canonical ChatGPT conversation. "
+            "No canonical completion callback or archive/close authority is being asserted.",
+            f"WORKER_SUMMARY: {summary}",
+            f"CHANGED: {json.dumps(changed or ['none'], ensure_ascii=False)}",
+            f"VERIFY: {verification or 'unknown'}",
+            "CHATGPT_PAGE_ID: unresolved",
+            "CHATGPT_CONVERSATION_URL: unresolved",
+            f"REQUIRED_ACTION: {next_action}",
+            "ORIGIN_RECONCILE_ACTION: Refresh the repository's canonical taskplan/report, "
+            "independently verify repository state, diff and tests, then continue the CEO loop. "
+            "Do not infer or perform archive/close from this notice; exact conversation identity is missing.",
+            f"RECEIPT_ACTION: {receipt_command}",
+            "Process this reconciliation delivery ID at most once and acknowledge it only after processing.",
+            "This is an origin wake-up/reconciliation event, not proof of completion.",
+        ]
+    )
+
+
 def render_callback_message(
     record: dict[str, Any],
     *,
@@ -1548,6 +1639,14 @@ def render_callback_message(
     verification: str,
     next_action: str,
 ) -> str:
+    if record.get("completion_mode") == "origin-reconcile-unbound":
+        return _render_unbound_origin_reconciliation_message(
+            record,
+            summary=summary,
+            changed=changed,
+            verification=verification,
+            next_action=next_action,
+        )
     session = record.get("origin_session")
     session_id = session.get("id") if isinstance(session, dict) else None
     conversation = record.get("conversation")
@@ -2002,6 +2101,123 @@ def _deliver_pending_callback(
     }
 
 
+def _deliver_unbound_origin_reconciliation(
+    *,
+    repository: Path,
+    token: str,
+    outcome: dict[str, Any],
+    taskplan_validation: dict[str, Any],
+    dry_run: bool,
+    relay_fallback: bool,
+) -> dict[str, Any]:
+    """Deliver a distinct exact-origin wake-up for an unbound completion handoff.
+
+    The callback itself never becomes a canonical ``done`` callback.  We persist
+    ``callback_status=reconcile`` and a dedicated mode so every downstream reader
+    can distinguish this from a conversation-bound completion.  The existing
+    exact-origin transports and bounded relay are reused after the durable record
+    is written.
+    """
+    root = resolve_repository(repository)
+    with callback_lock(root, token):
+        record = load_callback(root, token)
+        if _expire_callback_if_needed(root, token, record):
+            raise RuntimeError("callback capability has expired")
+        existing_mode = str(record.get("completion_mode") or "")
+        if record.get("status") in {"sent", "acknowledged"} and existing_mode == "origin-reconcile-unbound":
+            return {
+                "ok": True,
+                "status": "callback-origin-reconciled",
+                "reused": True,
+                "task_id": record.get("task_id"),
+                "round": record.get("round"),
+                "delivery_id": record.get("delivery_id"),
+            }
+        if record.get("status") == "open":
+            conversation = record.get("conversation")
+            if isinstance(conversation, dict) and conversation.get("url"):
+                raise RuntimeError("bound callback must use canonical callback delivery")
+            delivery_id = f"gptwcd_{uuid.uuid4().hex}"
+            summary = _compact(str(outcome.get("summary") or ""), 700)
+            changed = _changed_files(list(outcome.get("changed_files") or []))
+            verification = _compact(str(outcome.get("verification") or ""), 500) or "unknown"
+            next_action = _compact(str(outcome.get("next_action") or ""), 1800)
+            record.update(
+                {
+                    "status": "pending-delivery",
+                    "callback_status": "reconcile",
+                    "completion_mode": "origin-reconcile-unbound",
+                    "dispatch_started_at": isoformat(utc_now()),
+                    "summary": summary,
+                    "changed_files": changed,
+                    "verification": verification,
+                    "next_action": next_action,
+                    "delivery_id": delivery_id,
+                    "delivery_state": "pending",
+                    "origin_reconciliation": {
+                        "mode": "origin-reconcile-unbound",
+                        "state": "pending",
+                        "outcome_status": str(outcome.get("status") or "unknown"),
+                        "taskplan_validation": taskplan_validation,
+                        "staged_at": isoformat(utc_now()),
+                    },
+                }
+            )
+            message = render_callback_message(
+                record,
+                final_status="reconcile",
+                summary=summary,
+                changed=changed,
+                verification=verification,
+                next_action=next_action,
+            )
+            if dry_run:
+                return {
+                    "ok": True,
+                    "status": "callback-origin-reconcile-dry-run",
+                    "task_id": record.get("task_id"),
+                    "round": record.get("round"),
+                    "delivery_id": delivery_id,
+                    "message": message,
+                }
+            record["message_sha256"] = hashlib.sha256(message.encode("utf-8")).hexdigest()
+            handoff = record.get("completion_handoff")
+            if isinstance(handoff, dict):
+                record["completion_handoff"] = {
+                    **handoff,
+                    "state": "consumed",
+                    "consumed_at": isoformat(utc_now()),
+                    "delivery_id": delivery_id,
+                }
+            atomic_write_json(callback_path(root, token), record)
+        elif existing_mode != "origin-reconcile-unbound" or record.get("status") not in {
+            "pending-delivery",
+            "delivery-indeterminate",
+        }:
+            raise RuntimeError("callback cannot enter unbound origin reconciliation from its current state")
+
+        result = _deliver_pending_callback(root, token, record, dry_run=False)
+        reconciliation = record.get("origin_reconciliation")
+        if isinstance(reconciliation, dict):
+            if result.get("status") == "callback-sent":
+                reconciliation["state"] = "sent"
+                reconciliation["sent_at"] = isoformat(utc_now())
+            elif result.get("status") == "callback-pending":
+                reconciliation["state"] = "pending"
+            else:
+                reconciliation["state"] = "indeterminate"
+            atomic_write_json(callback_path(root, token), record)
+    if relay_fallback and result.get("status") == "callback-pending":
+        result["relay_fallback"] = install_callback_relay(
+            repository=root,
+            token=token,
+        )
+    if result.get("status") == "callback-sent":
+        result["status"] = "callback-origin-reconciled"
+    result["origin_reconciliation"] = True
+    return result
+
+
 def send_callback(
     *,
     repository: str | Path,
@@ -2142,6 +2358,20 @@ def relay_callback(
         if scheduled and not _relay_fallback_active(record):
             return {"ok": True, "status": "callback-relay-inactive", "callback": token}
         result = _deliver_pending_callback(root, token, record, dry_run=dry_run)
+        if record.get("completion_mode") == "origin-reconcile-unbound" and not dry_run:
+            reconciliation = record.get("origin_reconciliation")
+            if isinstance(reconciliation, dict):
+                if result.get("status") == "callback-sent":
+                    reconciliation["state"] = "sent"
+                    reconciliation["sent_at"] = isoformat(utc_now())
+                elif result.get("status") == "callback-pending":
+                    reconciliation["state"] = "pending"
+                else:
+                    reconciliation["state"] = "indeterminate"
+                atomic_write_json(callback_path(root, token), record)
+            if result.get("status") == "callback-sent":
+                result["status"] = "callback-origin-reconciled"
+            result["origin_reconciliation"] = True
         if scheduled and not dry_run:
             fallback = record["relay_fallback"]
             fallback["attempts"] = int(fallback.get("attempts") or 0) + 1

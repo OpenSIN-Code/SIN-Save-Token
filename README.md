@@ -213,7 +213,7 @@ Release-Blocker. Ohne `--live` werden keine echten Orca-Agenten gestartet.
 |---|---|---|---|
 | **L1 Shell** | `rtk` komprimiert Shell-Output transparent | Claude Code PreToolUse-Hook, opencode-Plugin, Codex RTK.md | ~80% auf git/test/build/package-Output |
 | **L2 Tools** | Schlanke MCP-Oberfläche | Nur gebrauchte MCP-Server; **kein** aggressives Tool-Search-Deferral | vermeidet 10–60k Tokens/Turn Schema-Bloat |
-| **L3 Memory** | Geteiltes Gedächtnis | claude-mem (Session) + **Cognee fleet** (Domain-Graph, multi-agent CLI) | kein Doppel-Spend |
+| **L3 Memory** | Geteiltes Gedächtnis | **OpenViking** (kanonisch, fleet-weit) + Session-Digest/Sidecars nur ergänzend | kein Doppel-Spend |
 | **L4 Output** | Knappe Antworten | terse-Kontrakt in jeder Instruktionsdatei | Output-Tokens sind die teuersten |
 
 ### Token Optimizer Stack: Ponytail + Caveman + pxpipe + Gigatoken
@@ -334,8 +334,9 @@ Dieses Repo installiert diese Tools **nicht** — es setzt sie voraus und verwei
 | CLI | Rolle | Bezug |
 |---|---|---|
 | `rtk` | L1 — komprimiert Shell-Output (Pflicht für den Installer) | `cargo install rtk` / `brew install rtk` |
-| `graphify` | Primärer Architektur-/Dependency-Graph; seriell, niemals parallel zum Fallback | separat installiert |
-| `gitnexus` | Fail-closed Architektur-Fallback; Repository muss explizit und aktuell indexiert sein | separat installiert, danach `gitnexus analyze` pro Repository |
+| `gitnexus` | **Kanonischer** Repository-Code-/Dependency-/Impact-Graph; Repository muss aktuell indexiert sein | separat installiert, danach `gitnexus analyze --index-only` pro Repository |
+| `graphify` | Expliziter Mixed-Corpus/code+docs/cross-repo Spezialist; kein automatischer Codegraph-Fallback | optional/separat installiert |
+| `ov` / `openviking-recall` | Zentrale OpenViking-Semantik/Memory-Runtime und bounded Recall | `ov` installieren; Adapter kommt über `bin/install.sh` |
 | `orca` | Same-worktree Terminal-Delegation an billige Modelle (opencode/mimo) | separat installiert |
 | `sin` | SIN-Code-Hub (`sin verify`/`review`/`debt`) | separat installiert |
 | `sin-sync` | verteilt den Standard + fährt `verify-tokens` als Deploy-Gate | `~/.local/bin/sin-sync` |
@@ -348,15 +349,16 @@ Dieses Repo installiert diese Tools **nicht** — es setzt sie voraus und verwei
 
 **SIN-Save-Token** und **wow-my-zsh** sind komplementär, nicht überlappend:
 
-- **wow-my-zsh** = *MCP-Config-Transpiler + Symlink-Installer* — eine kanonische
-  Server-Registry, transpiliert in die native Config von 6 Agents (author once,
-  transpile everywhere). Es regelt **welche Tools** ein Agent sieht.
-- **SIN-Save-Token** (dieses Repo) = *Token-Disziplin-Standard* — die 4 Layer
-  (Shell/Tools/Memory/Output) + Hooks, die **wie sparsam** jeder Agent mit
-  Tokens umgeht. Es regelt **wie** die Agents arbeiten.
+- **wow-my-zsh** = *Fleet-/Platform-Repo* — gemeinsame Agent-Regeln, MCP/Skills,
+  Installer, Multi-Machine-Rollout, GitNexus-Pflichtverteilung, OCI/Tailscale-
+  Service-Discovery, OpenViking-Deployment/Client-Rollout sowie OmniRoute- und
+  FreeToken-Infrastruktur.
+- **SIN-Save-Token** (dieses Repo) = *Context-/Memory-Control-Plane + Token-Effizienz* —
+  `sin-context`, `sin-memory-write`, `openviking-recall`, `lib/sin_memory_gateway.py`,
+  Evidence-/Secret-/Provenance-Gates, Retrieval-Budgets, Receipts und deren Tests.
 
-Zusammen: wow-my-zsh richtet die Werkzeuge ein, SIN-Save-Token hält ihren
-Verbrauch schlank.
+Zusammen: wow-my-zsh deployt und verdrahtet die Flotte; SIN-Save-Token entscheidet
+fail-closed, welcher Kontext gelesen und welche langlebige Memory geschrieben werden darf.
 
 Vollständiger Ownership-/Install-Vertrag: [docs/ECOSYSTEM.md](docs/ECOSYSTEM.md).
 
@@ -412,13 +414,18 @@ und [`scripts/verify-archify-diagrams.mjs`](https://github.com/OpenSIN-Code/wow-
 
 ## Architektur
 
-Die Systemarchitektur ist als versionierte Archify-IR, interaktives HTML und Archify-SVG dokumentiert. Die Narrative beschreibt Context-Routing, Memory, Token-Optimierung, Orca-Delegation, Trust-Grenzen und Completion-Gates.
+Die fachliche Context-/Memory-Control-Plane ist hier kanonisch dokumentiert. Die fleet-weite Architektur und Deployment-/Netzwerk-Topologie sind dagegen bewusst im Plattform-Repo `wow-my-zsh` kanonisch, damit es keine zwei Deployment-Wahrheiten gibt.
 
-![SIN-Save-Token architecture](docs/sin-save-token-architecture.svg)
+Die Detailflüsse sind getrennt:
 
 - [Architektur-Narrative](docs/architecture.md)
-- [Interaktives Archify-Diagramm](docs/sin-save-token-architecture.html)
-- [Editierbare Archify-IR](docs/sin-save-token-architecture.json)
+- [Memory-Control-Plane](docs/MEMORY_CONTROL_PLANE.md)
+- [Memory-Write-Flow – interaktiv](docs/diagrams/memory-write.workflow.html) · [IR](docs/diagrams/memory-write.workflow.json)
+- [Recall-/Kontext-Flow – interaktiv](docs/diagrams/context-recall.workflow.html) · [IR](docs/diagrams/context-recall.workflow.json)
+- Fleet-/Deployment-Architektur: `wow-my-zsh/docs/MEMORY-PLATFORM.md` und `wow-my-zsh/docs/diagrams/`
+- Inference-Plattform: `wow-my-zsh/docs/INFERENCE-PLATFORM.md`
+
+Die ältere `docs/sin-save-token-architecture.*`-Serie bleibt nur als historische SST-Gesamtsicht erhalten. Fleet-/Deployment-Diagramme werden nicht mehr in diesem Repo als zweite kanonische Quelle gepflegt.
 
 ---
 
@@ -482,65 +489,38 @@ Nutzt `rg` wenn vorhanden (respektiert `.gitignore`), sonst POSIX-`grep`.
 
 ---
 
-## Cognee fleet memory (L3 domain graph)
+## OpenViking fleet memory (L3 semantic context)
 
-Multi-agent shared graph for Claude / Codex / OpenCode / MiMo / Cline / Orca.
-**Not** always-on MCP (0 schema tax) — HTTP API + CLI only.
+OpenViking is the **canonical durable semantic-memory backend** for the SIN fleet. Agents do not fan out across multiple memory systems: `sin-context` routes durable decision/policy recall to OpenViking, while `sin-memory-write` is the single validated writer. GitNexus remains the canonical repository code-intelligence graph for the active checkout; OpenViking does not replace it.
 
-```
-Agents → cognee-recall / cognee-remember
-       → Cognee :8011
-            ├─ LLM:  OmniRoute :20128 → vag/zai/glm-5.2  (Vercel AI Gateway)
-            └─ Embed: nim-embed-proxy :8012 → NVIDIA NIM nemotron-3-embed-1b @ 1024 (free)
-```
+![Recall- und Kontext-Flow](docs/diagrams/context-recall.workflow.svg)
 
-### Bring-up
+![Fail-closed Memory-Write-Flow](docs/diagrams/memory-write.workflow.svg)
+
+Production OpenViking deployment, Tailscale exposure, client rollout and OmniRoute/FreeToken infrastructure are canonically owned by `wow-my-zsh`. This repository only consumes that platform contract. A backend write counts as successful only after the exact OpenViking session-commit task reports completion. See `wow-my-zsh/docs/MEMORY-PLATFORM.md` and `wow-my-zsh/docs/INFERENCE-PLATFORM.md` for fleet deployment/inference topology.
+
+### Everyday
 
 ```bash
-# Prerequisites: OmniRoute on :20128, NVIDIA_API_KEY in env (free from build.nvidia.com)
-# Full stack (checks OmniRoute + starts nim-embed-proxy + cognee)
-./bin/cognee-fleet-up.sh
+sin-context "Warum wurde diese Architektur so entschieden?"
+sin-memory-write "Verified durable decision ..." --type decision --source docs/decision.md
+openviking-recall "relevant durable decision"
+ov health
 ```
 
-### Everyday (any agent)
-
-```bash
-cognee-status
-curl -s http://127.0.0.1:8012/health    # nim ok/error stats
-cognee-recall "What is L2 core MCP?"
-cognee-remember "short durable decision"   # uses the pinned verified OmniRoute LLM for cognify
-```
-
-### Cost & ops
-
-| Path | Cost |
-|------|------|
-| Embed (NVIDIA NIM free tier) | $0, ~40 RPM |
-| `remember` / cognify | **Pinned Vercel AI Gateway/OpenAI route via OmniRoute** — consumes connected account quota |
-| Bulk re-ingest | `COGNEE_ALLOW_COSTLY=1` required |
-
-Full policy, backends, reindex: **[docs/COGNEE-COST-POLICY.md](docs/COGNEE-COST-POLICY.md)**.
-
-```bash
-# pure local embeds (fallback)
-export COGNEE_EMBED_BACKEND=fastembed
-./bin/cognee-start-omniroute.sh
-
-# after switching embed model/dims
-./bin/cognee-reindex-vectors.sh
-```
+Cognee is retained only as an explicitly labeled **legacy/non-automatic projection** for migration or forensic compatibility. It is not a fallback for normal `sin-context` routing and must never become a competing writer.
 
 ---
 
 ## gbrain / global-brain — kuratierter Vorbereich und Archiv
 
-Cognee ist der **einzige kanonische Besitzer langlebiger Domain-Memory**. gbrain dient als kuratierter Vorbereich; global-brain verwaltet Pläne, Archive und Knowledge-Artefakte. Keines dieser Systeme injiziert im tokenminimalen Standard automatisch Kontext in Prompts.
+OpenViking ist der **einzige kanonische Besitzer langlebiger semantischer Domain-Memory**. gbrain dient als kuratierter Vorbereich; global-brain verwaltet Pläne, Archive und Knowledge-Artefakte. Keines dieser Systeme injiziert im tokenminimalen Standard automatisch Kontext in Prompts.
 
 `bin/brain-sync.py` unterstützt absichtlich ausschließlich einen idempotenten, kuratierten Export:
 
 ```text
-gbrain --(nur markierte Einträge)--> Cognee
-Cognee ----------------------------X gbrain
+gbrain --(nur markierte Einträge)--> OpenViking
+OpenViking ------------------------X gbrain
 ```
 
 ### Everyday
@@ -562,7 +542,7 @@ Nur Einträge mit expliziten Export-Markern beziehungsweise erlaubten Memory-Typ
 bash bin/e2e-memory-test.sh
 ```
 
-Das Gate prüft Dienste, Portkonsistenz, Routing-Konfiguration und die Einweg-Sync-Policy ohne Testdaten dauerhaft in Cognee zu schreiben.
+Das Gate prüft Dienste, Routing-Konfiguration und die Einweg-Sync-Policy ohne Testdaten dauerhaft in OpenViking zu schreiben.
 
 Für den vollständigen lokalen Rollout einschließlich Unix-Modus-Reparatur, Tests, Minimal-MCP-Konvergenz, Doctor und Smoke-Benchmark:
 

@@ -14,8 +14,8 @@
     },
     {
       "id": "domain-decision",
-      "query": "Why is Cognee the canonical durable memory and why is reverse sync disabled?",
-      "expected_any": ["Cognee", "canonical", "sync"]
+      "query": "Why is OpenViking the canonical durable memory and why are competing automatic memory writers disabled?",
+      "expected_any": ["OpenViking", "canonical", "memory"]
     },
     {
       "id": "session-resume",

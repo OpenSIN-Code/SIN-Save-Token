@@ -2095,6 +2095,252 @@ def test_reconcile_requires_canonical_done_evidence(tmp_path: Path) -> None:
     assert callback_status(repository=repository, token=opened["callback"])["status"] == "open"
 
 
+def test_unbound_handoff_requires_canonical_taskplan_evidence(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    payload = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build · model",
+    )
+    with patch("sin_orca.web_callbacks.run_orca", return_value=payload):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0155",
+            origin_terminal="term-origin",
+            origin_session_id="ses_UNBOUND123",
+        )
+
+    with pytest.raises(RuntimeError, match="canonical taskplan database is missing"):
+        stage_callback_handoff(
+            repository=repository,
+            token=opened["callback"],
+            final_status="done",
+            summary="worker claims completion",
+            verification="focused tests passed",
+        )
+
+    saved = callback_status(repository=repository, token=opened["callback"])
+    assert saved["status"] == "open"
+    assert saved["completion_handoff_state"] is None
+
+
+def test_unbound_prime_handoff_reconciles_to_exact_origin_without_callback_authority(
+    tmp_path: Path,
+) -> None:
+    repository = git_repository(tmp_path / "repo")
+    session_id = "prime-unbound-1234"
+    inventory = json.dumps(
+        {"sessions": [{"activeSessionId": session_id, "lifecycle": "live"}]}
+    )
+    receipt = json.dumps(
+        {
+            "target": {"activeSessionId": session_id},
+            "deliveryStatus": "queued",
+        }
+    )
+    calls: list[list[str]] = []
+    real_run = subprocess.run
+
+    def prime_run(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if arguments[0] == "git":
+            return real_run(arguments, **kwargs)
+        calls.append(arguments)
+        if arguments[1:3] == ["list", "--json"]:
+            return subprocess.CompletedProcess(arguments, 0, inventory, "")
+        if arguments[1:3] == ["send", session_id]:
+            return subprocess.CompletedProcess(arguments, 0, receipt, "")
+        raise AssertionError(arguments)
+
+    with (
+        patch("sin_orca.web_callbacks.shutil.which", return_value="/usr/local/bin/prime-agent"),
+        patch("sin_orca.web_callbacks.subprocess.run", side_effect=prime_run),
+    ):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0155",
+            prime_agent_session_id=session_id,
+        )
+        write_taskplan_evidence(repository, "T-0155")
+        staged = stage_callback_handoff(
+            repository=repository,
+            token=opened["callback"],
+            final_status="done",
+            summary="origin must reconcile canonical evidence",
+            changed=["lib/a.py"],
+            verification="focused tests passed",
+        )
+        delivered = reconcile_callback_handoff(
+            repository=repository,
+            token=opened["callback"],
+        )
+
+    assert staged["status"] == "callback-handoff-staged"
+    assert staged["delivery_mode"] == "origin-reconcile-unbound"
+    assert staged["conversation"] is None
+    assert staged["taskplan_validation"]["task_status"] == "done"
+    assert delivered["status"] == "callback-origin-reconciled"
+    assert delivered["origin_reconciliation"] is True
+    send = next(call for call in calls if call[1:3] == ["send", session_id])
+    message = send[3]
+    assert message.startswith("SIN_GPT_WEB_ORIGIN_RECONCILE ")
+    assert "SIN_GPT_WEB_CALLBACK " not in message
+    assert "No canonical completion callback or archive/close authority" in message
+    assert "CHATGPT_CONVERSATION_URL: unresolved" in message
+    assert "Do not infer or perform archive/close" in message
+    saved_path = callback_path(repository, opened["callback"])
+    saved = json.loads(saved_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "sent"
+    assert saved["callback_status"] == "reconcile"
+    assert saved["completion_mode"] == "origin-reconcile-unbound"
+    assert saved["origin_reconciliation"]["outcome_status"] == "done"
+    assert saved["origin_reconciliation"]["state"] == "sent"
+    assert saved["completion_handoff"]["state"] == "consumed"
+
+
+def test_unbound_origin_reconcile_pending_reuses_bounded_relay(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    session_id = "prime-unbound-offline-1234"
+    live = json.dumps(
+        {"sessions": [{"activeSessionId": session_id, "lifecycle": "live"}]}
+    )
+    offline = json.dumps({"sessions": []})
+    inventories = [live, offline]
+    real_run = subprocess.run
+
+    def prime_run(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if arguments[0] == "git":
+            return real_run(arguments, **kwargs)
+        if arguments[1:3] == ["list", "--json"]:
+            return subprocess.CompletedProcess(arguments, 0, inventories.pop(0), "")
+        raise AssertionError(arguments)
+
+    with (
+        patch("sin_orca.web_callbacks.shutil.which", return_value="/usr/local/bin/prime-agent"),
+        patch("sin_orca.web_callbacks.subprocess.run", side_effect=prime_run),
+    ):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0155",
+            prime_agent_session_id=session_id,
+        )
+    write_taskplan_evidence(repository, "T-0155")
+    stage_callback_handoff(
+        repository=repository,
+        token=opened["callback"],
+        final_status="done",
+        summary="durable unbound completion",
+        verification="focused tests passed",
+    )
+    with (
+        patch("sin_orca.web_callbacks.shutil.which", return_value="/usr/local/bin/prime-agent"),
+        patch("sin_orca.web_callbacks.subprocess.run", side_effect=prime_run),
+        patch(
+            "sin_orca.web_callbacks.install_callback_relay",
+            return_value={"status": "callback-relay-installed", "reused": False},
+        ) as install_relay,
+    ):
+        result = reconcile_callback_handoff(
+            repository=repository,
+            token=opened["callback"],
+        )
+
+    assert result["status"] == "callback-pending"
+    assert result["origin_reconciliation"] is True
+    assert result["relay_fallback"]["status"] == "callback-relay-installed"
+    install_relay.assert_called_once()
+    saved = json.loads(callback_path(repository, opened["callback"]).read_text(encoding="utf-8"))
+    assert saved["status"] == "pending-delivery"
+    assert saved["callback_status"] == "reconcile"
+    assert saved["origin_reconciliation"]["state"] == "pending"
+
+
+def test_unbound_origin_reconcile_relay_preserves_special_mode(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    session_id = "prime-unbound-relay-1234"
+    live = json.dumps(
+        {"sessions": [{"activeSessionId": session_id, "lifecycle": "live"}]}
+    )
+    offline = json.dumps({"sessions": []})
+    receipt = json.dumps(
+        {
+            "target": {"activeSessionId": session_id},
+            "deliveryStatus": "delivered",
+        }
+    )
+    real_run = subprocess.run
+    initial_inventories = [live, offline]
+
+    def initial_run(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if arguments[0] == "git":
+            return real_run(arguments, **kwargs)
+        if arguments[1:3] == ["list", "--json"]:
+            return subprocess.CompletedProcess(arguments, 0, initial_inventories.pop(0), "")
+        raise AssertionError(arguments)
+
+    with (
+        patch("sin_orca.web_callbacks.shutil.which", return_value="/usr/local/bin/prime-agent"),
+        patch("sin_orca.web_callbacks.subprocess.run", side_effect=initial_run),
+    ):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0155",
+            prime_agent_session_id=session_id,
+        )
+    write_taskplan_evidence(repository, "T-0155")
+    stage_callback_handoff(
+        repository=repository,
+        token=opened["callback"],
+        final_status="done",
+        summary="relay this exact origin reconcile",
+        verification="tests passed",
+    )
+    with (
+        patch("sin_orca.web_callbacks.shutil.which", return_value="/usr/local/bin/prime-agent"),
+        patch("sin_orca.web_callbacks.subprocess.run", side_effect=initial_run),
+        patch(
+            "sin_orca.web_callbacks.install_callback_relay",
+            return_value={"status": "callback-relay-installed", "reused": False},
+        ),
+    ):
+        pending = reconcile_callback_handoff(
+            repository=repository,
+            token=opened["callback"],
+        )
+    assert pending["status"] == "callback-pending"
+
+    calls: list[list[str]] = []
+
+    def relay_run(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if arguments[0] == "git":
+            return real_run(arguments, **kwargs)
+        calls.append(arguments)
+        if arguments[1:3] == ["list", "--json"]:
+            return subprocess.CompletedProcess(arguments, 0, live, "")
+        if arguments[1:3] == ["send", session_id]:
+            return subprocess.CompletedProcess(arguments, 0, receipt, "")
+        raise AssertionError(arguments)
+
+    with (
+        patch("sin_orca.web_callbacks.shutil.which", return_value="/usr/local/bin/prime-agent"),
+        patch("sin_orca.web_callbacks.subprocess.run", side_effect=relay_run),
+    ):
+        delivered = relay_callback(
+            repository=repository,
+            token=opened["callback"],
+        )
+
+    assert delivered["status"] == "callback-origin-reconciled"
+    assert delivered["origin_reconciliation"] is True
+    send = next(call for call in calls if call[1:3] == ["send", session_id])
+    assert send[3].startswith("SIN_GPT_WEB_ORIGIN_RECONCILE ")
+    assert "SIN_GPT_WEB_CALLBACK " not in send[3]
+    saved = json.loads(callback_path(repository, opened["callback"]).read_text(encoding="utf-8"))
+    assert saved["status"] == "sent"
+    assert saved["callback_status"] == "reconcile"
+    assert saved["origin_reconciliation"]["state"] == "sent"
+
+
 def test_reconcile_valid_handoff_delivers_exact_staged_outcome(tmp_path: Path) -> None:
     repository = git_repository(tmp_path / "repo")
     payload = terminal_payload(
