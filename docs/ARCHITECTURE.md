@@ -119,3 +119,10 @@ rtk node ~/.claude/skills/archify/bin/archify.mjs validate workflow docs/diagram
 ```
 
 Repeat the render/export pair for the two local workflow IRs. Fleet architecture/deployment IRs are regenerated in wow-my-zsh. `scripts/export-archify-svg.mjs` is dependency-free and preserves Archify's dark/light CSS variables in the standalone SVG. Do not hand-edit generated HTML or SVG; regenerate them from JSON IR.
+
+<!-- SIN-GPT-WEB-HANDOVER
+task: T-0001
+updated: 2026-08-25T23:35:50+00:00
+actor: prime-agent
+evidence-sha256: 1791bc4eff4a6866029e91fd3424ddd89c62e16ae237b612e1afd10aada51852
+-->

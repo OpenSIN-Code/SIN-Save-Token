@@ -59,3 +59,10 @@ This project is indexed by GitNexus as **SIN-Save-Token** (3808 symbols, 7161 re
 ## Cross-repository platform ownership
 
 `wow-my-zsh` is the canonical fleet/platform owner for shared agent rules, installers, GitNexus distribution, OCI/Tailscale service deployment, OpenViking client/deployment wiring, OmniRoute and FreeToken. This repository is the canonical Context/Memory control-plane owner for `sin-context`, `sin-memory-write`, `openviking-recall`, `lib/sin_memory_gateway.py`, evidence/secret/provenance gates, retrieval budgets and receipts. Never duplicate fleet deployment definitions here or Memory Gateway semantics in wow-my-zsh.
+
+<!-- SIN-GPT-WEB-HANDOVER
+task: T-0001
+updated: 2026-08-25T23:35:50+00:00
+actor: prime-agent
+evidence-sha256: 1791bc4eff4a6866029e91fd3424ddd89c62e16ae237b612e1afd10aada51852
+-->

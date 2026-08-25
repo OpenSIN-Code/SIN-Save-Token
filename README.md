@@ -641,3 +641,10 @@ hat jeder Harness schon nativ — aber cross-harness Wissens-Extraktion fehlte.
 
 *Teil des OpenSIN-Code-Ökosystems. Kanonische Kopie des Standards:
 `Infra-SIN-OpenCode-Stack/docs/TOKEN-SAVINGS-BEST-PRACTICES.md`.*
+
+<!-- SIN-GPT-WEB-HANDOVER
+task: T-0001
+updated: 2026-08-25T23:35:50+00:00
+actor: prime-agent
+evidence-sha256: 1791bc4eff4a6866029e91fd3424ddd89c62e16ae237b612e1afd10aada51852
+-->
