@@ -1,0 +1,253 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Recall & Kontext-Flow",
+    "subtitle": "Eine Anfrage, ein sinnvoller Retrieval-Pfad, gebündeltes Evidence-Paket",
+    "output": "context-recall.workflow.html"
+  },
+  "lanes": [
+    {
+      "id": "agent",
+      "label": "Agent"
+    },
+    {
+      "id": "code",
+      "label": "Code Intelligence"
+    },
+    {
+      "id": "memory",
+      "label": "Durable Memory"
+    },
+    {
+      "id": "archive",
+      "label": "Plan / Archiv"
+    }
+  ],
+  "phases": [
+    {
+      "id": "route",
+      "label": "01 / Klassifizieren + routen",
+      "fromCol": 0,
+      "toCol": 2,
+      "variant": "emphasis"
+    },
+    {
+      "id": "retrieve",
+      "label": "02 / Abruf",
+      "fromCol": 2,
+      "toCol": 4
+    },
+    {
+      "id": "use",
+      "label": "03 / Bündeln + arbeiten",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "emphasis"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "question",
+      "lane": "agent",
+      "col": 0,
+      "type": "external",
+      "label": "Nutzerfrage",
+      "sublabel": "Task / Kontextbedarf"
+    },
+    {
+      "id": "router",
+      "lane": "agent",
+      "col": 1,
+      "type": "backend",
+      "label": "sin-context",
+      "sublabel": "Policy + Budget",
+      "tag": "max 2 attempts"
+    },
+    {
+      "id": "bundle",
+      "lane": "agent",
+      "col": 4,
+      "type": "messagebus",
+      "label": "Kontext-Bündel",
+      "sublabel": "bounded + dedupliziert"
+    },
+    {
+      "id": "answer",
+      "lane": "agent",
+      "col": 5,
+      "type": "frontend",
+      "label": "Agent arbeitet",
+      "sublabel": "mit passendem Kontext"
+    },
+    {
+      "id": "gitnexus",
+      "lane": "code",
+      "col": 2,
+      "type": "database",
+      "label": "GitNexus",
+      "sublabel": "Symbole · Flows · Impact",
+      "tag": "repo-lokal"
+    },
+    {
+      "id": "openviking",
+      "lane": "memory",
+      "col": 3,
+      "type": "database",
+      "label": "OpenViking",
+      "sublabel": "Fakten · Entscheidungen · Verlauf",
+      "tag": "kanonisch"
+    },
+    {
+      "id": "globalbrain",
+      "lane": "archive",
+      "col": 4,
+      "type": "database",
+      "label": "global-brain",
+      "sublabel": "Pläne / Archiv bei Bedarf",
+      "tag": "optional"
+    }
+  ],
+  "edges": [
+    {
+      "from": "question",
+      "to": "router",
+      "variant": "emphasis"
+    },
+    {
+      "from": "router",
+      "to": "gitnexus",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [
+          220,
+          170
+        ],
+        [
+          300,
+          170
+        ]
+      ]
+    },
+    {
+      "from": "router",
+      "to": "openviking",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [
+          220,
+          170
+        ],
+        [
+          365,
+          170
+        ],
+        [
+          365,
+          320
+        ],
+        [
+          430,
+          320
+        ]
+      ]
+    },
+    {
+      "from": "router",
+      "to": "globalbrain",
+      "variant": "dashed",
+      "role": "branch",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [
+          220,
+          170
+        ],
+        [
+          570,
+          170
+        ],
+        [
+          570,
+          444
+        ],
+        [
+          500,
+          444
+        ]
+      ]
+    },
+    {
+      "from": "gitnexus",
+      "to": "bundle",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "via": [
+        [
+          300,
+          170
+        ],
+        [
+          500,
+          170
+        ]
+      ]
+    },
+    {
+      "from": "openviking",
+      "to": "bundle",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "via": [
+        [
+          430,
+          170
+        ],
+        [
+          500,
+          170
+        ]
+      ]
+    },
+    {
+      "from": "globalbrain",
+      "to": "bundle",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "route": "straight"
+    },
+    {
+      "from": "bundle",
+      "to": "answer",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Code zuerst, wenn es um Code geht",
+      "items": [
+        "GitNexus ist der kanonische Repo-/Checkout-Graph",
+        "Simone und SIN-Code sind bounded Spezialisten/Fallbacks",
+        "Graphify läuft nur bei expliziten Mixed-Corpus-Fragen"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Memory ohne Fan-out",
+      "items": [
+        "OpenViking ist die einzige automatische langlebige Memory-Quelle",
+        "global-brain wird nur explizit für Plan-/Archiv-Kontext gelesen",
+        "Provider-Output bleibt untrusted evidence bis zur Evidence Firewall"
+      ]
+    }
+  ]
+}

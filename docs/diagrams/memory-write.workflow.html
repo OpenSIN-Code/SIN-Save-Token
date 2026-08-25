@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="archify 2.11.0">
-  <title>SIN-Save-Token Architecture Diagram</title>
+  <title>Memory-Write Flow Diagram</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -525,14 +525,14 @@
     <div class="header">
       <div class="header-row">
         <div class="pulse-dot"></div>
-        <h1>SIN-Save-Token Architecture</h1>
+        <h1>Memory-Write Flow</h1>
       </div>
-      <p class="subtitle">Fleet policy, bounded context, memory, optimization, orchestration, and verification</p>
+      <p class="subtitle">Verifizieren → committen → Task completion beweisen → Receipt ausstellen</p>
     </div>
 
     <!-- Main Diagram -->
     <div class="diagram-container">
-      <svg viewBox="0 0 1180 720" role="img" aria-label="SIN-Save-Token Architecture — Fleet policy, bounded context, memory, optimization, orchestration, and verification (architecture diagram)">
+      <svg viewBox="0 0 720 776" role="img" aria-label="Memory-Write Flow — Verifizieren → committen → Task completion beweisen → Receipt ausstellen (workflow diagram)">
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -555,101 +555,115 @@
         <!-- Background Grid -->
         <rect width="100%" height="100%" fill="url(#grid)" />
 
-        <!-- Boundaries (behind everything) -->
-        <rect x="218" y="101" width="946" height="392" rx="12" class="c-region" stroke-width="1"/>
-        <text x="226" y="119" class="t-cloud" font-size="9" font-weight="600">SIN-Save-Token repository / local control plane</text>
+        <!-- Swimlanes -->
+        <rect x="40" y="52" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="74" class="t-dim" font-size="10" font-weight="600">01 / Agent / Tool</text>
 
-        <!-- Connection paths (before components for correct z-order) -->
-        <path d="M 205 159 L 242 159" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 392 159 L 429 159" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 579 159 L 616 159" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 766 159 L 803 159" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 953 159 L 990 159" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path d="M 953 439 L 990 439" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="40" y="176" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="198" class="t-dim" font-size="10" font-weight="600">02 / SIN Control Plane</text>
 
-        <!-- Components -->
-        <rect x="55" y="125" width="150" height="68" rx="6" class="c-mask"/>
-        <rect x="55" y="125" width="150" height="68" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="130" y="157" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Agent Runtimes</text>
-        <text x="130" y="173" class="t-muted" font-size="9" text-anchor="middle">Claude · Codex · OpenCode · Orca</text>
-        <text x="130" y="185" class="t-frontend" font-size="7" text-anchor="middle">consumers</text>
+        <rect x="40" y="300" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="322" class="t-dim" font-size="10" font-weight="600">03 / OpenViking</text>
 
-        <rect x="242" y="125" width="150" height="68" rx="6" class="c-mask"/>
-        <rect x="242" y="125" width="150" height="68" rx="6" class="c-security" stroke-width="1.5"/>
-        <text x="317" y="157" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Fleet Policy + Hooks</text>
-        <text x="317" y="173" class="t-muted" font-size="9" text-anchor="middle">install · self-heal · RTK · gates</text>
+        <rect x="40" y="424" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="446" class="t-dim" font-size="10" font-weight="600">04 / Persistenz</text>
 
-        <rect x="429" y="125" width="150" height="68" rx="6" class="c-mask"/>
-        <rect x="429" y="125" width="150" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="504" y="157" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">SIN CLI Surface</text>
-        <text x="504" y="173" class="t-muted" font-size="9" text-anchor="middle">context · memory · token · orca</text>
+        <rect x="40" y="548" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <rect x="46" y="554" width="628" height="92" rx="8" class="c-security-group" stroke-width="1"/>
+        <text x="54" y="570" class="t-security" font-size="10" font-weight="600">EX / Fail-closed / Reject</text>
 
-        <rect x="616" y="125" width="150" height="68" rx="6" class="c-mask"/>
-        <rect x="616" y="125" width="150" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="691" y="157" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Context Broker</text>
-        <text x="691" y="173" class="t-muted" font-size="9" text-anchor="middle">route · budget · cache · evidence</text>
-        <text x="691" y="185" class="t-backend" font-size="7" text-anchor="middle">max 2 providers</text>
+        <!-- Phase headers -->
+        <line x1="42" y1="35" x2="346" y2="35" class="a-security" stroke-width="1.1"/>
+        <rect x="42" y="27" width="304" height="16" rx="4" class="c-mask"/>
+        <text x="194" y="39" class="t-security" font-size="8" font-weight="600" text-anchor="middle">01 / Intake + Prüfung</text>
+        <line x1="384" y1="35" x2="671" y2="35" class="a-emphasis" stroke-width="1.1"/>
+        <rect x="384" y="27" width="287" height="16" rx="4" class="c-mask"/>
+        <text x="527.5" y="39" class="t-backend" font-size="8" font-weight="600" text-anchor="middle">02 / Canonical Commit</text>
 
-        <rect x="803" y="125" width="150" height="68" rx="6" class="c-mask"/>
-        <rect x="803" y="125" width="150" height="68" rx="6" class="c-security" stroke-width="1.5"/>
-        <text x="878" y="157" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Provider Runtime</text>
-        <text x="878" y="173" class="t-muted" font-size="9" text-anchor="middle">bounded argv · timeout · circuit breaker</text>
+        <!-- Workflow groups -->
+        <rect x="38" y="214" width="442" height="58" rx="9" class="c-security-group" stroke-width="1"/>
+        <text x="48" y="228" class="t-security" font-size="7" font-weight="600">Evidence + Secret Gate</text>
+        <rect x="450" y="338" width="225" height="58" rx="9" class="c-lane" stroke-width="1"/>
+        <text x="460" y="352" class="t-backend" font-size="7" font-weight="600">OpenViking Commit</text>
 
-        <rect x="990" y="125" width="150" height="68" rx="6" class="c-mask"/>
-        <rect x="990" y="125" width="150" height="68" rx="6" class="c-external" stroke-width="1.5"/>
-        <text x="1065" y="157" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Intelligence Providers</text>
-        <text x="1065" y="173" class="t-muted" font-size="9" text-anchor="middle">GitNexus · OpenViking · bounded specialists</text>
-        <text x="1065" y="185" class="t-external" font-size="7" text-anchor="middle">selected, not fanned out</text>
+        <!-- Edge paths -->
+        <path d="M 88 145 L 88 166 L 88 166 L 88 217" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path d="M 134 243 L 254 243" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path d="M 346 243 L 384 243" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path d="M 430 269 L 430 290 L 500 290 L 500 341" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 546 367 L 579 367" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 625 401 L 625 414 L 625 414 L 625 465" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 300 277 L 300 414 L 430 414 L 430 589" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path d="M 430 269 L 430 414 L 430 414 L 430 589" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
 
-        <rect x="429" y="405" width="150" height="68" rx="6" class="c-mask"/>
-        <rect x="429" y="405" width="150" height="68" rx="6" class="c-database" stroke-width="1.5"/>
-        <text x="504" y="437" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Memory Layer</text>
-        <text x="504" y="453" class="t-muted" font-size="9" text-anchor="middle">L1/L2 ops · OpenViking · session digest</text>
+        <!-- Nodes -->
+        <rect x="42" y="93" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="42" y="93" width="92" height="52" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="88" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Memory Write</text>
+        <text x="88" y="131" class="t-muted" font-size="8" text-anchor="middle">verifiziertes Wissen</text>
 
-        <rect x="616" y="405" width="150" height="68" rx="6" class="c-mask"/>
-        <rect x="616" y="405" width="150" height="68" rx="6" class="c-cloud" stroke-width="1.5"/>
-        <text x="691" y="437" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Token Optimizer Stack</text>
-        <text x="691" y="453" class="t-muted" font-size="9" text-anchor="middle">Ponytail · Caveman · pxpipe · Gigatoken</text>
-        <text x="691" y="465" class="t-cloud" font-size="7" text-anchor="middle">lossy paths opt-in</text>
+        <rect x="42" y="217" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="42" y="217" width="92" height="52" rx="6" class="c-frontend" stroke-width="1.5"/>
+        <text x="88" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Memory Writer</text>
+        <text x="88" y="255" class="t-muted" font-size="8" text-anchor="middle">sin-memory-write · kanonischer CLI-Eingang</text>
 
-        <rect x="803" y="405" width="150" height="68" rx="6" class="c-mask"/>
-        <rect x="803" y="405" width="150" height="68" rx="6" class="c-messagebus" stroke-width="1.5"/>
-        <text x="878" y="437" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Orca Orchestrator</text>
-        <text x="878" y="453" class="t-muted" font-size="9" text-anchor="middle">same-worktree · callbacks · writer lease</text>
+        <rect x="254" y="209" width="92" height="68" rx="6" class="c-mask"/>
+        <rect x="254" y="209" width="92" height="68" rx="6" class="c-security" stroke-width="1.5"/>
+        <text x="300" y="230" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Validierung</text>
+        <text x="300" y="247" class="t-muted" font-size="8" text-anchor="middle">Evidence · Secret · Spekulation</text>
+        <text x="300" y="265" class="t-security" font-size="7" text-anchor="middle">fail-closed</text>
 
-        <rect x="990" y="405" width="150" height="68" rx="6" class="c-mask"/>
-        <rect x="990" y="405" width="150" height="68" rx="6" class="c-security" stroke-width="1.5"/>
-        <text x="1065" y="437" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Verification + Review</text>
-        <text x="1065" y="453" class="t-muted" font-size="9" text-anchor="middle">tests · diff gates · blind reviewer · CI</text>
-        <text x="1065" y="465" class="t-security" font-size="7" text-anchor="middle">controller-owned</text>
+        <rect x="384" y="217" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="384" y="217" width="92" height="52" rx="6" class="c-security" stroke-width="1.5"/>
+        <text x="430" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Memory Gateway</text>
+        <text x="430" y="255" class="t-muted" font-size="8" text-anchor="middle">Provenienz + Idempotenz</text>
 
-        <!-- Connection labels -->
+        <rect x="454" y="341" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="454" y="341" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="500" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">OV Session</text>
+        <text x="500" y="379" class="t-muted" font-size="8" text-anchor="middle">message + commit</text>
+
+        <rect x="579" y="333" width="92" height="68" rx="6" class="c-mask"/>
+        <rect x="579" y="333" width="92" height="68" rx="6" class="c-messagebus" stroke-width="1.5"/>
+        <text x="625" y="354" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Commit Task</text>
+        <text x="625" y="371" class="t-muted" font-size="8" text-anchor="middle">wait for completed</text>
+        <text x="625" y="389" class="t-messagebus" font-size="7" text-anchor="middle">blocking proof</text>
+
+        <rect x="579" y="465" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="579" y="465" width="92" height="52" rx="6" class="c-database" stroke-width="1.5"/>
+        <text x="625" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Durable Memory</text>
+        <text x="625" y="503" class="t-muted" font-size="8" text-anchor="middle">entity · event · preference</text>
+
+        <rect x="384" y="589" width="92" height="52" rx="6" class="c-mask"/>
+        <rect x="384" y="589" width="92" height="52" rx="6" class="c-security" stroke-width="1.5"/>
+        <text x="430" y="610" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Reject</text>
+        <text x="430" y="627" class="t-muted" font-size="8" text-anchor="middle">kein Write / kein Receipt</text>
+
+        <!-- Edge labels -->
 
 
-        <rect x="580.5" y="139" width="34" height="14" rx="3" class="c-mask"/>
-        <text x="597.5" y="149" class="t-backend" font-size="8" text-anchor="middle">query</text>
-        <rect x="746.4" y="197" width="77.2" height="14" rx="3" class="c-mask"/>
-        <text x="785" y="207" class="t-backend" font-size="8" text-anchor="middle">route + budget</text>
-        <rect x="938.2" y="197" width="67.6" height="14" rx="3" class="c-mask"/>
-        <text x="972" y="207" class="t-security" font-size="8" text-anchor="middle">bounded call</text>
+
+        <rect x="438.4" y="270" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
+        <text x="465" y="280" class="t-backend" font-size="8" text-anchor="middle">validated</text>
+
+        <rect x="598.4" y="405" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
+        <text x="625" y="415" class="t-backend" font-size="8" text-anchor="middle">completed</text>
+        <rect x="356" y="394" width="154" height="14" rx="3" class="c-mask"/>
+        <text x="433" y="404" class="t-security" font-size="8" text-anchor="middle">invalid / secret / speculative</text>
 
 
         <!-- Legend -->
-        <text x="40" y="691" class="t-primary" font-size="9" font-weight="600">Legend</text>
-        <rect x="40" y="696" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
-        <text x="60" y="704" class="t-muted" font-size="8">Frontend</text>
-        <rect x="138" y="696" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
-        <text x="158" y="704" class="t-muted" font-size="8">Security</text>
-        <rect x="236" y="696" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
-        <text x="256" y="704" class="t-muted" font-size="8">Backend</text>
-        <rect x="329" y="696" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
-        <text x="349" y="704" class="t-muted" font-size="8">External</text>
-        <rect x="427" y="696" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
-        <text x="447" y="704" class="t-muted" font-size="8">Database</text>
-        <rect x="525" y="696" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
-        <text x="545" y="704" class="t-muted" font-size="8">Cloud</text>
-        <rect x="608" y="696" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
-        <text x="628" y="704" class="t-muted" font-size="8">Message bus</text>
+        <text x="175" y="676" class="t-primary" font-size="10" font-weight="600">Legend</text>
+        <rect x="175" y="688" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
+        <text x="195" y="696" class="t-muted" font-size="7">User UI</text>
+        <rect x="260" y="688" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+        <text x="280" y="696" class="t-muted" font-size="7">Agent logic</text>
+        <rect x="370" y="688" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+        <text x="390" y="696" class="t-muted" font-size="7">Policy</text>
+        <rect x="455" y="688" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
+        <text x="475" y="696" class="t-muted" font-size="7">Tool action</text>
+        <rect x="565" y="688" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
+        <text x="585" y="696" class="t-muted" font-size="7">Context / trace</text>
       </svg>
     </div>
 
@@ -657,47 +671,32 @@
     <div class="cards">
       <div class="card">
         <div class="card-header">
-          <div class="card-dot cyan"></div>
-          <h3>Fail-closed context</h3>
+          <div class="card-dot rose"></div>
+          <h3>Fail-closed Regeln</h3>
         </div>
         <ul>
-          <li>&bull; Policy route + token budget</li>
-          <li>&bull; At most two provider attempts</li>
-          <li>&bull; Repository/config-fingerprinted cache</li>
-          <li>&bull; Untrusted evidence envelope before model reuse</li>
-        </ul>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div class="card-dot amber"></div>
-          <h3>Explicit expensive or lossy paths</h3>
-        </div>
-        <ul>
-          <li>&bull; pxpipe and Caveman are opt-in</li>
-          <li>&bull; Gigatoken uses an explicit tokenizer</li>
-          <li>&bull; External providers are policy selected</li>
-          <li>&bull; Token savings never override correctness</li>
+          <li>&bull; Ungültige Provenienz, Secrets und Spekulation werden vor dem Backend abgewiesen</li>
+          <li>&bull; Backend-Fehler erzeugt niemals einen Erfolgs-Receipt</li>
+          <li>&bull; Kein automatischer Cognee- oder Legacy-Fallback</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot emerald"></div>
-          <h3>Controller retains authority</h3>
+          <h3>Commit-Nachweis</h3>
         </div>
         <ul>
-          <li>&bull; Same-worktree Orca delegation</li>
-          <li>&bull; Exclusive repository writer reservation</li>
-          <li>&bull; Scope/diff/test verification</li>
-          <li>&bull; Independent review before completion</li>
+          <li>&bull; Receipt bindet record_id, record_hash und backend_ref</li>
+          <li>&bull; Commit zählt erst bei Task-Status completed</li>
+          <li>&bull; Lokales SQLite speichert nur Audit-/Receipt-Metadaten</li>
         </ul>
       </div>
     </div>
 
     <!-- Footer -->
     <p class="footer">
-      Architecture diagram &bull; Built with Archify<span class="no-print"> &bull; Press <kbd>T</kbd> for theme and <kbd>E</kbd> for export</span>
+      Workflow diagram &bull; Built with Archify<span class="no-print"> &bull; Press <kbd>T</kbd> for theme and <kbd>E</kbd> for export</span>
     </p>
   </div>
 

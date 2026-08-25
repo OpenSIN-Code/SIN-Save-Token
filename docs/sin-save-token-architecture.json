@@ -68,7 +68,7 @@
       "id": "providers",
       "type": "external",
       "label": "Intelligence Providers",
-      "sublabel": "Simone · Graphify · SIN · Cognee · CRG",
+      "sublabel": "GitNexus · OpenViking · bounded specialists",
       "row": 0,
       "col": 5,
       "size": [150, 68],
@@ -78,7 +78,7 @@
       "id": "memory",
       "type": "database",
       "label": "Memory Layer",
-      "sublabel": "L1/L2/L3 · Cognee · session digest",
+      "sublabel": "L1/L2 ops · OpenViking · session digest",
       "row": 2,
       "col": 2,
       "size": [150, 68]
