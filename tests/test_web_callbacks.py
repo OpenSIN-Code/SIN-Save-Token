@@ -126,7 +126,6 @@ def test_open_binds_exact_terminal_and_session(tmp_path: Path) -> None:
             origin_session_id="ses_ABC123",
             ttl_minutes=60,
             round_number=3,
-            max_rounds=20,
         )
 
     assert result["status"] == "callback-open"
@@ -223,11 +222,11 @@ def test_never_end_origin_environment_is_used_when_cli_binding_is_absent(
     assert opened["origin_session"]["id"] == "ses_NEVEREND123"
 
 
-def test_unbounded_callback_round_never_requests_loop_stop() -> None:
+def test_legacy_finite_callback_round_never_requests_loop_stop() -> None:
     action = _default_next_action(
         {
             "round": 500,
-            "max_rounds": 0,
+            "max_rounds": 1,
             "conversation": {
                 "page_id": "page-123",
                 "url": "https://chatgpt.com/c/chat-12345678",
@@ -417,7 +416,6 @@ def test_bind_then_send_wakes_origin_once(tmp_path: Path) -> None:
             origin_session_id="ses_ABC123",
             ttl_minutes=60,
             round_number=1,
-            max_rounds=10,
         )
         token = opened["callback"]
         bound = bind_callback(
@@ -807,7 +805,6 @@ def test_resolve_callback_token_by_exact_task_and_round(tmp_path: Path) -> None:
             origin_terminal="term-origin",
             origin_session_id="ses_ABC123",
             round_number=1,
-            max_rounds=2,
         )
         second = open_callback(
             repository=repository,
@@ -815,7 +812,6 @@ def test_resolve_callback_token_by_exact_task_and_round(tmp_path: Path) -> None:
             origin_terminal="term-origin",
             origin_session_id="ses_ABC123",
             round_number=2,
-            max_rounds=2,
         )
 
     assert (
@@ -844,7 +840,6 @@ def test_resolve_callback_token_prefers_unique_open_retry(tmp_path: Path) -> Non
             origin_terminal="term-origin",
             origin_session_id="ses_ABC123",
             round_number=2,
-            max_rounds=2,
         )
         cancel_callback(
             repository=repository,
@@ -857,7 +852,6 @@ def test_resolve_callback_token_prefers_unique_open_retry(tmp_path: Path) -> Non
             origin_terminal="term-origin",
             origin_session_id="ses_ABC123",
             round_number=2,
-            max_rounds=2,
         )
 
     assert (
@@ -882,7 +876,6 @@ def test_resolve_callback_token_ignores_expired_open_retry(tmp_path: Path) -> No
             origin_terminal="term-origin",
             origin_session_id="ses_ABC123",
             round_number=2,
-            max_rounds=2,
         )
         expired_path = callback_path(repository, expired["callback"])
         expired_record = json.loads(expired_path.read_text(encoding="utf-8"))
@@ -899,7 +892,6 @@ def test_resolve_callback_token_ignores_expired_open_retry(tmp_path: Path) -> No
             origin_terminal="term-origin",
             origin_session_id="ses_ABC123",
             round_number=2,
-            max_rounds=2,
         )
 
     assert (
@@ -925,8 +917,7 @@ def test_resolve_callback_token_refuses_ambiguity(tmp_path: Path) -> None:
                 origin_terminal="term-origin",
                 origin_session_id="ses_ABC123",
                 round_number=1,
-                max_rounds=2,
-            )
+                )
 
     with pytest.raises(RuntimeError, match="ambiguous"):
         resolve_callback_token(repository, task_id="T-0025", round_number=1)
@@ -1020,7 +1011,7 @@ def test_delivery_failure_stays_pending_for_relay(tmp_path: Path) -> None:
     assert len(sends) == 1
 
 
-def test_optional_relay_is_bounded_and_keeps_tokens_and_results_out_of_plist(
+def test_optional_relay_is_persistent_and_keeps_tokens_and_results_out_of_plist(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1065,7 +1056,6 @@ def test_optional_relay_is_bounded_and_keeps_tokens_and_results_out_of_plist(
             summary="sensitive callback result must not reach scheduler metadata",
             relay_fallback=True,
             relay_interval_seconds=30,
-            relay_max_attempts=2,
         )
         reused = install_callback_relay(repository=repository, token=opened["callback"])
         first_retry = relay_callback(
@@ -1081,15 +1071,16 @@ def test_optional_relay_is_bounded_and_keeps_tokens_and_results_out_of_plist(
     assert first_retry["status"] == "callback-pending"
     assert second_retry["status"] == "callback-pending"
     plist = next(launch_agents.glob("*.plist"), None)
-    assert plist is None
-    # Capture the installed plist before the retry budget removes it from disk.
+    assert plist is not None
+    # The relay remains installed while delivery is pending.
     bootstrap = next(arguments for arguments in launched if arguments[1] == "bootstrap")
     assert bootstrap[0] == "/usr/bin/launchctl"
     state = callback_status(repository=repository, token=opened["callback"])
     assert state["status"] == "pending-delivery"
-    assert state["relay_fallback"]["status"] == "inert"
-    assert state["relay_fallback"]["deactivate_reason"] == "retry-budget-exhausted"
-    assert any(arguments[1] == "bootout" for arguments in launched)
+    assert state["relay_fallback"]["status"] == "installed"
+    assert state["relay_fallback"]["attempts"] == 2
+    assert "max_attempts" not in state["relay_fallback"]
+    assert not any(arguments[1] == "bootout" for arguments in launched)
 
 
 def test_relay_plist_has_no_callback_token_or_result_content(
@@ -1580,7 +1571,6 @@ def test_indeterminate_callback_expires_before_recovery_attempt(
             final_status="done",
             summary="do not retry an uncertain delivery",
             relay_fallback=True,
-            relay_max_attempts=1,
         )
         with patch("sin_orca.web_callbacks.run_orca", side_effect=indeterminate_send):
             relayed = relay_callback(

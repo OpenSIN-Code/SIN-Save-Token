@@ -1817,7 +1817,6 @@ def _cmd_web_callback_open(args: argparse.Namespace) -> int:
         dsh_session_id=args.dsh_session,
         ttl_minutes=args.ttl_minutes,
         round_number=args.round,
-        max_rounds=args.max_rounds,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
@@ -1900,7 +1899,6 @@ def _cmd_web_callback_send(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         relay_fallback=args.relay_fallback,
         relay_interval_seconds=args.relay_interval_seconds,
-        relay_max_attempts=args.relay_max_attempts,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
@@ -1961,7 +1959,6 @@ def _cmd_web_callback_relay_install(args: argparse.Namespace) -> int:
         repository=args.repo,
         token=token,
         interval_seconds=args.interval_seconds,
-        max_attempts=args.max_attempts,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
@@ -2157,12 +2154,6 @@ def main() -> int:
     p.add_argument("--origin-session")
     p.add_argument("--ttl-minutes", type=int, default=24 * 60)
     p.add_argument("--round", type=int, default=1)
-    p.add_argument(
-        "--max-rounds",
-        type=int,
-        default=0,
-        help="Maximum callback rounds; 0 means unbounded until convergence",
-    )
 
     p = sub.add_parser(
         "web-callback-bind",
@@ -2221,10 +2212,9 @@ def main() -> int:
         "--relay-fallback",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Install a bounded launchd retry relay when delivery is pending (default: enabled)",
+        help="Install a persistent launchd retry relay when delivery is pending (default: enabled)",
     )
     p.add_argument("--relay-interval-seconds", type=int, default=60)
-    p.add_argument("--relay-max-attempts", type=int, default=3)
 
     p = sub.add_parser(
         "web-callback-status",
@@ -2262,7 +2252,7 @@ def main() -> int:
 
     p = sub.add_parser(
         "web-callback-relay-install",
-        help="Install an optional bounded launchd relay for one pending callback",
+        help="Install an optional persistent launchd relay for one pending callback",
     )
     p.add_argument("--repo", required=True)
     selector = p.add_mutually_exclusive_group(required=True)
@@ -2270,7 +2260,6 @@ def main() -> int:
     selector.add_argument("--task-id")
     p.add_argument("--round", type=int)
     p.add_argument("--interval-seconds", type=int, default=60)
-    p.add_argument("--max-attempts", type=int, default=3)
 
     p = sub.add_parser(
         "web-callback-relay-cancel",
