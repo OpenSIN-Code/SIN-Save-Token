@@ -152,7 +152,7 @@ sin-orca web-callback-open \
   --origin-terminal "$ORIGIN_TERMINAL" \
   --origin-session "$ORIGIN_SESSION" \
   --ttl-minutes 1440 \
-  --round 1 --max-rounds 50
+  --round 1
 
 sin-orca web-callback-bind \
   --repo "$REPO" --callback "$CALLBACK" \
