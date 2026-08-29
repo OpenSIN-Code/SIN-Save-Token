@@ -12,6 +12,8 @@ The broker owns transport persistence only. Signed/HMAC-bound repository callbac
 
 `wow-my-zsh` publishes the canonical `SIN-Save-Token/bin/sin-callback` into the fleet and includes it in SIN-GPT-Web doctor checks. macOS uses the per-user `com.sin-orca.callback-broker` LaunchAgent; Linux uses the user-scoped `sin-callback-broker.service` systemd unit. No service file contains callback capabilities or upstream credentials.
 
+OCI production acceptance was completed on `sin-supabase` on 2026-08-29 from SST `5eb5a09cba2d56f5aa2d702e2bbd104f4f5d3b52`: the Ubuntu user service is `enabled` and `active (running)`, `loginctl` reports `Linger=yes`, `NRestarts=0`, `ExecMainStatus=0`, and `sin-callback doctor` reports `ok=true`, schema 2, SQLite integrity `ok`, state directory `0700`, DB/token `0600`, and `issues=[]`. The operator CLI is published at `~/.local/bin/sin-callback`; the unit remains loopback-only on `127.0.0.1:61369` and contains no credentials.
+
 <!-- SIN-GPT-WEB-HANDOVER
 task: T-0001
 updated: 2026-08-25T23:35:50+00:00

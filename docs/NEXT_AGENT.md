@@ -25,6 +25,8 @@ Operational invariants to preserve:
 
 Fleet publication, launch/runtime discovery and SIN-GPT-Web doctor wiring remain in sibling `wow-my-zsh`; do not duplicate platform ownership here.
 
+OCI Linux acceptance is complete as of 2026-08-29 on `sin-supabase`: `sin-callback-broker.service` is user-scoped, enabled and active with `Linger=yes`, `NRestarts=0`; `sin-callback doctor` is green with schema 2, integrity `ok`, private `0700/0600/0600` state, and no issues. Treat future work here as maintenance/regression work, not as an unfinished Linux rollout.
+
 <!-- SIN-GPT-WEB-HANDOVER
 task: T-0001
 updated: 2026-08-25T23:35:50+00:00
