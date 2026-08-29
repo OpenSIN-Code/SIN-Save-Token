@@ -146,8 +146,8 @@ def test_restart_persistence_keeps_due_delivery(tmp_path: Path) -> None:
 def test_repository_registry_is_idempotent_and_persistent(tmp_path: Path) -> None:
     db = tmp_path / "broker.sqlite3"
     first = CallbackBrokerStore(db)
-    first.register_repository(tmp_path)
-    first.register_repository(tmp_path)
+    for _ in range(2):
+        first.register_repository(tmp_path)
     second = CallbackBrokerStore(db)
     assert second.list_repositories() == [str(tmp_path.resolve())]
 
