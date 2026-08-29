@@ -205,7 +205,7 @@
         "require_diff_hash_match": {"const": true},
         "preferred_agents": {
           "type": "array",
-          "minItems": 2,
+          "minItems": 1,
           "items": {"type": "string", "minLength": 1},
           "uniqueItems": true
         }
