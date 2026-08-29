@@ -1884,11 +1884,14 @@ def _deliver_prime_agent_callback(
             timeout=30,
         )
         payload = json.loads(process.stdout) if process.returncode == 0 else None
-        target = payload.get("target") if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            raise RuntimeError("Prime Agent delivery receipt was invalid")
+        target = payload.get("target")
+        delivery_status = payload.get("deliveryStatus")
         if (
             not isinstance(target, dict)
             or target.get("activeSessionId") != session_id
-            or payload.get("deliveryStatus") not in {"delivered", "queued"}
+            or delivery_status not in {"delivered", "queued"}
         ):
             raise RuntimeError("Prime Agent delivery receipt was invalid")
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, RuntimeError) as error:
@@ -1915,7 +1918,7 @@ def _deliver_prime_agent_callback(
             "delivery_state": "sent",
             "delivery_prime_agent_session": session_id,
             "delivery_target_source": "prime-agent-session",
-            "delivery_receipt_status": payload["deliveryStatus"],
+            "delivery_receipt_status": delivery_status,
             "sent_at": isoformat(utc_now()),
         }
     )

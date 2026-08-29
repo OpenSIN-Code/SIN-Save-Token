@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, List
 
 BROKER_SCHEMA_VERSION = 2
 TERMINAL_STATES = {"acknowledged", "expired", "cancelled", "abandoned"}
@@ -270,11 +270,11 @@ class CallbackBrokerStore:
             ).fetchall()
             return {str(row["state"]): int(row["count"]) for row in rows}
 
-    def claim_due(self, *, limit: int = 10, lease_seconds: int = DEFAULT_LEASE_SECONDS) -> list[dict[str, Any]]:
+    def claim_due(self, *, limit: int = 10, lease_seconds: int = DEFAULT_LEASE_SECONDS) -> List[dict[str, Any]]:
         now = _now()
         now_s = _iso(now)
         lease_until = _iso(now + timedelta(seconds=lease_seconds))
-        claimed: list[dict[str, Any]] = []
+        claimed: List[dict[str, Any]] = []
         with self.transaction() as db:
             db.execute(
                 """UPDATE deliveries
@@ -336,7 +336,7 @@ class CallbackBrokerStore:
                 return None
             return dict(fresh)
 
-    def due_receipt_watches(self, *, limit: int = 100) -> list[dict[str, Any]]:
+    def due_receipt_watches(self, *, limit: int = 100) -> List[dict[str, Any]]:
         now_s = _iso()
         with self._connect() as db:
             rows = db.execute(
