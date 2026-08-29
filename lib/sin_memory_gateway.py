@@ -267,7 +267,7 @@ class OpenVikingCLIBackend(MemoryBackend):
         *,
         executable: str | None = None,
         account: str = "sin-fleet",
-        user: str = "default",
+        user: str | None = None,
         agent_id: str = "sin-memory-gateway",
         timeout_seconds: int = 180,
         poll_interval_seconds: float = 0.5,
@@ -276,7 +276,7 @@ class OpenVikingCLIBackend(MemoryBackend):
         if not resolved:
             raise BackendFailureError("OpenViking `ov` CLI is not installed on PATH")
         for label, value in (("account", account), ("user", user), ("agent_id", agent_id)):
-            if not SAFE_IDENTIFIER.fullmatch(value):
+            if value is not None and not SAFE_IDENTIFIER.fullmatch(value):
                 raise BackendFailureError(f"OpenViking {label} is not a safe identifier")
         self.executable = resolved
         self.account = account
@@ -286,17 +286,19 @@ class OpenVikingCLIBackend(MemoryBackend):
         self.poll_interval_seconds = poll_interval_seconds
 
     def _base(self) -> list[str]:
-        return [
+        base = [
             self.executable,
             "-o",
             "json",
             "--account",
             self.account,
-            "--user",
-            self.user,
-            "--agent-id",
-            self.agent_id,
         ]
+        if self.user:
+            # USER API keys derive the effective user from the key itself;
+            # sending X-OpenViking-User is rejected by the server.
+            base += ["--user", self.user]
+        base += ["--agent-id", self.agent_id]
+        return base
 
     def _run_json(self, args: list[str], *, timeout: int | None = None) -> Any:
         try:

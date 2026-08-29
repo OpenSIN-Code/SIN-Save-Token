@@ -273,7 +273,7 @@ def main() -> int:
     try:
         backend = OpenVikingCLIBackend(
             account=os.environ.get("SIN_MEMORY_ACCOUNT", "sin-fleet"),
-            user=os.environ.get("SIN_MEMORY_USER", "default"),
+            user=os.environ.get("SIN_MEMORY_USER") or None,
             agent_id=os.environ.get("SIN_MEMORY_AGENT_ID", "sin-memory-gateway"),
         )
     except Exception as error:
