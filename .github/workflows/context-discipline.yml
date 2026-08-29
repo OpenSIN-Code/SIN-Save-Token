@@ -128,7 +128,7 @@ jobs:
 
           providers = json.load(open("config/intelligence-providers.json", encoding="utf-8"))
           graph = providers["providers"]["general_code_graph"]
-          assert graph["primary"] == "graphify"
+          assert graph["primary"] == "gitnexus"
           assert graph["fallback"] == "sin-code"
           assert graph["allow_simultaneous_execution"] is False
           assert providers["rules"]["never_accept_code_without_controller_verification"] is True
