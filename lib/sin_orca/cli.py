@@ -544,6 +544,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         "graphify": _command_status("graphify", required=False),
         "gitnexus": _command_status("gitnexus", required=False),
         "sin": _command_status("sin", required=False),
+        "sin-callback": _command_status("sin-callback", required=False),
     }
 
     required_issues: list[str] = []

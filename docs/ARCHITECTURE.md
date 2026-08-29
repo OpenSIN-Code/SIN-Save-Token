@@ -73,6 +73,16 @@ These optimizers are sidecars to the correctness path; they do not replace retri
 
 Worker checkpoints and reports are structured artifacts. Direct callbacks provide control-plane notifications, but a worker's claim is never sufficient for completion. The controller reconstructs the ledger, validates protocol/order, checks changed paths and the baseline diff, executes verification commands, and can start a blind reviewer in the same worktree using a different agent. Completion manifests bind the accepted evidence to hashes.
 
+### Durable callback delivery — C-lite broker
+
+Callback authorization and callback delivery are deliberately separated. Signed repository-local callback records in `web_callbacks.py` remain the sole authority for capability/HMAC validation, task/round/repository/origin binding, TTL and completion. `callback_broker.py` is a reconstructible transport-only SQLite/WAL queue: it stores delivery identity, exact target identity, leases, retry scheduling and receipts, but never callback capabilities, message bodies, summaries, credentials or HMAC material.
+
+One global per-user broker service (`callback_broker_service.py`) continuously re-syncs a persistent repository registry, claims due delivery rows with exclusive leases and watches `sent`/`indeterminate` receipts without retransmission. Retry attempts are unbounded counters for observability; only canonical callback TTL may end automatic delivery. Exact-ID reconciliation cannot claim another due row.
+
+Transport adapters are identity-preserving. OpenCode prefers an explicitly configured loopback server after verifying the exact `ses_*` and repository directory, then crosses one asynchronous `/session/:id/prompt_async` send boundary. An ambiguous result after that boundary becomes `indeterminate`; a configured API failure never falls through to another transport. Without the API, exact-session `opencode run --session` remains compatibility only. Prime Agent targets only the persisted `activeSessionId`; DeepSeek Harness targets only the persisted top-level `sessionId` through the loopback `session.prompt` callback host. No adapter selects a substitute session.
+
+The operator surface is `sin-callback`: authenticated loopback status/list/inspect/reconcile/drain/sync operations, fail-closed `doctor`, and per-user launchd/systemd installation. Fleet publication and host diagnostics remain owned by `wow-my-zsh`; callback semantics remain canonical in this repository.
+
 ## Trust, state, and ownership boundaries
 
 ### Repository-owned policy

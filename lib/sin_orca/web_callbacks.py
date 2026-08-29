@@ -799,6 +799,12 @@ def open_callback(
 ) -> dict[str, Any]:
     root = resolve_repository(repository)
     task = _validate_task_id(task_id)
+    try:
+        from .callback_broker import CallbackBrokerStore
+
+        CallbackBrokerStore().register_repository(root)
+    except Exception as error:
+        raise RuntimeError("durable callback broker repository registration failed") from error
     if not 5 <= ttl_minutes <= 7 * 24 * 60:
         raise ValueError("callback TTL must be between 5 and 10080 minutes")
     if round_number < 1:
@@ -1236,6 +1242,7 @@ def reconcile_callback_handoff(
 
 
 def _default_next_action(record: dict[str, Any]) -> str:
+    round_number = int(record.get("round") or 1)
     conversation = record.get("conversation")
     binding = ""
     if isinstance(conversation, dict):
@@ -1362,6 +1369,7 @@ def _expire_callback_if_needed(
     record.update({"status": "expired", "expired_at": isoformat(now)})
     _remove_relay_fallback(repository, record, reason="callback-expired")
     atomic_write_json(callback_path(repository, token), record)
+    _mirror_broker_state(record)
     return True
 
 
@@ -1561,7 +1569,7 @@ def _render_unbound_origin_reconciliation_message(
         transport_name = "prime-agent"
         target = str(transport.get("active_session_id") or "unresolved")
     else:
-        transport_name = "opencode-terminal"
+        transport_name = "opencode-exact-session"
         session = record.get("origin_session")
         target = (
             str(session.get("id") or "unresolved")
@@ -1653,7 +1661,7 @@ def render_callback_message(
         target = prime_target
     else:
         session_display = f"opencode_session={session_id or 'unresolved'} "
-        transport_name = "opencode-terminal"
+        transport_name = "opencode-exact-session"
         target = session_id or "unresolved"
     header = (
         "SIN_GPT_WEB_CALLBACK "
@@ -1877,12 +1885,10 @@ def _deliver_prime_agent_callback(
         )
         payload = json.loads(process.stdout) if process.returncode == 0 else None
         target = payload.get("target") if isinstance(payload, dict) else None
-        delivery_status = (
-            payload.get("deliveryStatus") if isinstance(payload, dict) else None
-        )
         if (
             not isinstance(target, dict)
-            or delivery_status not in {"delivered", "queued"}
+            or target.get("activeSessionId") != session_id
+            or payload.get("deliveryStatus") not in {"delivered", "queued"}
         ):
             raise RuntimeError("Prime Agent delivery receipt was invalid")
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, RuntimeError) as error:
@@ -1909,7 +1915,7 @@ def _deliver_prime_agent_callback(
             "delivery_state": "sent",
             "delivery_prime_agent_session": session_id,
             "delivery_target_source": "prime-agent-session",
-            "delivery_receipt_status": delivery_status,
+            "delivery_receipt_status": payload["deliveryStatus"],
             "sent_at": isoformat(utc_now()),
         }
     )
@@ -1925,6 +1931,50 @@ def _deliver_prime_agent_callback(
         "conversation": record.get("conversation"),
         "sent_at": record.get("sent_at"),
     }
+
+
+def _enqueue_callback_with_broker(repository: Path, record: dict[str, Any]) -> dict[str, Any] | None:
+    """Best-effort enqueue of canonical callback metadata only."""
+    delivery_id = str(record.get("delivery_id") or "")
+    relay_id = str(record.get("relay_id") or "")
+    message_sha256 = str(record.get("message_sha256") or "")
+    if not DELIVERY_ID_PATTERN.fullmatch(delivery_id) or not RELAY_ID_PATTERN.fullmatch(relay_id) or not message_sha256:
+        return None
+    from .callback_broker import CallbackBrokerStore, DeliveryRef
+    from .callback_transports import classify_callback_transport
+    transport, target_id = classify_callback_transport(record)
+    row = CallbackBrokerStore().enqueue(DeliveryRef(
+        delivery_id=delivery_id, relay_id=relay_id, repository_root=str(repository),
+        callback_status=str(record.get("callback_status") or ""), transport=transport,
+        target_id=target_id, message_sha256=message_sha256,
+        expires_at=str(record.get("expires_at") or ""),
+    ))
+    return {"delivery_id": row["delivery_id"], "state": row["state"]}
+
+
+def _broker_owns_delivery(record: dict[str, Any]) -> bool:
+    """Return whether C-lite has durably accepted this delivery identity."""
+    delivery_id = str(record.get("delivery_id") or "")
+    if not DELIVERY_ID_PATTERN.fullmatch(delivery_id):
+        return False
+    try:
+        from .callback_broker import CallbackBrokerStore
+
+        return CallbackBrokerStore().get(delivery_id) is not None
+    except Exception:
+        return False
+
+
+def _mirror_broker_state(record: dict[str, Any]) -> None:
+    """Best-effort transport receipt mirror; canonical record is authoritative."""
+    delivery_id = str(record.get("delivery_id") or "")
+    if not DELIVERY_ID_PATTERN.fullmatch(delivery_id):
+        return
+    try:
+        from .callback_broker import CallbackBrokerStore
+        CallbackBrokerStore().mirror_terminal_state(delivery_id, str(record.get("status") or ""))
+    except Exception:
+        return
 
 
 def _deliver_pending_callback(
@@ -1949,6 +1999,12 @@ def _deliver_pending_callback(
         )
         record["message_sha256"] = hashlib.sha256(message.encode("utf-8")).hexdigest()
         atomic_write_json(callback_path(repository, token), record)
+    try:
+        _enqueue_callback_with_broker(repository, record)
+    except Exception as error:
+        record["delivery_reason"] = "broker-enqueue-failed"
+        record["broker_error"] = type(error).__name__
+        atomic_write_json(callback_path(repository, token), record)
     if record.get("delivery_state") == "indeterminate":
         return {
             "ok": True,
@@ -1962,6 +2018,32 @@ def _deliver_pending_callback(
         return _deliver_dsh_callback(repository, token, record, dry_run=dry_run)
     if isinstance(transport, dict) and transport.get("transport") == "prime-agent":
         return _deliver_prime_agent_callback(repository, token, record, dry_run=dry_run)
+    session = record.get("origin_session")
+    session_id = session.get("id") if isinstance(session, dict) else None
+    if isinstance(session_id, str) and SESSION_PATTERN.fullmatch(session_id):
+        from .callback_transports import deliver_opencode_exact_session
+        message = render_callback_message(record, final_status=str(record["callback_status"]), summary=str(record["summary"]), changed=list(record.get("changed_files") or []), verification=str(record.get("verification") or "unknown"), next_action=str(record.get("next_action") or ""))
+        if not dry_run:
+            direct = deliver_opencode_exact_session(repository=repository, session_id=session_id, message=message)
+            if direct.state == "sent":
+                record.update({"status": "sent", "delivery_state": "sent", "delivery_target_source": "opencode-exact-session", "sent_at": isoformat(utc_now())})
+                atomic_write_json(callback_path(repository, token), record)
+                return {"ok": True, "status": "callback-sent", "callback": token, "delivery_id": record.get("delivery_id"), "target_source": "opencode-exact-session"}
+            if direct.state == "indeterminate":
+                record.update({"status": "delivery-indeterminate", "delivery_state": "indeterminate", "delivery_reason": direct.reason_code})
+                atomic_write_json(callback_path(repository, token), record)
+                return {"ok": True, "status": "callback-delivery-indeterminate", "callback": token, "delivery_id": record.get("delivery_id"), "delivery_reason": direct.reason_code}
+            if direct.state == "retry_wait" and str(os.getenv("SIN_OPENCODE_CALLBACK_URL") or "").strip():
+                record.update({"status": "pending-delivery", "delivery_state": "pending", "delivery_reason": direct.reason_code})
+                atomic_write_json(callback_path(repository, token), record)
+                return {
+                    "ok": True,
+                    "status": "callback-pending",
+                    "callback": token,
+                    "task_id": record.get("task_id"),
+                    "delivery_id": record.get("delivery_id"),
+                    "delivery_reason": direct.reason_code,
+                }
     terminal, target_source = resolve_delivery_terminal(repository, record)
     record["delivery_attempts"] = int(record.get("delivery_attempts") or 0) + 1
     record["last_delivery_attempt_at"] = isoformat(utc_now())
@@ -2183,7 +2265,11 @@ def _deliver_unbound_origin_reconciliation(
             else:
                 reconciliation["state"] = "indeterminate"
             atomic_write_json(callback_path(root, token), record)
-    if relay_fallback and result.get("status") == "callback-pending":
+    if (
+        relay_fallback
+        and result.get("status") == "callback-pending"
+        and not _broker_owns_delivery(record)
+    ):
         result["relay_fallback"] = install_callback_relay(
             repository=root,
             token=token,
@@ -2296,7 +2382,12 @@ def send_callback(
                 f"callback is already {record.get('status')}; capabilities are one-shot"
             )
         result = _deliver_pending_callback(root, token, record, dry_run=dry_run)
-    if relay_fallback and not dry_run and result.get("status") == "callback-pending":
+    if (
+        relay_fallback
+        and not dry_run
+        and result.get("status") == "callback-pending"
+        and not _broker_owns_delivery(record)
+    ):
         result["relay_fallback"] = install_callback_relay(
             repository=root,
             token=token,
@@ -2349,6 +2440,12 @@ def relay_callback(
         if scheduled and not dry_run:
             fallback = record["relay_fallback"]
             fallback["attempts"] = int(fallback.get("attempts") or 0) + 1
+            if result.get("status") == "callback-pending" and _broker_owns_delivery(record):
+                _deactivate_relay_fallback(
+                    root,
+                    record,
+                    reason="callback-broker-takeover",
+                )
             atomic_write_json(callback_path(root, token), record)
         return result
 
@@ -2438,6 +2535,7 @@ def acknowledge_callback(
         )
         _remove_relay_fallback(root, record, reason="receipt-acknowledged")
         atomic_write_json(callback_path(root, token), record)
+        _mirror_broker_state(record)
     return {
         "ok": True,
         "status": "callback-acknowledged",
@@ -2542,6 +2640,7 @@ def abandon_callback(
         )
         _remove_relay_fallback(root, record, reason="callback-abandoned")
         atomic_write_json(path, record)
+        _mirror_broker_state(record)
     return {
         "ok": True,
         "status": "callback-abandoned",
@@ -2590,6 +2689,7 @@ def cancel_callback(
             }
         )
         atomic_write_json(callback_path(root, token), record)
+        _mirror_broker_state(record)
     return {
         "ok": True,
         "status": "callback-cancelled",

@@ -4,6 +4,14 @@ OpenViking remains the only canonical durable semantic-memory backend. The SIN M
 
 The cross-repository ownership consolidation intentionally moved the fleet-level OpenViking and deployment Archify artifacts to `wow-my-zsh/docs/diagrams/`. SST keeps only its Memory-Write and Recall/Context workflow artifacts as canonical local diagrams.
 
+## Callback Broker C-lite production contract
+
+The durable callback broker is implemented here and deployed per user through `bin/sin-callback install`. Its default state is `~/.local/state/sin-orca/callback-broker.sqlite3` (SQLite/WAL, mode 0600), with a loopback control-plane token in the same private 0700 state directory (mode 0600). `sin-callback doctor` is the production readiness gate and must report DB integrity `ok`, schema 2, private modes, a reachable loopback API and no issues.
+
+The broker owns transport persistence only. Signed/HMAC-bound repository callback records continue to own capability validation, task/round/repository/origin identity, TTL and completion. OpenCode exact-session API delivery, Prime Agent exact `activeSessionId`, and DeepSeek Harness exact top-level `sessionId` must never be silently substituted. `sent` or `indeterminate` deliveries wait for canonical receipt/TTL reconciliation without retransmission.
+
+`wow-my-zsh` publishes the canonical `SIN-Save-Token/bin/sin-callback` into the fleet and includes it in SIN-GPT-Web doctor checks. macOS uses the per-user `com.sin-orca.callback-broker` LaunchAgent; Linux uses the user-scoped `sin-callback-broker.service` systemd unit. No service file contains callback capabilities or upstream credentials.
+
 <!-- SIN-GPT-WEB-HANDOVER
 task: T-0001
 updated: 2026-08-25T23:35:50+00:00

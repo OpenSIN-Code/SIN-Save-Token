@@ -132,18 +132,27 @@ Cancel gibt die Repository-Writer-Reservation wieder frei. `sleep`, blindes
 Terminal-Polling, Commits, Branches und zusätzliche Git-Worktrees sind für
 Worker verboten.
 
-### ChatGPT Web → laufende OpenCode-TUI
+### ChatGPT Web → durable Callback Broker → exakte Origin-Session
 
 `sin-orca` stellt zusätzlich einen capability-basierten Rückkanal für
-`sin-gpt-web` bereit. Vor der Browserdelegation wird ein zufälliges, ablaufendes
-Einmal-Token an das exakte Orca-Terminal der aufrufenden OpenCode-TUI gebunden.
-Die OpenCode-Session-ID dient als Korrelation, nicht als unsicherer Ersatz für
-das konkrete Terminalziel. Fehlt sie, korreliert die Runtime Orcas exakte
-`tabId`, `leafId`, `ptyId` und Worktree-Identität mit Orcas
-OpenCode-Provider-Session-Zuordnung. Sie liest dabei ausschließlich diese
-Struktur-IDs. Ist keine exakte Zuordnung möglich, wird nur eine eindeutig einzige
-Repository-Session akzeptiert; aus mehreren Sessions wird niemals anhand der
-Aktualitätszeit geraten.
+`sin-gpt-web` bereit. Die signierte repository-lokale Callback-Datei bleibt die
+einzige Autorität für Capability, HMAC-Bindung, Task/Round/Repository-Identität,
+TTL und Completion. Die Zustellung selbst läuft über den globalen **SIN Callback
+Broker C-lite** (`sin-callback`): eine transport-only SQLite/WAL-Queue mit
+persistenter Repository-Registry, Leases, Retry-Planung und Receipt-Watching.
+Der Broker speichert weder Callback-Token noch Nachrichtentext, Summary,
+Credentials oder HMAC-Material.
+
+OpenCode wird bevorzugt direkt an die exakt persistierte `ses_*` über einen
+explizit konfigurierten loopback OpenCode-Server zugestellt: erst wird
+`GET /session/:id` inklusive Repository-Verzeichnis verifiziert, danach erfolgt
+genau ein `POST /session/:id/prompt_async`. Ist dieser API-Transport konfiguriert,
+fällt ein Offline-/Pre-Send-Fehler nicht auf ein Orca-Terminal zurück; nach einer
+unklaren POST-Grenze wird der Zustand `indeterminate` und niemals blind erneut
+gesendet. Ohne konfigurierte API bleibt `opencode run --session <exact-id>` als
+exakter CLI-Kompatibilitätspfad. Prime Agent bleibt an die exakte
+`activeSessionId`, DeepSeek Harness an die exakte Top-Level-`sessionId` gebunden;
+kein Adapter darf eine andere Session erraten oder auswählen.
 
 ```bash
 sin-orca web-callback-open \
@@ -161,7 +170,9 @@ sin-orca web-callback-bind \
   --profile OpenSIN
 ```
 
-Nach Abschluss ruft ChatGPT Web den Rückkanal über den Mac-i9-Tunnel auf:
+Nach Abschluss staged ChatGPT Web den kanonischen Rückruf über den gebundenen
+Maschinen-Connector; der Broker übernimmt anschließend die durable Zustellung an
+die exakte Origin-Session:
 
 ```bash
 sin-orca web-callback-send \
@@ -172,14 +183,12 @@ sin-orca web-callback-send \
   --verify "Tests bestanden"
 ```
 
-Erlaubte Terminalzustände sind `done`, `blocked` und `failed`. Vor dem Senden
-prüft die Runtime Token, Ablaufzeit, Replay, Repository-Zuordnung sowie, ob das
-exakte Terminal weiterhin verbunden und beschreibbar ist. Danach wird ein
-strukturiertes `SIN_GPT_WEB_CALLBACK` direkt in die ursprüngliche OpenCode-TUI
-eingefügt. Die Nachricht enthält Task, Status, Session-Korrelation,
-Verifikationszusammenfassung, ChatGPT-Page/URL und die verpflichtende nächste
-CEO-Loop-Aktion. OpenCode muss den Claim selbst verifizieren und darf ihn nicht
-blind als Completion akzeptieren.
+Erlaubte Completion-Zustände sind `done`, `blocked` und `failed`. Vor dem
+Staging prüft die Runtime Capability, Ablaufzeit, Replay und
+Repository/Task/Origin-Zuordnung. Ein erfolgreicher Transport-Receipt ist noch
+keine Completion: die Origin-Session muss den Claim weiterhin selbst gegen
+Taskplan, Repository und Evidence verifizieren. `sent` und `indeterminate`
+werden vom Broker nur auf ACK/TTL beobachtet und nicht erneut übertragen.
 
 ```bash
 sin-orca web-callback-status --repo "$REPO" --callback "$CALLBACK"
@@ -440,12 +449,13 @@ SIN-Save-Token/
 │   │                            MCP-Server-Zahl, Modell-Routing, always-loaded-Fläche;
 │   │                            exit 1 bei Regress)
 │   ├── sin-orca              ← Same-worktree Orchestrator, Callbacks, Gates, Review, Manifest
+│   ├── sin-callback          ← durable Callback Broker C-lite Operator-CLI
 │   ├── gitnexus-query        ← fail-closed GitNexus-Fallback für das exakte Repository
 │   ├── agent-grep            ← struktur-augmentierte, selbst-kürzende Code-Suche
 │   ├── memory-scope          ← jcode ② — Memory-Ranking (BM25-lite) + ehrliches ROI-Gate
 │   ├── session-digest        ← jcode ③ — Transcript → kompakter Resume-Digest (~99%)
 │   └── dream                 ← mimo /dream — dauerhafte Lehren → geteiltes Memory
-├── lib/sin_orca/             ← kanonische Runtime (State, Lease, Writer, Verify, Review)
+├── lib/sin_orca/             ← kanonische Runtime inkl. durable Callback Broker C-lite (State, Transport, Service, CLI)
 ├── scripts/
 │   ├── verify-local-integration.py ← lokale Fleet-/CI-Gates mit externem Report
 │   └── live-orca-smoke.py    ← echter Worker→Callback→Review→Manifest-Smoke

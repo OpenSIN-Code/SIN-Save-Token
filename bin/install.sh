@@ -122,12 +122,14 @@ if [ "$MODE" != "--check" ]; then
   ln -sfn "$REPO_DIR/bin/sin-memory-write" "$BIN_DEST/sin-memory-write"
   ln -sfn "$REPO_DIR/bin/openviking-recall" "$BIN_DEST/openviking-recall"
   ln -sfn "$REPO_DIR/bin/gitnexus-query" "$BIN_DEST/gitnexus-query"
+  ln -sfn "$REPO_DIR/bin/sin-callback" "$BIN_DEST/sin-callback"
   cat > "$BIN_DEST/sin-context" <<CONTEXT_WRAPPER
 #!/usr/bin/env bash
 exec python3 "$REPO_DIR/bin/sin-context" "\$@"
 CONTEXT_WRAPPER
   chmod +x "$BIN_DEST/sin-context"
   say "✅ memory/context CLIs linked: sin-context + sin-memory-write + openviking-recall + gitnexus-query"
+  say "✅ durable callback broker CLI linked: sin-callback"
   say "✅ memory-scope + session-digest + dream + sin-token-stack linked -> $BIN_DEST/"
 
   if [ -f "$CC_SETTINGS" ] && command -v python3 >/dev/null 2>&1; then
