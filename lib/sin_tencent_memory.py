@@ -2,7 +2,7 @@
 
 The adapter intentionally exposes only read operations. It never sends raw
 conversations, persona/core requests, tool output, prompts, or write payloads.
-Tencent MemoryCore remains an optional provider; Cognee stays canonical.
+Tencent MemoryCore remains an optional provider; OpenViking owns canonical durable semantic memory.
 """
 
 from __future__ import annotations

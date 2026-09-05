@@ -61,6 +61,7 @@ jobs:
           python -m py_compile \
             bin/sin-context \
             bin/sin-orca \
+            bin/sin-callback \
             bin/gitnexus-query \
             bin/benchmark-context \
             bin/audit-token-architecture.py \
@@ -86,6 +87,7 @@ jobs:
           test -x bin/sin-memory-write
           test -x bin/brain-sync.py
           test -x bin/sin-orca
+          test -x bin/sin-callback
           test -x bin/gitnexus-query
           test -x bin/sin-token-stack
           test -x bin/verify-tokens

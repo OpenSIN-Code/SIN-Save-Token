@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import plistlib
 import subprocess
 import sys
@@ -34,12 +35,56 @@ from sin_orca.web_callbacks import (  # noqa: E402
     _default_next_action,
 )
 from sin_orca import cli as sin_orca_cli  # noqa: E402
+from sin_orca.callback_transports import TransportResult  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def isolate_callback_broker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep callback tests out of the operator's real durable broker state."""
+    state = tmp_path / "callback-broker-state"
+    monkeypatch.setenv("SIN_CALLBACK_BROKER_STATE_DIR", str(state))
+    monkeypatch.setenv("SIN_CALLBACK_BROKER_DB", str(state / "callback-broker.sqlite3"))
+    monkeypatch.setenv("SIN_CALLBACK_BROKER_TOKEN_FILE", str(state / "callback-broker.token"))
+    monkeypatch.delenv("SIN_OPENCODE_CALLBACK_URL", raising=False)
+    # Web-callback unit tests mock Orca terminal state. Keep the host's real
+    # OpenCode installation from bypassing those mocks through the exact-session
+    # CLI adapter; transport-specific behavior is covered separately.
+    monkeypatch.setattr(
+        "sin_orca.callback_transports.deliver_opencode_exact_session",
+        lambda **_: TransportResult("retry_wait", "opencode-exact-session-offline"),
+    )
 
 
 def git_repository(path: Path) -> Path:
     path.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=path, check=True)
     return path.resolve()
+
+
+def test_open_callback_registers_repository_with_durable_broker(tmp_path: Path) -> None:
+    from sin_orca.callback_broker import CallbackBrokerStore
+
+    repository = git_repository(tmp_path / "repo")
+    broker_db = tmp_path / "broker.sqlite3"
+    payload = terminal_payload(
+        repository,
+        handle="term-broker-register",
+        title="OpenCode",
+        preview="Build · model",
+    )
+    with patch.dict(os.environ, {"SIN_CALLBACK_BROKER_DB": str(broker_db)}, clear=False), patch(
+        "sin_orca.web_callbacks.run_orca",
+        return_value=payload,
+    ):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-BROKER-REGISTER",
+            origin_terminal="term-broker-register",
+            origin_session_id="ses_BROKERREGISTER",
+        )
+
+    assert opened["status"] == "callback-open"
+    assert CallbackBrokerStore(broker_db).list_repositories() == [str(repository)]
 
 
 def write_taskplan_evidence(
@@ -126,7 +171,6 @@ def test_open_binds_exact_terminal_and_session(tmp_path: Path) -> None:
             origin_session_id="ses_ABC123",
             ttl_minutes=60,
             round_number=3,
-            max_rounds=20,
         )
 
     assert result["status"] == "callback-open"
@@ -223,11 +267,11 @@ def test_never_end_origin_environment_is_used_when_cli_binding_is_absent(
     assert opened["origin_session"]["id"] == "ses_NEVEREND123"
 
 
-def test_unbounded_callback_round_never_requests_loop_stop() -> None:
+def test_legacy_finite_callback_round_never_requests_loop_stop() -> None:
     action = _default_next_action(
         {
             "round": 500,
-            "max_rounds": 0,
+            "max_rounds": 1,
             "conversation": {
                 "page_id": "page-123",
                 "url": "https://chatgpt.com/c/chat-12345678",
@@ -417,7 +461,6 @@ def test_bind_then_send_wakes_origin_once(tmp_path: Path) -> None:
             origin_session_id="ses_ABC123",
             ttl_minutes=60,
             round_number=1,
-            max_rounds=10,
         )
         token = opened["callback"]
         bound = bind_callback(
@@ -445,6 +488,7 @@ def test_bind_then_send_wakes_origin_once(tmp_path: Path) -> None:
     message = argv[argv.index("--text") + 1]
     assert "SIN_GPT_WEB_CALLBACK task=T-0020 status=done" in message
     assert "session=ses_ABC123" in message
+    assert "transport=opencode-exact-session" in message
     assert "https://chatgpt.com/c/conversation-123" in message
     assert "continue the CEO loop" in message
     assert "RECEIPT_ACTION: sin-orca web-callback-ack" in message
@@ -615,6 +659,44 @@ def test_callback_without_terminal_stays_pending_and_is_relayable(
     assert relayed["status"] == "callback-sent"
     assert len(sent) == 1
     assert "delivery=gptwcd_" in sent[0][sent[0].index("--text") + 1]
+
+
+def test_configured_opencode_api_unavailable_never_falls_back_to_terminal(tmp_path: Path) -> None:
+    from sin_orca.callback_transports import TransportResult
+
+    repository = git_repository(tmp_path / "repo")
+    origin_payload = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build · model",
+    )
+    sent: list[list[str]] = []
+    with patch("sin_orca.web_callbacks.run_orca", return_value=origin_payload):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-API-NO-FALLBACK",
+            origin_terminal="term-origin",
+            origin_session_id="ses_APINOFALLBACK",
+        )
+
+    with patch.dict(os.environ, {"SIN_OPENCODE_CALLBACK_URL": "http://127.0.0.1:4096"}, clear=False), patch(
+        "sin_orca.callback_transports.deliver_opencode_exact_session",
+        return_value=TransportResult("retry_wait", "opencode-exact-session-api-unavailable"),
+    ), patch(
+        "sin_orca.web_callbacks.run_orca",
+        side_effect=orca_router(origin_payload, sent),
+    ):
+        result = send_callback(
+            repository=repository,
+            token=opened["callback"],
+            final_status="done",
+            summary="API is authoritative for exact-session delivery",
+        )
+
+    assert result["status"] == "callback-pending"
+    assert result["delivery_reason"] == "opencode-exact-session-api-unavailable"
+    assert sent == []
 
 
 def test_busy_terminal_keeps_callback_pending_until_tui_is_idle(
@@ -807,7 +889,6 @@ def test_resolve_callback_token_by_exact_task_and_round(tmp_path: Path) -> None:
             origin_terminal="term-origin",
             origin_session_id="ses_ABC123",
             round_number=1,
-            max_rounds=2,
         )
         second = open_callback(
             repository=repository,
@@ -815,7 +896,6 @@ def test_resolve_callback_token_by_exact_task_and_round(tmp_path: Path) -> None:
             origin_terminal="term-origin",
             origin_session_id="ses_ABC123",
             round_number=2,
-            max_rounds=2,
         )
 
     assert (
@@ -844,7 +924,6 @@ def test_resolve_callback_token_prefers_unique_open_retry(tmp_path: Path) -> Non
             origin_terminal="term-origin",
             origin_session_id="ses_ABC123",
             round_number=2,
-            max_rounds=2,
         )
         cancel_callback(
             repository=repository,
@@ -857,7 +936,6 @@ def test_resolve_callback_token_prefers_unique_open_retry(tmp_path: Path) -> Non
             origin_terminal="term-origin",
             origin_session_id="ses_ABC123",
             round_number=2,
-            max_rounds=2,
         )
 
     assert (
@@ -882,7 +960,6 @@ def test_resolve_callback_token_ignores_expired_open_retry(tmp_path: Path) -> No
             origin_terminal="term-origin",
             origin_session_id="ses_ABC123",
             round_number=2,
-            max_rounds=2,
         )
         expired_path = callback_path(repository, expired["callback"])
         expired_record = json.loads(expired_path.read_text(encoding="utf-8"))
@@ -899,7 +976,6 @@ def test_resolve_callback_token_ignores_expired_open_retry(tmp_path: Path) -> No
             origin_terminal="term-origin",
             origin_session_id="ses_ABC123",
             round_number=2,
-            max_rounds=2,
         )
 
     assert (
@@ -925,8 +1001,7 @@ def test_resolve_callback_token_refuses_ambiguity(tmp_path: Path) -> None:
                 origin_terminal="term-origin",
                 origin_session_id="ses_ABC123",
                 round_number=1,
-                max_rounds=2,
-            )
+                )
 
     with pytest.raises(RuntimeError, match="ambiguous"):
         resolve_callback_token(repository, task_id="T-0025", round_number=1)
@@ -1020,7 +1095,45 @@ def test_delivery_failure_stays_pending_for_relay(tmp_path: Path) -> None:
     assert len(sends) == 1
 
 
-def test_optional_relay_is_bounded_and_keeps_tokens_and_results_out_of_plist(
+def test_broker_owned_pending_callback_does_not_install_legacy_relay(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    origin_payload = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build · model",
+    )
+    offline_payload = terminal_payload(repository)
+    offline_payload["result"]["terminals"] = []
+
+    with patch("sin_orca.web_callbacks.run_orca", return_value=origin_payload):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-C-LITE-OWNER",
+            origin_terminal="term-origin",
+            origin_session_id="ses_CLITEOWNER",
+        )
+    with (
+        patch("sin_orca.web_callbacks.run_orca", return_value=offline_payload),
+        patch(
+            "sin_orca.callback_transports.deliver_opencode_exact_session",
+            return_value=TransportResult("retry_wait", "opencode-exact-session-offline"),
+        ),
+        patch("sin_orca.web_callbacks.install_callback_relay") as legacy_relay,
+    ):
+        pending = send_callback(
+            repository=repository,
+            token=opened["callback"],
+            final_status="done",
+            summary="global broker owns the pending delivery",
+            relay_fallback=True,
+        )
+
+    assert pending["status"] == "callback-pending"
+    legacy_relay.assert_not_called()
+
+
+def test_optional_relay_is_persistent_and_keeps_tokens_and_results_out_of_plist(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1058,16 +1171,20 @@ def test_optional_relay_is_bounded_and_keeps_tokens_and_results_out_of_plist(
         ),
         patch("sin_orca.web_callbacks._launchctl_process", side_effect=launchctl),
     ):
-        pending = send_callback(
-            repository=repository,
-            token=opened["callback"],
-            final_status="done",
-            summary="sensitive callback result must not reach scheduler metadata",
-            relay_fallback=True,
-            relay_interval_seconds=30,
-            relay_max_attempts=2,
-        )
+        with patch(
+            "sin_orca.web_callbacks._enqueue_callback_with_broker",
+            side_effect=OSError("broker temporarily unavailable"),
+        ):
+            pending = send_callback(
+                repository=repository,
+                token=opened["callback"],
+                final_status="done",
+                summary="sensitive callback result must not reach scheduler metadata",
+                relay_fallback=True,
+                relay_interval_seconds=30,
+            )
         reused = install_callback_relay(repository=repository, token=opened["callback"])
+        installed_plist = next(launch_agents.glob("*.plist"), None)
         first_retry = relay_callback(
             repository=repository, token=opened["callback"], scheduled=True
         )
@@ -1078,17 +1195,18 @@ def test_optional_relay_is_bounded_and_keeps_tokens_and_results_out_of_plist(
     assert pending["status"] == "callback-pending"
     assert pending["relay_fallback"]["status"] == "callback-relay-installed"
     assert reused["reused"] is True
+    assert installed_plist is not None
     assert first_retry["status"] == "callback-pending"
-    assert second_retry["status"] == "callback-pending"
-    plist = next(launch_agents.glob("*.plist"), None)
-    assert plist is None
-    # Capture the installed plist before the retry budget removes it from disk.
+    assert second_retry["status"] == "callback-relay-inactive"
+    assert next(launch_agents.glob("*.plist"), None) is None
+    # Legacy relay is allowed only until C-lite takes over the delivery row.
     bootstrap = next(arguments for arguments in launched if arguments[1] == "bootstrap")
     assert bootstrap[0] == "/usr/bin/launchctl"
     state = callback_status(repository=repository, token=opened["callback"])
     assert state["status"] == "pending-delivery"
     assert state["relay_fallback"]["status"] == "inert"
-    assert state["relay_fallback"]["deactivate_reason"] == "retry-budget-exhausted"
+    assert state["relay_fallback"]["attempts"] == 1
+    assert "max_attempts" not in state["relay_fallback"]
     assert any(arguments[1] == "bootout" for arguments in launched)
 
 
@@ -1127,13 +1245,23 @@ def test_relay_plist_has_no_callback_token_or_result_content(
         ),
     ):
         summary = "private summary not for launchd"
-        send_callback(
-            repository=repository,
-            token=opened["callback"],
-            final_status="done",
-            summary=summary,
-            relay_fallback=True,
-        )
+        with (
+            patch(
+                "sin_orca.web_callbacks._enqueue_callback_with_broker",
+                side_effect=OSError("broker temporarily unavailable"),
+            ),
+            patch(
+                "sin_orca.callback_transports.deliver_opencode_exact_session",
+                return_value=TransportResult("retry_wait", "opencode-exact-session-offline"),
+            ),
+        ):
+            send_callback(
+                repository=repository,
+                token=opened["callback"],
+                final_status="done",
+                summary=summary,
+                relay_fallback=True,
+            )
 
     plist_path = next(launch_agents.glob("*.plist"))
     plist_text = plist_path.read_text(encoding="utf-8")
@@ -1179,6 +1307,10 @@ def test_duplicate_task_round_relays_have_distinct_exact_selectors(
         patch(
             "sin_orca.web_callbacks._launchctl_process",
             return_value=subprocess.CompletedProcess([], 0, "", ""),
+        ),
+        patch(
+            "sin_orca.web_callbacks._enqueue_callback_with_broker",
+            side_effect=OSError("broker temporarily unavailable"),
         ),
     ):
         for callback in callbacks:
@@ -1277,6 +1409,10 @@ def test_receipt_removes_optional_relay_without_polling(
         ),
         patch("sin_orca.web_callbacks._launchctl_process", side_effect=launchctl),
         patch("sin_orca.web_callbacks.run_orca", return_value=offline_payload),
+        patch(
+            "sin_orca.web_callbacks._enqueue_callback_with_broker",
+            side_effect=OSError("broker temporarily unavailable"),
+        ),
     ):
         send_callback(
             repository=repository,
@@ -1341,6 +1477,10 @@ def test_scheduled_relay_expires_and_removes_itself(
         patch(
             "sin_orca.web_callbacks._launchctl_process",
             return_value=subprocess.CompletedProcess([], 0, "", ""),
+        ),
+        patch(
+            "sin_orca.web_callbacks._enqueue_callback_with_broker",
+            side_effect=OSError("broker temporarily unavailable"),
         ),
     ):
         send_callback(
@@ -1489,6 +1629,10 @@ def test_scheduled_sent_callback_expires_and_removes_relay(
             return_value=subprocess.CompletedProcess([], 0, "", ""),
         ),
         patch("sin_orca.web_callbacks.run_orca", return_value=offline_payload),
+        patch(
+            "sin_orca.web_callbacks._enqueue_callback_with_broker",
+            side_effect=OSError("broker temporarily unavailable"),
+        ),
     ):
         send_callback(
             repository=repository,
@@ -1573,6 +1717,10 @@ def test_indeterminate_callback_expires_before_recovery_attempt(
             return_value=subprocess.CompletedProcess([], 0, "", ""),
         ),
         patch("sin_orca.web_callbacks.run_orca", return_value=offline_payload),
+        patch(
+            "sin_orca.web_callbacks._enqueue_callback_with_broker",
+            side_effect=OSError("broker temporarily unavailable"),
+        ),
     ):
         send_callback(
             repository=repository,
@@ -1580,7 +1728,6 @@ def test_indeterminate_callback_expires_before_recovery_attempt(
             final_status="done",
             summary="do not retry an uncertain delivery",
             relay_fallback=True,
-            relay_max_attempts=1,
         )
         with patch("sin_orca.web_callbacks.run_orca", side_effect=indeterminate_send):
             relayed = relay_callback(
@@ -2093,6 +2240,256 @@ def test_reconcile_requires_canonical_done_evidence(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="lacks independent canonical"):
         reconcile_callback_handoff(repository=repository, token=opened["callback"])
     assert callback_status(repository=repository, token=opened["callback"])["status"] == "open"
+
+
+def test_unbound_handoff_requires_canonical_taskplan_evidence(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    payload = terminal_payload(
+        repository,
+        handle="term-origin",
+        title="OpenCode",
+        preview="Build · model",
+    )
+    with patch("sin_orca.web_callbacks.run_orca", return_value=payload):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0155",
+            origin_terminal="term-origin",
+            origin_session_id="ses_UNBOUND123",
+        )
+
+    with pytest.raises(RuntimeError, match="canonical taskplan database is missing"):
+        stage_callback_handoff(
+            repository=repository,
+            token=opened["callback"],
+            final_status="done",
+            summary="worker claims completion",
+            verification="focused tests passed",
+        )
+
+    saved = callback_status(repository=repository, token=opened["callback"])
+    assert saved["status"] == "open"
+    assert saved["completion_handoff_state"] is None
+
+
+def test_unbound_prime_handoff_reconciles_to_exact_origin_without_callback_authority(
+    tmp_path: Path,
+) -> None:
+    repository = git_repository(tmp_path / "repo")
+    session_id = "prime-unbound-1234"
+    inventory = json.dumps(
+        {"sessions": [{"activeSessionId": session_id, "lifecycle": "live"}]}
+    )
+    receipt = json.dumps(
+        {
+            "target": {"activeSessionId": session_id},
+            "deliveryStatus": "queued",
+        }
+    )
+    calls: list[list[str]] = []
+    real_run = subprocess.run
+
+    def prime_run(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if arguments[0] == "git":
+            return real_run(arguments, **kwargs)
+        calls.append(arguments)
+        if arguments[1:3] == ["list", "--json"]:
+            return subprocess.CompletedProcess(arguments, 0, inventory, "")
+        if arguments[1:3] == ["send", session_id]:
+            return subprocess.CompletedProcess(arguments, 0, receipt, "")
+        raise AssertionError(arguments)
+
+    with (
+        patch("sin_orca.web_callbacks.shutil.which", return_value="/usr/local/bin/prime-agent"),
+        patch("sin_orca.web_callbacks.subprocess.run", side_effect=prime_run),
+    ):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0155",
+            prime_agent_session_id=session_id,
+        )
+        write_taskplan_evidence(repository, "T-0155")
+        staged = stage_callback_handoff(
+            repository=repository,
+            token=opened["callback"],
+            final_status="done",
+            summary="origin must reconcile canonical evidence",
+            changed=["lib/a.py"],
+            verification="focused tests passed",
+        )
+        delivered = reconcile_callback_handoff(
+            repository=repository,
+            token=opened["callback"],
+        )
+
+    assert staged["status"] == "callback-handoff-staged"
+    assert staged["delivery_mode"] == "origin-reconcile-unbound"
+    assert staged["conversation"] is None
+    assert staged["taskplan_validation"]["task_status"] == "done"
+    assert delivered["status"] == "callback-origin-reconciled"
+    assert delivered["origin_reconciliation"] is True
+    send = next(call for call in calls if call[1:3] == ["send", session_id])
+    message = send[3]
+    assert message.startswith("SIN_GPT_WEB_ORIGIN_RECONCILE ")
+    assert "SIN_GPT_WEB_CALLBACK " not in message
+    assert "No canonical completion callback or archive/close authority" in message
+    assert "CHATGPT_CONVERSATION_URL: unresolved" in message
+    assert "Do not infer or perform archive/close" in message
+    saved_path = callback_path(repository, opened["callback"])
+    saved = json.loads(saved_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "sent"
+    assert saved["callback_status"] == "reconcile"
+    assert saved["completion_mode"] == "origin-reconcile-unbound"
+    assert saved["origin_reconciliation"]["outcome_status"] == "done"
+    assert saved["origin_reconciliation"]["state"] == "sent"
+    assert saved["completion_handoff"]["state"] == "consumed"
+
+
+def test_unbound_origin_reconcile_pending_reuses_bounded_relay(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    session_id = "prime-unbound-offline-1234"
+    live = json.dumps(
+        {"sessions": [{"activeSessionId": session_id, "lifecycle": "live"}]}
+    )
+    offline = json.dumps({"sessions": []})
+    inventories = [live, offline]
+    real_run = subprocess.run
+
+    def prime_run(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if arguments[0] == "git":
+            return real_run(arguments, **kwargs)
+        if arguments[1:3] == ["list", "--json"]:
+            return subprocess.CompletedProcess(arguments, 0, inventories.pop(0), "")
+        raise AssertionError(arguments)
+
+    with (
+        patch("sin_orca.web_callbacks.shutil.which", return_value="/usr/local/bin/prime-agent"),
+        patch("sin_orca.web_callbacks.subprocess.run", side_effect=prime_run),
+    ):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0155",
+            prime_agent_session_id=session_id,
+        )
+    write_taskplan_evidence(repository, "T-0155")
+    stage_callback_handoff(
+        repository=repository,
+        token=opened["callback"],
+        final_status="done",
+        summary="durable unbound completion",
+        verification="focused tests passed",
+    )
+    with (
+        patch("sin_orca.web_callbacks.shutil.which", return_value="/usr/local/bin/prime-agent"),
+        patch("sin_orca.web_callbacks.subprocess.run", side_effect=prime_run),
+        patch(
+            "sin_orca.web_callbacks.install_callback_relay",
+            return_value={"status": "callback-relay-installed", "reused": False},
+        ) as install_relay,
+        patch(
+            "sin_orca.web_callbacks._enqueue_callback_with_broker",
+            side_effect=OSError("broker temporarily unavailable"),
+        ),
+    ):
+        result = reconcile_callback_handoff(
+            repository=repository,
+            token=opened["callback"],
+        )
+
+    assert result["status"] == "callback-pending"
+    assert result["origin_reconciliation"] is True
+    assert result["relay_fallback"]["status"] == "callback-relay-installed"
+    install_relay.assert_called_once()
+    saved = json.loads(callback_path(repository, opened["callback"]).read_text(encoding="utf-8"))
+    assert saved["status"] == "pending-delivery"
+    assert saved["callback_status"] == "reconcile"
+    assert saved["origin_reconciliation"]["state"] == "pending"
+
+
+def test_unbound_origin_reconcile_relay_preserves_special_mode(tmp_path: Path) -> None:
+    repository = git_repository(tmp_path / "repo")
+    session_id = "prime-unbound-relay-1234"
+    live = json.dumps(
+        {"sessions": [{"activeSessionId": session_id, "lifecycle": "live"}]}
+    )
+    offline = json.dumps({"sessions": []})
+    receipt = json.dumps(
+        {
+            "target": {"activeSessionId": session_id},
+            "deliveryStatus": "delivered",
+        }
+    )
+    real_run = subprocess.run
+    initial_inventories = [live, offline]
+
+    def initial_run(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if arguments[0] == "git":
+            return real_run(arguments, **kwargs)
+        if arguments[1:3] == ["list", "--json"]:
+            return subprocess.CompletedProcess(arguments, 0, initial_inventories.pop(0), "")
+        raise AssertionError(arguments)
+
+    with (
+        patch("sin_orca.web_callbacks.shutil.which", return_value="/usr/local/bin/prime-agent"),
+        patch("sin_orca.web_callbacks.subprocess.run", side_effect=initial_run),
+    ):
+        opened = open_callback(
+            repository=repository,
+            task_id="T-0155",
+            prime_agent_session_id=session_id,
+        )
+    write_taskplan_evidence(repository, "T-0155")
+    stage_callback_handoff(
+        repository=repository,
+        token=opened["callback"],
+        final_status="done",
+        summary="relay this exact origin reconcile",
+        verification="tests passed",
+    )
+    with (
+        patch("sin_orca.web_callbacks.shutil.which", return_value="/usr/local/bin/prime-agent"),
+        patch("sin_orca.web_callbacks.subprocess.run", side_effect=initial_run),
+        patch(
+            "sin_orca.web_callbacks.install_callback_relay",
+            return_value={"status": "callback-relay-installed", "reused": False},
+        ),
+    ):
+        pending = reconcile_callback_handoff(
+            repository=repository,
+            token=opened["callback"],
+        )
+    assert pending["status"] == "callback-pending"
+
+    calls: list[list[str]] = []
+
+    def relay_run(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if arguments[0] == "git":
+            return real_run(arguments, **kwargs)
+        calls.append(arguments)
+        if arguments[1:3] == ["list", "--json"]:
+            return subprocess.CompletedProcess(arguments, 0, live, "")
+        if arguments[1:3] == ["send", session_id]:
+            return subprocess.CompletedProcess(arguments, 0, receipt, "")
+        raise AssertionError(arguments)
+
+    with (
+        patch("sin_orca.web_callbacks.shutil.which", return_value="/usr/local/bin/prime-agent"),
+        patch("sin_orca.web_callbacks.subprocess.run", side_effect=relay_run),
+    ):
+        delivered = relay_callback(
+            repository=repository,
+            token=opened["callback"],
+        )
+
+    assert delivered["status"] == "callback-origin-reconciled"
+    assert delivered["origin_reconciliation"] is True
+    send = next(call for call in calls if call[1:3] == ["send", session_id])
+    assert send[3].startswith("SIN_GPT_WEB_ORIGIN_RECONCILE ")
+    assert "SIN_GPT_WEB_CALLBACK " not in send[3]
+    saved = json.loads(callback_path(repository, opened["callback"]).read_text(encoding="utf-8"))
+    assert saved["status"] == "sent"
+    assert saved["callback_status"] == "reconcile"
+    assert saved["origin_reconciliation"]["state"] == "sent"
 
 
 def test_reconcile_valid_handoff_delivers_exact_staged_outcome(tmp_path: Path) -> None:

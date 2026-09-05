@@ -26,15 +26,19 @@ class ContextPolicyContractTests(unittest.TestCase):
     def test_required_routing_order(self) -> None:
         self.assertEqual(
             self.routes["code_symbol"]["providers"],
-            ["simone", "graphify"],
+            ["gitnexus", "simone"],
         )
         self.assertEqual(
             self.routes["code_architecture"]["providers"],
-            ["graphify", "sin-code"],
+            ["gitnexus", "sin-code"],
+        )
+        self.assertEqual(
+            self.routes["mixed_corpus_graph"]["providers"],
+            ["graphify"],
         )
         self.assertEqual(
             self.routes["domain_memory"]["providers"],
-            ["cognee"],
+            ["openviking"],
         )
         self.assertEqual(
             self.routes["session_resume"]["providers"],

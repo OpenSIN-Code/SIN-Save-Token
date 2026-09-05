@@ -58,12 +58,12 @@ def audit_sst(audit: Audit, root: Path) -> None:
     symbol = route_by_name.get("code_symbol", {})
     architecture = route_by_name.get("code_architecture", {})
     audit.require(
-        symbol.get("providers") == ["simone", "graphify"],
-        "symbol routing is Simone -> Graphify",
+        symbol.get("providers") == ["gitnexus", "simone"],
+        "symbol routing is GitNexus -> Simone",
     )
     audit.require(
-        architecture.get("providers") == ["graphify", "sin-code"],
-        "architecture routing is Graphify -> sin-code",
+        architecture.get("providers") == ["gitnexus", "sin-code"],
+        "architecture routing is GitNexus -> sin-code",
     )
     audit.require(
         int(retrieval.get("maximum_provider_attempts", 99)) <= 2,
@@ -122,8 +122,8 @@ def audit_sst(audit: Audit, root: Path) -> None:
 
     sync = audit.text_file(root / "bin" / "brain-sync.py")
     audit.require(
-        '"direction": "gbrain -> cognee"' in sync,
-        "brain sync direction is gbrain -> Cognee",
+        '"direction": "gbrain -> openviking"' in sync,
+        "brain sync direction is gbrain -> OpenViking",
     )
     audit.require(
         '"automatic_reverse_sync": False' in sync,
@@ -266,8 +266,8 @@ def audit_global_brain(audit: Audit, root: Path) -> None:
         "global-brain automatic extraction is disabled",
     )
     audit.require(
-        pcpm.get("canonicalMemoryProvider") == "cognee",
-        "global-brain declares Cognee canonical",
+        pcpm.get("canonicalMemoryProvider") == "openviking",
+        "global-brain declares OpenViking canonical",
     )
     audit.require(
         pcpm.get("role") == "archive-and-plan-store",

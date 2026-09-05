@@ -189,6 +189,39 @@ class TestE2EDispatch(unittest.TestCase):
         self.assertIn("continue automatically", prompt)
         self.assertIn("type <ack|checkpoint|discovery|question", prompt)
 
+        commands = [
+            json.loads(line)
+            for line in (self.fake_state / "commands.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip()
+        ]
+        wait_index = next(
+            index
+            for index, command in enumerate(commands)
+            if command[:2] == ["terminal", "wait"]
+        )
+        send_index = next(
+            index
+            for index, command in enumerate(commands)
+            if command[:2] == ["terminal", "send"]
+        )
+        self.assertLess(wait_index, send_index)
+        self.assertIn("tui-idle", commands[wait_index])
+        sends = [
+            json.loads(line)
+            for line in (self.fake_state / "terminal-send.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip()
+        ]
+        bootstrap = sends[0][sends[0].index("--text") + 1]
+        self.assertTrue(bootstrap.startswith("STRICT SIN WORKER TASK\n"))
+        self.assertIn(str(task_files[0].parent / "worker-prompt.md"), bootstrap)
+        self.assertIn(task["task_hash"], bootstrap)
+        self.assertNotIn("## Ordered steps", bootstrap)
+        self.assertLess(len(bootstrap), 1024)
+
         events_file = task_files[0].parent / "events.jsonl"
         events = [
             json.loads(line)

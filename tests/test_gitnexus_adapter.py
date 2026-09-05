@@ -87,7 +87,7 @@ class GitNexusAdapterTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "multiple GitNexus"):
                     ADAPTER.match_registry_entry(root, entries)
 
-    def test_dirty_or_stale_index_is_rejected(self) -> None:
+    def test_stale_index_is_rejected_but_dirty_tree_is_overlayed(self) -> None:
         entry = {"name": "repo", "lastCommit": "a" * 40}
         root = Path("/tmp/repo")
         with patch.object(
@@ -101,10 +101,50 @@ class GitNexusAdapterTests(unittest.TestCase):
         with patch.object(
             ADAPTER,
             "run_git",
-            side_effect=["a" * 40, " M src/main.py"],
+            side_effect=["a" * 40],
         ):
-            with self.assertRaisesRegex(RuntimeError, "unindexed changes"):
-                ADAPTER.validate_fresh_index(root, entry)
+            ADAPTER.validate_fresh_index(root, entry)
+
+        with patch.object(
+            ADAPTER,
+            "run_git",
+            return_value=" M src/main.py\n?? src/new.py",
+        ):
+            self.assertEqual(
+                ADAPTER.working_tree_status(root),
+                [" M src/main.py", "?? src/new.py"],
+            )
+
+    def test_detect_changes_is_serialized_and_hides_controller_secret(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["gitnexus"],
+            0,
+            stdout="change overlay\n",
+            stderr="",
+        )
+        with (
+            patch.dict(os.environ, {"SIN_MANIFEST_HMAC_KEY": "controller-only"}),
+            patch.object(ADAPTER.subprocess, "run", return_value=completed) as runner,
+        ):
+            output = ADAPTER.detect_changes_gitnexus(
+                "/usr/local/bin/gitnexus",
+                "repo",
+                Path("/tmp/repo"),
+            )
+
+        self.assertEqual(output, "change overlay")
+        self.assertEqual(
+            runner.call_args.args[0],
+            [
+                "/usr/local/bin/gitnexus",
+                "detect-changes",
+                "--scope",
+                "all",
+                "--repo",
+                "repo",
+            ],
+        )
+        self.assertNotIn("SIN_MANIFEST_HMAC_KEY", runner.call_args.kwargs["env"])
 
     def test_query_is_serialized_and_hides_controller_secret(self) -> None:
         completed = subprocess.CompletedProcess(

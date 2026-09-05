@@ -140,6 +140,16 @@
       "maximum_output_chars": 16000,
       "failure_threshold": 2,
       "cooldown_seconds": 300
+    },
+    "openviking": {
+      "argv": [
+        "openviking-recall",
+        "{query}"
+      ],
+      "timeout_seconds": 120,
+      "maximum_output_chars": 16000,
+      "failure_threshold": 2,
+      "cooldown_seconds": 120
     }
   }
 }

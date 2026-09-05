@@ -69,6 +69,6 @@
     "maximum_diff_chars": 60000,
     "require_all_criteria_proven": true,
     "require_diff_hash_match": true,
-    "preferred_agents": ["opencode", "mimo-code"]
+    "preferred_agents": ["chatgpt-web"]
   }
 }

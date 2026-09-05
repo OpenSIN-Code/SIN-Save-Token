@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Memory-Write Flow",
+    "subtitle": "Verifizieren → committen → Task completion beweisen → Receipt ausstellen",
+    "output": "memory-write.workflow.html"
+  },
+  "lanes": [
+    {
+      "id": "agent",
+      "label": "Agent / Tool"
+    },
+    {
+      "id": "control",
+      "label": "SIN Control Plane"
+    },
+    {
+      "id": "openviking",
+      "label": "OpenViking"
+    },
+    {
+      "id": "storage",
+      "label": "Persistenz"
+    },
+    {
+      "id": "exceptions",
+      "label": "Fail-closed / Reject",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "intake",
+      "label": "01 / Intake + Prüfung",
+      "fromCol": 0,
+      "toCol": 2,
+      "variant": "security"
+    },
+    {
+      "id": "commit",
+      "label": "02 / Canonical Commit",
+      "fromCol": 3,
+      "toCol": 5,
+      "variant": "emphasis"
+    }
+  ],
+  "groups": [
+    {
+      "id": "validation_group",
+      "label": "Evidence + Secret Gate",
+      "lane": "control",
+      "fromCol": 0,
+      "toCol": 3,
+      "variant": "security"
+    },
+    {
+      "id": "commit_group",
+      "label": "OpenViking Commit",
+      "lane": "openviking",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "emphasis"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "request",
+      "lane": "agent",
+      "col": 0,
+      "type": "external",
+      "label": "Memory Write",
+      "sublabel": "verifiziertes Wissen"
+    },
+    {
+      "id": "writer",
+      "lane": "control",
+      "col": 0,
+      "type": "frontend",
+      "label": "Memory Writer",
+      "sublabel": "sin-memory-write · kanonischer CLI-Eingang"
+    },
+    {
+      "id": "validate",
+      "lane": "control",
+      "col": 2,
+      "type": "security",
+      "label": "Validierung",
+      "sublabel": "Evidence · Secret · Spekulation",
+      "tag": "fail-closed"
+    },
+    {
+      "id": "gateway",
+      "lane": "control",
+      "col": 3,
+      "type": "security",
+      "label": "Memory Gateway",
+      "sublabel": "Provenienz + Idempotenz"
+    },
+    {
+      "id": "session",
+      "lane": "openviking",
+      "col": 4,
+      "type": "backend",
+      "label": "OV Session",
+      "sublabel": "message + commit"
+    },
+    {
+      "id": "task",
+      "lane": "openviking",
+      "col": 5,
+      "type": "messagebus",
+      "label": "Commit Task",
+      "sublabel": "wait for completed",
+      "tag": "blocking proof"
+    },
+    {
+      "id": "memory",
+      "lane": "storage",
+      "col": 5,
+      "type": "database",
+      "label": "Durable Memory",
+      "sublabel": "entity · event · preference"
+    },
+    {
+      "id": "reject",
+      "lane": "exceptions",
+      "col": 3,
+      "type": "security",
+      "label": "Reject",
+      "sublabel": "kein Write / kein Receipt"
+    }
+  ],
+  "edges": [
+    {
+      "from": "request",
+      "to": "writer",
+      "variant": "default",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop"
+    },
+    {
+      "from": "writer",
+      "to": "validate",
+      "variant": "security"
+    },
+    {
+      "from": "validate",
+      "to": "gateway",
+      "variant": "security"
+    },
+    {
+      "from": "gateway",
+      "to": "session",
+      "label": "validated",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop"
+    },
+    {
+      "from": "session",
+      "to": "task",
+      "variant": "emphasis"
+    },
+    {
+      "from": "task",
+      "to": "memory",
+      "label": "completed",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop",
+      "labelAt": [
+        625,
+        415
+      ]
+    },
+    {
+      "from": "validate",
+      "to": "reject",
+      "label": "invalid / secret / speculative",
+      "variant": "security",
+      "role": "error",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop",
+      "labelDx": 68
+    },
+    {
+      "from": "gateway",
+      "to": "reject",
+      "variant": "security",
+      "role": "error",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop",
+      "labelDx": -58
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Fail-closed Regeln",
+      "items": [
+        "Ungültige Provenienz, Secrets und Spekulation werden vor dem Backend abgewiesen",
+        "Backend-Fehler erzeugt niemals einen Erfolgs-Receipt",
+        "Kein automatischer Cognee- oder Legacy-Fallback"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Commit-Nachweis",
+      "items": [
+        "Receipt bindet record_id, record_hash und backend_ref",
+        "Commit zählt erst bei Task-Status completed",
+        "Lokales SQLite speichert nur Audit-/Receipt-Metadaten"
+      ]
+    }
+  ]
+}

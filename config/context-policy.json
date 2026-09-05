@@ -24,7 +24,7 @@
     {
       "name": "code_review",
       "patterns": [
-        "\\b(review|reviewing|diff|blast radius|test gaps?|risk signals?|crg|codepr\u00fcfung|\u00e4nderungen pr\u00fcfen)\\b"
+        "\\b(review|reviewing|diff|blast radius|test gaps?|risk signals?|crg|codeprüfung|änderungen prüfen)\\b"
       ],
       "providers": [
         "crg"
@@ -47,8 +47,8 @@
         "\\b(symbol|function|class|method|definition|reference|references|caller|callers|calls|implementiert|definiert|aufrufer|referenzen)\\b"
       ],
       "providers": [
-        "simone",
-        "graphify"
+        "gitnexus",
+        "simone"
       ],
       "budget": "code_navigation_tokens"
     },
@@ -58,25 +58,35 @@
         "\\b(architecture|architektur|dependency|dependencies|blast radius|data flow|datenfluss|module|modules|component|komponente)\\b"
       ],
       "providers": [
-        "graphify",
+        "gitnexus",
         "sin-code"
+      ],
+      "budget": "architecture_tokens"
+    },
+    {
+      "name": "mixed_corpus_graph",
+      "patterns": [
+        "\\\\b(graphify|mixed corpus|cross[- ]repo docs?|documentation graph|dokumentationsgraph)\\\\b"
+      ],
+      "providers": [
+        "graphify"
       ],
       "budget": "architecture_tokens"
     },
     {
       "name": "domain_memory",
       "patterns": [
-        "\\b(decision|decided|rationale|policy|convention|why did we|entscheidung|entschieden|begr\u00fcndung|richtlinie|warum haben wir)\\b"
+        "\\b(decision|decided|rationale|policy|convention|why did we|entscheidung|entschieden|begründung|richtlinie|warum haben wir)\\b"
       ],
       "providers": [
-        "cognee"
+        "openviking"
       ],
       "budget": "memory_tokens"
     },
     {
       "name": "session_resume",
       "patterns": [
-        "\\b(resume|continue|where did we stop|last session|fortsetzen|weitermachen|wo aufgeh\u00f6rt|letzte session)\\b"
+        "\\b(resume|continue|where did we stop|last session|fortsetzen|weitermachen|wo aufgehört|letzte session)\\b"
       ],
       "providers": [
         "session-digest"

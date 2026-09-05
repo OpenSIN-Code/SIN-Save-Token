@@ -3,7 +3,7 @@
 
 The adapter never installs GitNexus and never analyzes a repository implicitly.
 It resolves the indexed repository deterministically from the global registry,
-rejects stale/dirty indexes, and executes exactly one serialized query.
+rejects stale commit indexes, overlays uncommitted changes with GitNexus detect-changes, and executes serialized graph queries.
 """
 
 from __future__ import annotations
@@ -121,10 +121,12 @@ def validate_fresh_index(root: Path, entry: dict[str, Any]) -> None:
     head = run_git(root, "rev-parse", "HEAD")
     if head != last_commit:
         raise RuntimeError(
-            "GitNexus index is stale; run `gitnexus analyze` explicitly "
+            "GitNexus index is stale; run `gitnexus analyze --index-only` explicitly "
             f"in {root} before querying"
         )
 
+
+def working_tree_status(root: Path) -> list[str]:
     status = run_git(
         root,
         "status",
@@ -132,15 +134,10 @@ def validate_fresh_index(root: Path, entry: dict[str, Any]) -> None:
         "--untracked-files=normal",
     )
     ignored_prefixes = ("?? .gitnexus/", " M .gitnexus/", "M  .gitnexus/")
-    meaningful = [
+    return [
         line for line in status.splitlines()
         if line and not line.startswith(ignored_prefixes)
     ]
-    if meaningful:
-        raise RuntimeError(
-            "working tree has unindexed changes; GitNexus fallback is disabled "
-            "to avoid returning stale graph evidence"
-        )
 
 
 def query_gitnexus(
@@ -172,6 +169,41 @@ def query_gitnexus(
     return output
 
 
+def detect_changes_gitnexus(
+    executable: str,
+    repository_name: str,
+    root: Path,
+) -> str:
+    process = subprocess.run(
+        [
+            executable,
+            "detect-changes",
+            "--scope",
+            "all",
+            "--repo",
+            repository_name,
+        ],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=120,
+        env=safe_environment(),
+    )
+    if process.returncode != 0:
+        raise RuntimeError(
+            process.stderr.strip()
+            or process.stdout.strip()
+            or "GitNexus detect-changes failed"
+        )
+    output = process.stdout.strip()
+    if not output:
+        raise RuntimeError("GitNexus detect-changes returned empty output")
+    if len(output) > MAX_OUTPUT_CHARS:
+        output = output[:MAX_OUTPUT_CHARS] + "\n[… GitNexus change overlay truncated]"
+    return output
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("query", nargs="+")
@@ -190,12 +222,20 @@ def main() -> int:
         root = repository_root(args.cwd.expanduser().resolve())
         entry = match_registry_entry(root, load_registry())
         validate_fresh_index(root, entry)
+        repository_name = str(entry["name"])
         output = query_gitnexus(
             executable,
             " ".join(args.query).strip(),
-            str(entry["name"]),
+            repository_name,
             root,
         )
+        dirty = working_tree_status(root)
+        if dirty:
+            overlay = detect_changes_gitnexus(executable, repository_name, root)
+            output += (
+                "\n\n[GitNexus uncommitted-change overlay]\n"
+                + overlay
+            )
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
         print(str(error), file=sys.stderr)
         return 2

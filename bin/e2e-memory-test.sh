@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Non-polluting E2E gate for the token-minimal context and memory architecture.
-# It never writes test facts to Cognee and never requires memory MCPs globally.
+# It never writes test facts to OpenViking and never requires memory MCPs globally.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -22,12 +22,11 @@ echo "[1/7] Runtime services"
 curl -sS -m 2 http://127.0.0.1:20128/ >/dev/null 2>&1 \
   && ok "OmniRoute reachable on :20128" \
   || fail "OmniRoute not reachable on :20128"
-curl -sS -m 2 http://127.0.0.1:8012/health 2>/dev/null | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"' \
-  && ok "Embedding proxy reachable on :8012" \
-  || fail "Embedding proxy not healthy on :8012"
-curl -sS -m 2 http://127.0.0.1:8011/health 2>/dev/null | grep -Eq '"health"[[:space:]]*:[[:space:]]*"healthy"' \
-  && ok "Cognee healthy on :8011" \
-  || fail "Cognee not healthy on :8011"
+if command -v ov >/dev/null 2>&1; then
+  ov health >/dev/null 2>&1 && ok "OpenViking reachable" || fail "OpenViking configured but unreachable"
+else
+  fail "OpenViking ov CLI not on PATH"
+fi
 
 # 2. Broker policy and runtime configuration.
 echo
@@ -43,7 +42,7 @@ routed = {provider for route in routes for provider in route["providers"]}
 configured = set(runtime["providers"])
 assert int(policy["retrieval"]["maximum_provider_attempts"]) <= 2
 symbol = next(route for route in routes if route["name"] == "code_symbol")
-assert symbol["providers"][:2] == ["simone", "graphify"]
+assert symbol["providers"][:2] == ["gitnexus", "simone"]
 assert routed <= configured, sorted(routed - configured)
 assert int(policy["budgets"]["maximum_tokens"]) <= 1600
 PY
@@ -53,7 +52,7 @@ PY
 echo
 echo "[3/7] Memory boundary"
 SYNC_STATUS="$(HOME="$TMP_HOME" python3 "$ROOT/bin/brain-sync.py" status 2>/dev/null)"
-echo "$SYNC_STATUS" | grep -q '"direction": "gbrain -> cognee"' \
+echo "$SYNC_STATUS" | grep -q '"direction": "gbrain -> openviking"' \
   && ok "gbrain export direction is one-way" \
   || fail "gbrain export direction is wrong"
 echo "$SYNC_STATUS" | grep -q '"automatic_reverse_sync": false' \
@@ -75,11 +74,10 @@ root = Path(sys.argv[1])
 registry = json.loads((root / "shared/mcp/servers.json").read_text())
 profiles = json.loads((root / "shared/mcp/task-profiles.json").read_text())
 assert registry["_budget"]["default_profile"] == "minimal"
-assert registry["servers"]["cognee"]["url"] == "http://127.0.0.1:8011/mcp"
 assert profiles["profiles"]["minimal"]["maximum_servers"] == 0
 assert max(p["maximum_servers"] for p in profiles["profiles"].values()) <= 2
 PY
-[ "$?" -eq 0 ] && ok "minimal profile, Cognee port and task caps are consistent" || fail "wow MCP registry drift"
+[ "$?" -eq 0 ] && ok "minimal profile and task caps are consistent" || fail "wow MCP registry drift"
 
 # 5. global-brain must remain an on-demand archive, not an automatic injector.
 echo
@@ -93,7 +91,7 @@ pcpm = config["pcpm"]
 assert pcpm["autoInjectContext"] is False
 assert pcpm["autoSync"] is False
 assert pcpm["extractKnowledge"] is False
-assert pcpm["canonicalMemoryProvider"] == "cognee"
+assert pcpm["canonicalMemoryProvider"] == "openviking"
 before = (root / ".opencode/hooks/pcpm-before-run.sh").read_text()
 after = (root / ".opencode/hooks/pcpm-after-run.sh").read_text()
 assert "PCPM_AUTO_INJECT" in before
@@ -101,7 +99,7 @@ assert "PCPM_AUTO_EXTRACT" in after
 assert "PCPM_AUTO_SYNC" in after
 assert "sync-chat-turn" not in after
 PY
-[ "$?" -eq 0 ] && ok "global-brain hooks are opt-in and Cognee remains canonical" || fail "global-brain automatic injection/write loop detected"
+[ "$?" -eq 0 ] && ok "global-brain hooks are opt-in and OpenViking remains canonical" || fail "global-brain automatic injection/write loop detected"
 
 # 6. Read-only retrieval smoke checks. No remember/write call is made.
 echo
@@ -111,12 +109,12 @@ if command -v gbrain >/dev/null 2>&1; then
 else
   fail "gbrain not on PATH"
 fi
-if command -v cognee-recall >/dev/null 2>&1; then
-  cognee-recall "canonical durable memory" >/dev/null 2>&1 \
-    && ok "Cognee recall" \
-    || fail "Cognee recall failed"
+if command -v openviking-recall >/dev/null 2>&1; then
+  openviking-recall "canonical durable memory" >/dev/null 2>&1 \
+    && ok "OpenViking recall" \
+    || fail "OpenViking recall failed"
 else
-  fail "cognee-recall not on PATH"
+  fail "openviking-recall not on PATH"
 fi
 TENCENT_STATUS="$("$ROOT/bin/sin-tencent-memory" status 2>/dev/null)"
 echo "$TENCENT_STATUS" | grep -q '"enabled": false' \

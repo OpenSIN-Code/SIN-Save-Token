@@ -129,23 +129,23 @@ class ContextBrokerTests(unittest.TestCase):
             self.policy,
         )
         self.assertEqual(route["name"], "code_symbol")
-        self.assertEqual(route["providers"], ["simone", "graphify"])
+        self.assertEqual(route["providers"], ["gitnexus", "simone"])
 
-    def test_routes_architecture_to_graphify_then_gitnexus(self):
+    def test_routes_architecture_to_gitnexus_then_sin_code(self):
         route = MODULE.select_route(
             "Explain the architecture and module data flow",
             self.policy,
         )
         self.assertEqual(route["name"], "code_architecture")
-        self.assertEqual(route["providers"], ["graphify", "sin-code"])
+        self.assertEqual(route["providers"], ["gitnexus", "sin-code"])
 
-    def test_routes_decision_to_cognee(self):
+    def test_routes_decision_to_openviking(self):
         route = MODULE.select_route(
-            "Warum haben wir Cognee statt einer zweiten SQLite-Datei gewählt?",
+            "Warum haben wir OpenViking statt einer zweiten SQLite-Datei gewählt?",
             self.policy,
         )
         self.assertEqual(route["name"], "domain_memory")
-        self.assertEqual(route["providers"], ["cognee"])
+        self.assertEqual(route["providers"], ["openviking"])
 
     def test_fallback_is_agent_grep(self):
         route = MODULE.select_route(

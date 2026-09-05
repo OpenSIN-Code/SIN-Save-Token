@@ -2,11 +2,11 @@
   "version": 1,
   "providers": {
     "symbol_navigation": {
-      "primary": "simone",
-      "fallback": "graphify"
+      "primary": "gitnexus",
+      "fallback": "simone"
     },
     "general_code_graph": {
-      "primary": "graphify",
+      "primary": "gitnexus",
       "fallback": "sin-code",
       "allow_simultaneous_execution": false
     },
@@ -25,13 +25,22 @@
       ]
     },
     "project_memory": {
-      "primary": "cognee"
+      "primary": "openviking"
     },
     "local_code_memory": {
       "primary": "simone-hybrid-memory"
     },
     "session_resume": {
       "primary": "session-digest"
+    },
+    "mixed_corpus_graph": {
+      "primary": "graphify",
+      "automatic": false,
+      "scope": "explicit mixed code+docs or cross-repository corpus queries only"
+    },
+    "legacy_memory_projection": {
+      "primary": "cognee",
+      "automatic": false
     }
   },
   "rules": {
@@ -39,6 +48,10 @@
     "never_treat_graph_risk_as_ground_truth": true,
     "never_accept_code_without_controller_verification": true,
     "never_expose_raw_worker_transcripts_to_codex": true,
-    "never_install_external_mcp_integrations_automatically": true
+    "never_install_external_mcp_integrations_automatically": true,
+    "gitnexus_is_canonical_code_intelligence": true,
+    "graphify_is_never_automatic_code_graph_fallback": true,
+    "openviking_is_canonical_domain_memory": true,
+    "legacy_memory_projections_are_never_automatic": true
   }
 }

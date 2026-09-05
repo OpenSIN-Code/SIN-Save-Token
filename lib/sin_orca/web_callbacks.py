@@ -41,9 +41,7 @@ DSH_SESSION_PATTERN = re.compile(r"^session-[0-9a-fA-F-]{36}$")
 TASK_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 FINAL_STATUSES = {"done", "blocked", "failed"}
 DEFAULT_TTL_MINUTES = 24 * 60
-DEFAULT_MAX_ROUNDS = 50
 DEFAULT_RELAY_INTERVAL_SECONDS = 60
-DEFAULT_RELAY_MAX_ATTEMPTS = 3
 DEFAULT_TUI_IDLE_TIMEOUT_SECONDS = 30
 EXPIRABLE_CALLBACK_STATUSES = {
     "open",
@@ -798,16 +796,19 @@ def open_callback(
     dsh_session_id: str | None = None,
     ttl_minutes: int = DEFAULT_TTL_MINUTES,
     round_number: int = 1,
-    max_rounds: int = DEFAULT_MAX_ROUNDS,
 ) -> dict[str, Any]:
     root = resolve_repository(repository)
     task = _validate_task_id(task_id)
+    try:
+        from .callback_broker import CallbackBrokerStore
+
+        CallbackBrokerStore().register_repository(root)
+    except Exception as error:
+        raise RuntimeError("durable callback broker repository registration failed") from error
     if not 5 <= ttl_minutes <= 7 * 24 * 60:
         raise ValueError("callback TTL must be between 5 and 10080 minutes")
-    if max_rounds < 0 or max_rounds > 500:
-        raise ValueError("max rounds must be 0 (unbounded) or between 1 and 500")
-    if round_number < 1 or (max_rounds and round_number > max_rounds):
-        raise ValueError("round must be positive and within max rounds")
+    if round_number < 1:
+        raise ValueError("round must be positive")
 
     selected_origins = sum(
         bool(value)
@@ -859,7 +860,6 @@ def open_callback(
         "origin_agent": origin_agent,
         "origin_transport": origin_transport,
         "round": round_number,
-        "max_rounds": max_rounds,
         "conversation": None,
     }
     path = callback_path(root, token)
@@ -877,7 +877,6 @@ def open_callback(
         "origin_transport": origin_transport,
         "expires_at": record["expires_at"],
         "round": round_number,
-        "max_rounds": max_rounds,
         "record": str(path),
         "callback_command_template": _command_template(
             root,
@@ -971,7 +970,6 @@ def callback_status(*, repository: str | Path, token: str) -> dict[str, Any]:
         "origin_agent": record.get("origin_agent", "opencode"),
         "origin_transport": record.get("origin_transport"),
         "round": record.get("round"),
-        "max_rounds": record.get("max_rounds"),
         "conversation": record.get("conversation"),
         "created_at": record.get("created_at"),
         "expires_at": record.get("expires_at"),
@@ -1070,8 +1068,7 @@ def stage_callback_handoff(
         if record.get("status") != "open":
             raise RuntimeError("only an open callback can stage completion")
         conversation = record.get("conversation")
-        if not isinstance(conversation, dict) or not conversation.get("url"):
-            raise RuntimeError("callback must be bound to a canonical conversation before staging")
+        conversation_bound = isinstance(conversation, dict) and bool(conversation.get("url"))
         if final_status == "done" and rendered_verification.casefold() in {
             "unknown",
             "none",
@@ -1079,17 +1076,33 @@ def stage_callback_handoff(
             "not run",
         }:
             raise ValueError("done handoff requires concrete verification")
+        taskplan_validation = None
+        delivery_mode = "callback-bound"
+        if not conversation_bound:
+            # A missing browser binding must never be papered over by inventing a
+            # conversation.  The only safe fallback is a distinct origin wake-up
+            # backed by the canonical taskplan/report.  It does not become a
+            # normal completion callback and therefore carries no archive authority.
+            taskplan_validation = _validate_taskplan_evidence(
+                root,
+                task_id=str(record.get("task_id") or ""),
+                final_status=final_status,
+            )
+            delivery_mode = "origin-reconcile-unbound"
         action = _compact(next_action or _default_next_action(record), 1800)
+        outcome = {
+            "status": final_status,
+            "summary": rendered_summary,
+            "changed_files": rendered_changed,
+            "verification": rendered_verification,
+            "next_action": action,
+        }
+        if delivery_mode != "callback-bound":
+            outcome["delivery_mode"] = delivery_mode
         payload = {
             "version": 1,
             "identity": _handoff_identity(record),
-            "outcome": {
-                "status": final_status,
-                "summary": rendered_summary,
-                "changed_files": rendered_changed,
-                "verification": rendered_verification,
-                "next_action": action,
-            },
+            "outcome": outcome,
             "staged_at": isoformat(utc_now()),
         }
         record["completion_handoff"] = {
@@ -1104,6 +1117,8 @@ def stage_callback_handoff(
         "task_id": record.get("task_id"),
         "round": record.get("round"),
         "conversation": record.get("conversation"),
+        "delivery_mode": delivery_mode,
+        "taskplan_validation": taskplan_validation,
     }
 
 
@@ -1200,17 +1215,27 @@ def reconcile_callback_handoff(
             task_id=str(record.get("task_id") or ""),
             final_status=str(outcome["status"]),
         )
-    result = send_callback(
-        repository=root,
-        token=token,
-        final_status=str(outcome["status"]),
-        summary=str(outcome["summary"]),
-        changed=list(outcome.get("changed_files") or []),
-        verification=str(outcome.get("verification") or "unknown"),
-        next_action=str(outcome.get("next_action") or ""),
-        dry_run=dry_run,
-        relay_fallback=not dry_run,
-    )
+    if outcome.get("delivery_mode") == "origin-reconcile-unbound":
+        result = _deliver_unbound_origin_reconciliation(
+            repository=root,
+            token=token,
+            outcome=outcome,
+            taskplan_validation=taskplan,
+            dry_run=dry_run,
+            relay_fallback=not dry_run,
+        )
+    else:
+        result = send_callback(
+            repository=root,
+            token=token,
+            final_status=str(outcome["status"]),
+            summary=str(outcome["summary"]),
+            changed=list(outcome.get("changed_files") or []),
+            verification=str(outcome.get("verification") or "unknown"),
+            next_action=str(outcome.get("next_action") or ""),
+            dry_run=dry_run,
+            relay_fallback=not dry_run,
+        )
     result["handoff_reconciled"] = True
     result["taskplan_validation"] = taskplan
     return result
@@ -1218,8 +1243,6 @@ def reconcile_callback_handoff(
 
 def _default_next_action(record: dict[str, Any]) -> str:
     round_number = int(record.get("round") or 1)
-    raw_max_rounds = record.get("max_rounds")
-    max_rounds = DEFAULT_MAX_ROUNDS if raw_max_rounds is None else int(raw_max_rounds)
     conversation = record.get("conversation")
     binding = ""
     if isinstance(conversation, dict):
@@ -1230,13 +1253,6 @@ def _default_next_action(record: dict[str, Any]) -> str:
                 " Continue the same ChatGPT Web conversation using its saved "
                 f"page/URL binding ({page_id or 'no-page-id'}, {url or 'no-url'})."
             )
-    if max_rounds > 0 and round_number >= max_rounds:
-        return (
-            "Refresh .sin-gpt-web/taskplan.sqlite3 and TASKPLAN.md through "
-            "sin-gpt-web-state, independently verify the evidence, and either "
-            "complete the goal or record a genuine blocker. The configured loop "
-            "round budget is exhausted; do not auto-delegate another round."
-        )
     return (
         "Refresh .sin-gpt-web/taskplan.sqlite3 and TASKPLAN.md through "
         "sin-gpt-web-state, independently verify the evidence, then continue the "
@@ -1353,6 +1369,7 @@ def _expire_callback_if_needed(
     record.update({"status": "expired", "expired_at": isoformat(now)})
     _remove_relay_fallback(repository, record, reason="callback-expired")
     atomic_write_json(callback_path(repository, token), record)
+    _mirror_broker_state(record)
     return True
 
 
@@ -1387,14 +1404,11 @@ def install_callback_relay(
     repository: str | Path,
     token: str,
     interval_seconds: int = DEFAULT_RELAY_INTERVAL_SECONDS,
-    max_attempts: int = DEFAULT_RELAY_MAX_ATTEMPTS,
 ) -> dict[str, Any]:
-    """Install an optional bounded relay without exposing callback data to launchd."""
+    """Install an optional persistent relay without exposing callback data to launchd."""
     root = resolve_repository(repository)
     if not 30 <= interval_seconds <= 3600:
         raise ValueError("relay interval must be between 30 and 3600 seconds")
-    if not 1 <= max_attempts <= 20:
-        raise ValueError("relay max attempts must be between 1 and 20")
     with callback_lock(root, token):
         record = load_callback(root, token)
         if record.get("status") != "pending-delivery":
@@ -1439,7 +1453,6 @@ def install_callback_relay(
             "label": label,
             "relay_id": record["relay_id"],
             "interval_seconds": interval_seconds,
-            "max_attempts": max_attempts,
             "attempts": 0,
             "installed_at": isoformat(utc_now()),
         }
@@ -1539,6 +1552,70 @@ def wait_for_delivery_terminal_idle(
     )
 
 
+def _render_unbound_origin_reconciliation_message(
+    record: dict[str, Any],
+    *,
+    summary: str,
+    changed: list[str],
+    verification: str,
+    next_action: str,
+) -> str:
+    """Render a wake-up that cannot be mistaken for a canonical callback."""
+    transport = record.get("origin_transport")
+    if isinstance(transport, dict) and transport.get("transport") == "deepseek-harness":
+        transport_name = "deepseek-harness"
+        target = str(transport.get("session_id") or "unresolved")
+    elif isinstance(transport, dict) and transport.get("transport") == "prime-agent":
+        transport_name = "prime-agent"
+        target = str(transport.get("active_session_id") or "unresolved")
+    else:
+        transport_name = "opencode-exact-session"
+        session = record.get("origin_session")
+        target = (
+            str(session.get("id") or "unresolved")
+            if isinstance(session, dict)
+            else str(record.get("origin_terminal") or "unresolved")
+        )
+    reconciliation = record.get("origin_reconciliation")
+    outcome_status = (
+        str(reconciliation.get("outcome_status") or "unknown")
+        if isinstance(reconciliation, dict)
+        else "unknown"
+    )
+    receipt_command = shlex.join(
+        [
+            "sin-orca",
+            "web-callback-ack",
+            "--repo",
+            str(record["repository_root"]),
+            "--delivery-id",
+            str(record["delivery_id"]),
+        ]
+    )
+    return "\n".join(
+        [
+            "SIN_GPT_WEB_ORIGIN_RECONCILE "
+            f"task={record['task_id']} outcome={outcome_status} "
+            f"delivery={record['delivery_id']} transport={transport_name} "
+            f"target={target} round={record.get('round', 1)}",
+            "REASON: The callback was never bound to a canonical ChatGPT conversation. "
+            "No canonical completion callback or archive/close authority is being asserted.",
+            f"WORKER_SUMMARY: {summary}",
+            f"CHANGED: {json.dumps(changed or ['none'], ensure_ascii=False)}",
+            f"VERIFY: {verification or 'unknown'}",
+            "CHATGPT_PAGE_ID: unresolved",
+            "CHATGPT_CONVERSATION_URL: unresolved",
+            f"REQUIRED_ACTION: {next_action}",
+            "ORIGIN_RECONCILE_ACTION: Refresh the repository's canonical taskplan/report, "
+            "independently verify repository state, diff and tests, then continue the CEO loop. "
+            "Do not infer or perform archive/close from this notice; exact conversation identity is missing.",
+            f"RECEIPT_ACTION: {receipt_command}",
+            "Process this reconciliation delivery ID at most once and acknowledge it only after processing.",
+            "This is an origin wake-up/reconciliation event, not proof of completion.",
+        ]
+    )
+
+
 def render_callback_message(
     record: dict[str, Any],
     *,
@@ -1548,6 +1625,14 @@ def render_callback_message(
     verification: str,
     next_action: str,
 ) -> str:
+    if record.get("completion_mode") == "origin-reconcile-unbound":
+        return _render_unbound_origin_reconciliation_message(
+            record,
+            summary=summary,
+            changed=changed,
+            verification=verification,
+            next_action=next_action,
+        )
     session = record.get("origin_session")
     session_id = session.get("id") if isinstance(session, dict) else None
     conversation = record.get("conversation")
@@ -1576,7 +1661,7 @@ def render_callback_message(
         target = prime_target
     else:
         session_display = f"opencode_session={session_id or 'unresolved'} "
-        transport_name = "opencode-terminal"
+        transport_name = "opencode-exact-session"
         target = session_id or "unresolved"
     header = (
         "SIN_GPT_WEB_CALLBACK "
@@ -1585,8 +1670,7 @@ def render_callback_message(
         f"{session_display}"
         f"transport={transport_name} "
         f"target={target} "
-        f"round={record.get('round', 1)}/"
-        f"{'∞' if int(record.get('max_rounds', DEFAULT_MAX_ROUNDS) or 0) == 0 else record.get('max_rounds', DEFAULT_MAX_ROUNDS)}"
+        f"round={record.get('round', 1)}"
     )
     receipt_command = shlex.join(
         [
@@ -1734,7 +1818,6 @@ def _deliver_dsh_callback(
         "callback_status": record.get("callback_status"),
         "origin_dsh_session": session_id,
         "round": record.get("round"),
-        "max_rounds": record.get("max_rounds"),
         "conversation": record.get("conversation"),
         "sent_at": record.get("sent_at"),
     }
@@ -1845,10 +1928,53 @@ def _deliver_prime_agent_callback(
         "callback_status": record.get("callback_status"),
         "origin_prime_agent_session": session_id,
         "round": record.get("round"),
-        "max_rounds": record.get("max_rounds"),
         "conversation": record.get("conversation"),
         "sent_at": record.get("sent_at"),
     }
+
+
+def _enqueue_callback_with_broker(repository: Path, record: dict[str, Any]) -> dict[str, Any] | None:
+    """Best-effort enqueue of canonical callback metadata only."""
+    delivery_id = str(record.get("delivery_id") or "")
+    relay_id = str(record.get("relay_id") or "")
+    message_sha256 = str(record.get("message_sha256") or "")
+    if not DELIVERY_ID_PATTERN.fullmatch(delivery_id) or not RELAY_ID_PATTERN.fullmatch(relay_id) or not message_sha256:
+        return None
+    from .callback_broker import CallbackBrokerStore, DeliveryRef
+    from .callback_transports import classify_callback_transport
+    transport, target_id = classify_callback_transport(record)
+    row = CallbackBrokerStore().enqueue(DeliveryRef(
+        delivery_id=delivery_id, relay_id=relay_id, repository_root=str(repository),
+        callback_status=str(record.get("callback_status") or ""), transport=transport,
+        target_id=target_id, message_sha256=message_sha256,
+        expires_at=str(record.get("expires_at") or ""),
+    ))
+    return {"delivery_id": row["delivery_id"], "state": row["state"]}
+
+
+def _broker_owns_delivery(record: dict[str, Any]) -> bool:
+    """Return whether C-lite has durably accepted this delivery identity."""
+    delivery_id = str(record.get("delivery_id") or "")
+    if not DELIVERY_ID_PATTERN.fullmatch(delivery_id):
+        return False
+    try:
+        from .callback_broker import CallbackBrokerStore
+
+        return CallbackBrokerStore().get(delivery_id) is not None
+    except Exception:
+        return False
+
+
+def _mirror_broker_state(record: dict[str, Any]) -> None:
+    """Best-effort transport receipt mirror; canonical record is authoritative."""
+    delivery_id = str(record.get("delivery_id") or "")
+    if not DELIVERY_ID_PATTERN.fullmatch(delivery_id):
+        return
+    try:
+        from .callback_broker import CallbackBrokerStore
+        CallbackBrokerStore().mirror_terminal_state(delivery_id, str(record.get("status") or ""))
+    except Exception:
+        return
 
 
 def _deliver_pending_callback(
@@ -1873,6 +1999,12 @@ def _deliver_pending_callback(
         )
         record["message_sha256"] = hashlib.sha256(message.encode("utf-8")).hexdigest()
         atomic_write_json(callback_path(repository, token), record)
+    try:
+        _enqueue_callback_with_broker(repository, record)
+    except Exception as error:
+        record["delivery_reason"] = "broker-enqueue-failed"
+        record["broker_error"] = type(error).__name__
+        atomic_write_json(callback_path(repository, token), record)
     if record.get("delivery_state") == "indeterminate":
         return {
             "ok": True,
@@ -1886,6 +2018,32 @@ def _deliver_pending_callback(
         return _deliver_dsh_callback(repository, token, record, dry_run=dry_run)
     if isinstance(transport, dict) and transport.get("transport") == "prime-agent":
         return _deliver_prime_agent_callback(repository, token, record, dry_run=dry_run)
+    session = record.get("origin_session")
+    session_id = session.get("id") if isinstance(session, dict) else None
+    if isinstance(session_id, str) and SESSION_PATTERN.fullmatch(session_id):
+        from .callback_transports import deliver_opencode_exact_session
+        message = render_callback_message(record, final_status=str(record["callback_status"]), summary=str(record["summary"]), changed=list(record.get("changed_files") or []), verification=str(record.get("verification") or "unknown"), next_action=str(record.get("next_action") or ""))
+        if not dry_run:
+            direct = deliver_opencode_exact_session(repository=repository, session_id=session_id, message=message)
+            if direct.state == "sent":
+                record.update({"status": "sent", "delivery_state": "sent", "delivery_target_source": "opencode-exact-session", "sent_at": isoformat(utc_now())})
+                atomic_write_json(callback_path(repository, token), record)
+                return {"ok": True, "status": "callback-sent", "callback": token, "delivery_id": record.get("delivery_id"), "target_source": "opencode-exact-session"}
+            if direct.state == "indeterminate":
+                record.update({"status": "delivery-indeterminate", "delivery_state": "indeterminate", "delivery_reason": direct.reason_code})
+                atomic_write_json(callback_path(repository, token), record)
+                return {"ok": True, "status": "callback-delivery-indeterminate", "callback": token, "delivery_id": record.get("delivery_id"), "delivery_reason": direct.reason_code}
+            if direct.state == "retry_wait" and str(os.getenv("SIN_OPENCODE_CALLBACK_URL") or "").strip():
+                record.update({"status": "pending-delivery", "delivery_state": "pending", "delivery_reason": direct.reason_code})
+                atomic_write_json(callback_path(repository, token), record)
+                return {
+                    "ok": True,
+                    "status": "callback-pending",
+                    "callback": token,
+                    "task_id": record.get("task_id"),
+                    "delivery_id": record.get("delivery_id"),
+                    "delivery_reason": direct.reason_code,
+                }
     terminal, target_source = resolve_delivery_terminal(repository, record)
     record["delivery_attempts"] = int(record.get("delivery_attempts") or 0) + 1
     record["last_delivery_attempt_at"] = isoformat(utc_now())
@@ -1996,10 +2154,130 @@ def _deliver_pending_callback(
         "origin_terminal": terminal,
         "origin_session": record.get("origin_session"),
         "round": record.get("round"),
-        "max_rounds": record.get("max_rounds"),
         "conversation": record.get("conversation"),
         "sent_at": record.get("sent_at"),
     }
+
+
+def _deliver_unbound_origin_reconciliation(
+    *,
+    repository: Path,
+    token: str,
+    outcome: dict[str, Any],
+    taskplan_validation: dict[str, Any],
+    dry_run: bool,
+    relay_fallback: bool,
+) -> dict[str, Any]:
+    """Deliver a distinct exact-origin wake-up for an unbound completion handoff.
+
+    The callback itself never becomes a canonical ``done`` callback.  We persist
+    ``callback_status=reconcile`` and a dedicated mode so every downstream reader
+    can distinguish this from a conversation-bound completion.  The existing
+    exact-origin transports and bounded relay are reused after the durable record
+    is written.
+    """
+    root = resolve_repository(repository)
+    with callback_lock(root, token):
+        record = load_callback(root, token)
+        if _expire_callback_if_needed(root, token, record):
+            raise RuntimeError("callback capability has expired")
+        existing_mode = str(record.get("completion_mode") or "")
+        if record.get("status") in {"sent", "acknowledged"} and existing_mode == "origin-reconcile-unbound":
+            return {
+                "ok": True,
+                "status": "callback-origin-reconciled",
+                "reused": True,
+                "task_id": record.get("task_id"),
+                "round": record.get("round"),
+                "delivery_id": record.get("delivery_id"),
+            }
+        if record.get("status") == "open":
+            conversation = record.get("conversation")
+            if isinstance(conversation, dict) and conversation.get("url"):
+                raise RuntimeError("bound callback must use canonical callback delivery")
+            delivery_id = f"gptwcd_{uuid.uuid4().hex}"
+            summary = _compact(str(outcome.get("summary") or ""), 700)
+            changed = _changed_files(list(outcome.get("changed_files") or []))
+            verification = _compact(str(outcome.get("verification") or ""), 500) or "unknown"
+            next_action = _compact(str(outcome.get("next_action") or ""), 1800)
+            record.update(
+                {
+                    "status": "pending-delivery",
+                    "callback_status": "reconcile",
+                    "completion_mode": "origin-reconcile-unbound",
+                    "dispatch_started_at": isoformat(utc_now()),
+                    "summary": summary,
+                    "changed_files": changed,
+                    "verification": verification,
+                    "next_action": next_action,
+                    "delivery_id": delivery_id,
+                    "delivery_state": "pending",
+                    "origin_reconciliation": {
+                        "mode": "origin-reconcile-unbound",
+                        "state": "pending",
+                        "outcome_status": str(outcome.get("status") or "unknown"),
+                        "taskplan_validation": taskplan_validation,
+                        "staged_at": isoformat(utc_now()),
+                    },
+                }
+            )
+            message = render_callback_message(
+                record,
+                final_status="reconcile",
+                summary=summary,
+                changed=changed,
+                verification=verification,
+                next_action=next_action,
+            )
+            if dry_run:
+                return {
+                    "ok": True,
+                    "status": "callback-origin-reconcile-dry-run",
+                    "task_id": record.get("task_id"),
+                    "round": record.get("round"),
+                    "delivery_id": delivery_id,
+                    "message": message,
+                }
+            record["message_sha256"] = hashlib.sha256(message.encode("utf-8")).hexdigest()
+            handoff = record.get("completion_handoff")
+            if isinstance(handoff, dict):
+                record["completion_handoff"] = {
+                    **handoff,
+                    "state": "consumed",
+                    "consumed_at": isoformat(utc_now()),
+                    "delivery_id": delivery_id,
+                }
+            atomic_write_json(callback_path(root, token), record)
+        elif existing_mode != "origin-reconcile-unbound" or record.get("status") not in {
+            "pending-delivery",
+            "delivery-indeterminate",
+        }:
+            raise RuntimeError("callback cannot enter unbound origin reconciliation from its current state")
+
+        result = _deliver_pending_callback(root, token, record, dry_run=False)
+        reconciliation = record.get("origin_reconciliation")
+        if isinstance(reconciliation, dict):
+            if result.get("status") == "callback-sent":
+                reconciliation["state"] = "sent"
+                reconciliation["sent_at"] = isoformat(utc_now())
+            elif result.get("status") == "callback-pending":
+                reconciliation["state"] = "pending"
+            else:
+                reconciliation["state"] = "indeterminate"
+            atomic_write_json(callback_path(root, token), record)
+    if (
+        relay_fallback
+        and result.get("status") == "callback-pending"
+        and not _broker_owns_delivery(record)
+    ):
+        result["relay_fallback"] = install_callback_relay(
+            repository=root,
+            token=token,
+        )
+    if result.get("status") == "callback-sent":
+        result["status"] = "callback-origin-reconciled"
+    result["origin_reconciliation"] = True
+    return result
 
 
 def send_callback(
@@ -2014,7 +2292,6 @@ def send_callback(
     dry_run: bool = False,
     relay_fallback: bool = False,
     relay_interval_seconds: int = DEFAULT_RELAY_INTERVAL_SECONDS,
-    relay_max_attempts: int = DEFAULT_RELAY_MAX_ATTEMPTS,
 ) -> dict[str, Any]:
     root = resolve_repository(repository)
     if final_status not in FINAL_STATUSES:
@@ -2105,12 +2382,16 @@ def send_callback(
                 f"callback is already {record.get('status')}; capabilities are one-shot"
             )
         result = _deliver_pending_callback(root, token, record, dry_run=dry_run)
-    if relay_fallback and not dry_run and result.get("status") == "callback-pending":
+    if (
+        relay_fallback
+        and not dry_run
+        and result.get("status") == "callback-pending"
+        and not _broker_owns_delivery(record)
+    ):
         result["relay_fallback"] = install_callback_relay(
             repository=root,
             token=token,
             interval_seconds=relay_interval_seconds,
-            max_attempts=relay_max_attempts,
         )
     return result
 
@@ -2142,16 +2423,28 @@ def relay_callback(
         if scheduled and not _relay_fallback_active(record):
             return {"ok": True, "status": "callback-relay-inactive", "callback": token}
         result = _deliver_pending_callback(root, token, record, dry_run=dry_run)
+        if record.get("completion_mode") == "origin-reconcile-unbound" and not dry_run:
+            reconciliation = record.get("origin_reconciliation")
+            if isinstance(reconciliation, dict):
+                if result.get("status") == "callback-sent":
+                    reconciliation["state"] = "sent"
+                    reconciliation["sent_at"] = isoformat(utc_now())
+                elif result.get("status") == "callback-pending":
+                    reconciliation["state"] = "pending"
+                else:
+                    reconciliation["state"] = "indeterminate"
+                atomic_write_json(callback_path(root, token), record)
+            if result.get("status") == "callback-sent":
+                result["status"] = "callback-origin-reconciled"
+            result["origin_reconciliation"] = True
         if scheduled and not dry_run:
             fallback = record["relay_fallback"]
             fallback["attempts"] = int(fallback.get("attempts") or 0) + 1
-            if record.get("status") == "pending-delivery" and fallback[
-                "attempts"
-            ] >= int(fallback["max_attempts"]):
+            if result.get("status") == "callback-pending" and _broker_owns_delivery(record):
                 _deactivate_relay_fallback(
                     root,
                     record,
-                    reason="retry-budget-exhausted",
+                    reason="callback-broker-takeover",
                 )
             atomic_write_json(callback_path(root, token), record)
         return result
@@ -2242,6 +2535,7 @@ def acknowledge_callback(
         )
         _remove_relay_fallback(root, record, reason="receipt-acknowledged")
         atomic_write_json(callback_path(root, token), record)
+        _mirror_broker_state(record)
     return {
         "ok": True,
         "status": "callback-acknowledged",
@@ -2346,6 +2640,7 @@ def abandon_callback(
         )
         _remove_relay_fallback(root, record, reason="callback-abandoned")
         atomic_write_json(path, record)
+        _mirror_broker_state(record)
     return {
         "ok": True,
         "status": "callback-abandoned",
@@ -2394,6 +2689,7 @@ def cancel_callback(
             }
         )
         atomic_write_json(callback_path(root, token), record)
+        _mirror_broker_state(record)
     return {
         "ok": True,
         "status": "callback-cancelled",
