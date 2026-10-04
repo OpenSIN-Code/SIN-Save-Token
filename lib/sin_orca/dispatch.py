@@ -420,6 +420,19 @@ A checkpoint is evidence, not approval; after each checkpoint, stop and wait for
     else:
         raise ValueError(f"unsupported approval mode: {approval_mode!r}")
 
+    if (
+        not task.get("required_checkpoints")
+        and task.get("role") in {"explorer", "reviewer"}
+        and task.get("allow_edits") is False
+    ):
+        checkpoint_rule = "No checkpoints are required; do not publish checkpoint artifacts or callbacks."
+        approval_rules = approval_rules.split("\n")[0] + "\n" + checkpoint_rule
+        protocol_steps = """1. Before inspecting repository files, send an `ack` callback directly to the parent terminal.
+2. Execute only the listed ordered steps, respecting the task's approval mode.
+3. Stop on discovery outside scope, material ambiguity, ownership conflict, unsafe action, repeated failure, or parent interrupt.
+4. Write the final report after all listed steps and required verification are complete; emit its ready marker.
+5. After the report exists, send a `done` callback directly to the parent terminal."""
+
     return f"""# SIN WORKER CONTRACT
 
 Task ID: {task["task_id"]}

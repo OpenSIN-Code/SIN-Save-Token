@@ -115,7 +115,30 @@ def execution_protocol_errors(task_id: str) -> list[str]:
     )
 
     previous_boundary = ack_sequence or 0
-    for index, step_id in enumerate(expected_steps):
+    checkpoint_steps = expected_steps
+    if (
+        not required_checkpoints
+        and task.get("role") in {"explorer", "reviewer"}
+        and task.get("allow_edits") is False
+    ):
+        # Read-only audit contracts may explicitly omit checkpoints.
+        checkpoint_steps = []
+        if approval_mode == "stepwise":
+            for step_id in expected_steps:
+                approvals = _matching_event_sequences(
+                    events, event_type="codex.approved", actor="codex", step_id=step_id
+                )
+                approval_sequence = _single_sequence(
+                    approvals,
+                    missing_error=f"{step_id} explicit approval missing",
+                    duplicate_error=f"{step_id} explicit approval is duplicated",
+                    errors=errors,
+                )
+                if approval_sequence is not None:
+                    if approval_sequence <= previous_boundary:
+                        errors.append(f"{step_id} approval is out of step order")
+                    previous_boundary = approval_sequence
+    for index, step_id in enumerate(checkpoint_steps):
         checkpoint_name = (
             required_checkpoints[index] if index < len(required_checkpoints) else None
         )
