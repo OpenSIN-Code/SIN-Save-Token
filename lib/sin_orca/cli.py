@@ -36,7 +36,6 @@ from .dispatch import (
 from .gates import completion_errors, execution_protocol_errors
 from .lease import ControllerLease, LeaseConflictError, LeaseLostError
 from .review import start_blind_review
-from .simone_bridge import sync_task as sync_task_to_simone
 from .state import (
     append_event,
     atomic_write_json,
@@ -127,22 +126,6 @@ def _controller_mutation(handler):
             )
             return 1
 
-        if handler.__name__ != "_cmd_sync_simone":
-            sync_result = _sync_bound_task(args.task_id)
-            if isinstance(sync_result, dict) and sync_result.get("ok") is not True:
-                print(
-                    json.dumps(
-                        {
-                            "ok": False,
-                            "error": "automatic Simone synchronization failed",
-                            "simone_sync": sync_result,
-                        }
-                    ),
-                    file=sys.stderr,
-                )
-                if result == 0:
-                    result = 1
-
         return result
 
     return wrapped
@@ -164,79 +147,6 @@ def _release_task_writer(task: dict[str, Any]) -> bool:
         task_id=str(task["task_id"]),
         allow_missing=True,
     )
-
-
-def _simone_sync_status_path(task_id: str) -> Path:
-    return task_dir(task_id) / "simone-sync-status.json"
-
-
-def _write_simone_sync_status(
-    task_id: str,
-    value: dict[str, Any],
-) -> None:
-    atomic_write_json(_simone_sync_status_path(task_id), value)
-
-
-def _read_simone_sync_status(task_id: str) -> dict[str, Any] | None:
-    path = _simone_sync_status_path(task_id)
-    if not path.is_file():
-        return None
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"ok": False, "status": "invalid-sync-status"}
-    return (
-        value
-        if isinstance(value, dict)
-        else {
-            "ok": False,
-            "status": "invalid-sync-status",
-        }
-    )
-
-
-def _sync_bound_task(
-    task_id: str,
-    *,
-    simone_task_id: str | None = None,
-    force: bool = False,
-) -> dict[str, Any] | None:
-    task = load_task(task_id)
-    bound_id = simone_task_id or task.get("simone_task_id")
-    if not force and (not isinstance(bound_id, str) or not bound_id.strip()):
-        return None
-
-    try:
-        result = sync_task_to_simone(
-            task_id,
-            simone_task_id=(
-                bound_id.strip()
-                if isinstance(bound_id, str) and bound_id.strip()
-                else simone_task_id
-            ),
-        )
-        status = {
-            "ok": True,
-            "status": "synced",
-            "simone_task_id": result.get("simone_task_id"),
-            "events_synced": result.get("events_synced"),
-            "event_duplicates": result.get("event_duplicates"),
-            "artifacts_synced": result.get("artifacts_synced"),
-            "artifact_duplicates": result.get("artifact_duplicates"),
-            "last_event_hash": result.get("last_event_hash"),
-            "idempotent": result.get("idempotent") is True,
-        }
-    except (OSError, RuntimeError, ValueError) as error:
-        status = {
-            "ok": False,
-            "status": "sync-failed",
-            "simone_task_id": bound_id,
-            "error_type": type(error).__name__,
-            "error": redact_text(str(error))[:2_000],
-        }
-
-    _write_simone_sync_status(task_id, status)
-    return status
 
 
 def _load_config(task_id: str | None = None) -> dict[str, Any]:
@@ -625,15 +535,10 @@ def _cmd_dispatch(args: argparse.Namespace) -> int:
         parent_task_id=args.parent_task_id,
         allow_child_delegation=args.allow_child_delegation,
         approval_mode=args.approval_mode,
-        simone_task_id=args.simone_task_id,
     )
 
-    sync_result = _sync_bound_task(result["task_id"])
-    payload = dict(result)
-    if sync_result is not None:
-        payload["simone_sync"] = sync_result
-    print(json.dumps(payload, indent=2))
-    return 0 if sync_result is None or sync_result.get("ok") is True else 1
+    print(json.dumps(result, indent=2))
+    return 0
 
 
 def _cmd_notify(args: argparse.Namespace) -> int:
@@ -1721,19 +1626,6 @@ def _cmd_complete(args: argparse.Namespace) -> int:
     return 0
 
 
-@_controller_mutation
-def _cmd_sync_simone(args: argparse.Namespace) -> int:
-    result = _sync_bound_task(
-        args.task_id,
-        simone_task_id=args.simone_task_id,
-        force=True,
-    )
-    if not isinstance(result, dict):
-        raise RuntimeError("Simone sync returned a non-object result")
-    print(json.dumps(result, indent=2))
-    return 0 if result.get("ok") is True else 1
-
-
 def _cmd_status(args: argparse.Namespace) -> int:
     task = load_task(args.task_id)
     events = read_events(args.task_id)
@@ -1746,7 +1638,6 @@ def _cmd_status(args: argparse.Namespace) -> int:
                 "status": ledger.get("status"),
                 "role": task.get("role"),
                 "approval_mode": task.get("approval_mode", "stepwise"),
-                "simone_task_id": task.get("simone_task_id"),
                 "events_count": len(events),
                 "last_event_hash": (events[-1].get("event_hash") if events else None),
                 "checkpoints": [
@@ -1782,7 +1673,6 @@ def _cmd_status(args: argparse.Namespace) -> int:
                 "completion_manifest": (
                     str(manifest_path) if manifest_path.is_file() else None
                 ),
-                "simone_sync": _read_simone_sync_status(args.task_id),
             },
             indent=2,
         )
@@ -2057,8 +1947,6 @@ def main() -> int:
             "before every listed step"
         ),
     )
-    p.add_argument("--simone-task-id")
-
     p = sub.add_parser("notify", help="Push a worker callback to its parent terminal")
     p.add_argument("task_id")
     p.add_argument(
@@ -2131,13 +2019,6 @@ def main() -> int:
 
     p = sub.add_parser("status", help="Show task and sync status")
     p.add_argument("task_id")
-
-    p = sub.add_parser(
-        "sync-simone",
-        help="Replay compact execution facts into Simone",
-    )
-    p.add_argument("task_id")
-    p.add_argument("--simone-task-id")
 
     p = sub.add_parser("rebuild", help="Rebuild ledger")
     p.add_argument("task_id")
@@ -2313,7 +2194,6 @@ def main() -> int:
         "cancel": _cmd_cancel,
         "complete": _cmd_complete,
         "status": _cmd_status,
-        "sync-simone": _cmd_sync_simone,
         "rebuild": _cmd_rebuild,
         "web-callback-open": _cmd_web_callback_open,
         "web-callback-bind": _cmd_web_callback_bind,

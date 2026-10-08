@@ -57,13 +57,18 @@ def audit_sst(audit: Audit, root: Path) -> None:
     }
     symbol = route_by_name.get("code_symbol", {})
     architecture = route_by_name.get("code_architecture", {})
+    orientation = route_by_name.get("code_orientation", {})
     audit.require(
-        symbol.get("providers") == ["gitnexus", "simone"],
-        "symbol routing is GitNexus -> Simone",
+        symbol.get("providers") == ["gitnexus"],
+        "symbol routing is GitNexus only",
     )
     audit.require(
-        architecture.get("providers") == ["gitnexus", "sin-code"],
-        "architecture routing is GitNexus -> sin-code",
+        architecture.get("providers") == ["gitnexus"],
+        "architecture routing is GitNexus only",
+    )
+    audit.require(
+        orientation.get("providers") == ["graft"],
+        "code orientation routing is Graft only",
     )
     audit.require(
         int(retrieval.get("maximum_provider_attempts", 99)) <= 2,
@@ -164,13 +169,8 @@ def audit_sst(audit: Audit, root: Path) -> None:
         "Tencent Memory upstream is pinned to an assessed commit",
     )
     audit.require(
-        "tencent-memory" in runtime.get("providers", {})
-        and not any(
-            "tencent-memory" in route.get("providers", [])
-            for route in routes
-            if isinstance(route, dict)
-        ),
-        "Tencent Memory is registered but not automatically routed",
+        "tencent-memory" not in runtime.get("providers", {}),
+        "Tencent Memory is not registered in the active provider runtime",
     )
     tencent_adapter = audit.text_file(root / "lib" / "sin_tencent_memory.py")
     audit.require(

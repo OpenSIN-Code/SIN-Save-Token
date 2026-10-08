@@ -24,30 +24,14 @@ class ContextPolicyContractTests(unittest.TestCase):
         }
 
     def test_required_routing_order(self) -> None:
-        self.assertEqual(
-            self.routes["code_symbol"]["providers"],
-            ["gitnexus", "simone"],
-        )
-        self.assertEqual(
-            self.routes["code_architecture"]["providers"],
-            ["gitnexus", "sin-code"],
-        )
-        self.assertEqual(
-            self.routes["mixed_corpus_graph"]["providers"],
-            ["graphify"],
-        )
-        self.assertEqual(
-            self.routes["domain_memory"]["providers"],
-            ["openviking"],
-        )
-        self.assertEqual(
-            self.routes["session_resume"]["providers"],
-            ["session-digest"],
-        )
-        self.assertEqual(
-            self.routes["text_search"]["providers"],
-            ["agent-grep"],
-        )
+        self.assertEqual(self.routes["code_symbol"]["providers"], ["gitnexus"])
+        self.assertEqual(self.routes["code_architecture"]["providers"], ["gitnexus"])
+        self.assertEqual(self.routes["code_orientation"]["providers"], ["graft"])
+        self.assertEqual(self.routes["mixed_corpus_graph"]["providers"], ["graphify"])
+        self.assertEqual(self.routes["domain_memory"]["providers"], ["openviking"])
+        self.assertEqual(self.routes["session_resume"]["providers"], ["session-digest"])
+        self.assertEqual(self.routes["text_search"]["providers"], ["agent-grep"])
+
 
     def test_provider_decisions_match_intelligence_registry(self) -> None:
         intelligence = json.loads(
@@ -58,21 +42,20 @@ class ContextPolicyContractTests(unittest.TestCase):
         providers = intelligence["providers"]
         self.assertEqual(
             self.routes["code_symbol"]["providers"],
-            [
-                providers["symbol_navigation"]["primary"],
-                providers["symbol_navigation"]["fallback"],
-            ],
+            [providers["symbol_navigation"]["primary"]],
         )
         self.assertEqual(
             self.routes["code_architecture"]["providers"],
-            [
-                providers["general_code_graph"]["primary"],
-                providers["general_code_graph"]["fallback"],
-            ],
+            [providers["general_code_graph"]["primary"]],
+        )
+        self.assertEqual(
+            self.routes["code_orientation"]["providers"],
+            [providers["code_orientation"]["primary"]],
         )
         self.assertFalse(
             providers["general_code_graph"]["allow_simultaneous_execution"]
         )
+
 
     def test_provider_attempts_and_context_budget_are_bounded(self) -> None:
         retrieval = self.policy["retrieval"]

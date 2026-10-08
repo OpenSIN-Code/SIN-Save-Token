@@ -112,7 +112,7 @@ if [ -n "$STACK_CLI" ]; then
   fi
   STACK_JSON="$("$STACK_CLI" status --json 2>/dev/null || true)"
   if [ -n "$STACK_JSON" ] && python3 -c 'import json,sys; d=json.load(sys.stdin); s=d.get("sources",[]); assert len(s) == 4 and all(x.get("assessed") for x in s)' <<<"$STACK_JSON" 2>/dev/null; then
-    pass "Ponytail/Caveman/pxpipe/Gigatoken manifest readable; all sources pinned to assessed commits"
+    pass "Ponytail/pxpipe optimizer manifest readable; active sources pinned to assessed commits"
   else
     fail "sin-token-stack status invalid — run bin/install.sh"
   fi

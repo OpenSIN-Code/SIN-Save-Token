@@ -2,12 +2,10 @@
   "version": 1,
   "providers": {
     "symbol_navigation": {
-      "primary": "gitnexus",
-      "fallback": "simone"
+      "primary": "gitnexus"
     },
     "general_code_graph": {
       "primary": "gitnexus",
-      "fallback": "sin-code",
       "allow_simultaneous_execution": false
     },
     "change_review": {
@@ -27,9 +25,6 @@
     "project_memory": {
       "primary": "openviking"
     },
-    "local_code_memory": {
-      "primary": "simone-hybrid-memory"
-    },
     "session_resume": {
       "primary": "session-digest"
     },
@@ -38,9 +33,10 @@
       "automatic": false,
       "scope": "explicit mixed code+docs or cross-repository corpus queries only"
     },
-    "legacy_memory_projection": {
-      "primary": "cognee",
-      "automatic": false
+    "code_orientation": {
+      "primary": "graft",
+      "automatic": false,
+      "scope": "semantic codebase orientation and compressed subsystem explanation; never code-impact ground truth"
     }
   },
   "rules": {
@@ -52,6 +48,9 @@
     "gitnexus_is_canonical_code_intelligence": true,
     "graphify_is_never_automatic_code_graph_fallback": true,
     "openviking_is_canonical_domain_memory": true,
-    "legacy_memory_projections_are_never_automatic": true
+    "legacy_memory_projections_are_never_automatic": true,
+    "graft_is_orientation_not_code_truth": true,
+    "graft_never_owns_durable_memory": true,
+    "sin_code_is_verification_not_context_graph": true
   }
 }

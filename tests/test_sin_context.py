@@ -123,21 +123,29 @@ class ContextBrokerTests(unittest.TestCase):
             {"query": "Review current diff"},
         )
 
-    def test_routes_symbol_question_to_simone_first(self):
+    def test_routes_symbol_question_to_gitnexus_only(self):
         route = MODULE.select_route(
             "Which function calls create_commit?",
             self.policy,
         )
         self.assertEqual(route["name"], "code_symbol")
-        self.assertEqual(route["providers"], ["gitnexus", "simone"])
+        self.assertEqual(route["providers"], ["gitnexus"])
 
-    def test_routes_architecture_to_gitnexus_then_sin_code(self):
+    def test_routes_architecture_to_gitnexus_only(self):
         route = MODULE.select_route(
             "Explain the architecture and module data flow",
             self.policy,
         )
         self.assertEqual(route["name"], "code_architecture")
-        self.assertEqual(route["providers"], ["gitnexus", "sin-code"])
+        self.assertEqual(route["providers"], ["gitnexus"])
+
+    def test_routes_orientation_to_graft(self):
+        route = MODULE.select_route(
+            "Give me a codebase overview and explain subsystem boundaries",
+            self.policy,
+        )
+        self.assertEqual(route["name"], "code_orientation")
+        self.assertEqual(route["providers"], ["graft"])
 
     def test_routes_decision_to_openviking(self):
         route = MODULE.select_route(
@@ -178,7 +186,7 @@ class ContextBrokerTests(unittest.TestCase):
             root = Path(directory)
             first = MODULE.cache_key(
                 "code_symbol",
-                "simone",
+                "graft",
                 "find symbol",
                 str(root),
                 650,
@@ -187,7 +195,7 @@ class ContextBrokerTests(unittest.TestCase):
             )
             changed_policy = MODULE.cache_key(
                 "code_symbol",
-                "simone",
+                "graft",
                 "find symbol",
                 str(root),
                 650,
@@ -196,7 +204,7 @@ class ContextBrokerTests(unittest.TestCase):
             )
             changed_provider = MODULE.cache_key(
                 "code_symbol",
-                "simone",
+                "graft",
                 "find symbol",
                 str(root),
                 650,

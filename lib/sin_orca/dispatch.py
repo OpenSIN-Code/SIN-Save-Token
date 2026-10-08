@@ -530,7 +530,6 @@ def dispatch_task(
     parent_task_id: str | None = None,
     allow_child_delegation: bool = False,
     approval_mode: str = "continuous-preauthorized",
-    simone_task_id: str | None = None,
 ) -> dict[str, Any]:
     if role not in {"explorer", "librarian", "implementer", "reviewer"}:
         raise ValueError(f"unsupported worker role: {role}")
@@ -646,9 +645,6 @@ def dispatch_task(
         "approval_mode": approval_mode,
         "writer_reservation": writer_reservation,
     }
-    if simone_task_id:
-        task["simone_task_id"] = simone_task_id.strip()
-
     hash_material = dict(task)
     task["task_hash"] = "sha256:" + sha256_json(hash_material)
 
@@ -854,5 +850,4 @@ def dispatch_task(
         "approval_mode": approval_mode,
         "artifact_outbox": str(outbox),
         "status": "awaiting-ack",
-        "simone_task_id": task.get("simone_task_id"),
     }

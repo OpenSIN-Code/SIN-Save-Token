@@ -28,9 +28,9 @@ class TokenOptimizerStackTests(unittest.TestCase):
     def test_config_is_strict_and_all_sources_are_distinct_mit_pins(self) -> None:
         config = STACK.validate_config(json.loads(json.dumps(self.config)))
         upstreams = config["upstreams"]
-        self.assertEqual(set(upstreams), {"ponytail", "caveman", "pxpipe", "gigatoken"})
+        self.assertEqual(set(upstreams), {"ponytail", "pxpipe"})
         self.assertTrue(all(item["license"] == "MIT" for item in upstreams.values()))
-        self.assertEqual(len({item["role"] for item in upstreams.values()}), 4)
+        self.assertEqual(len({item["role"] for item in upstreams.values()}), 2)
         for spec in upstreams.values():
             commit = spec["assessed_commit"]
             self.assertRegex(commit, r"^[0-9a-f]{40}$")
@@ -69,10 +69,8 @@ class TokenOptimizerStackTests(unittest.TestCase):
     def test_policy_is_explicit_and_unknown_models_fail_closed(self) -> None:
         policy = self.config["policy"]
         self.assertIn("visual-context-compression", policy["explicit_only"])
-        self.assertIn("model-bound-token-measurement", policy["explicit_only"])
         self.assertEqual(policy["pxpipe"]["default_mode"], "off")
-        self.assertEqual(policy["gigatoken"]["default_mode"], "off")
-        self.assertTrue(policy["gigatoken"]["never_assume_provider_parity"])
+        self.assertNotIn("gigatoken", policy)
         allowed, reason = STACK.pxpipe_policy("gpt-5.6-terra", True, self.config)
         self.assertFalse(allowed)
         self.assertEqual(reason, "model is not allowlisted")
@@ -387,157 +385,18 @@ class TokenOptimizerStackTests(unittest.TestCase):
             ):
                 self.assertEqual(STACK.cmd_status(args), 2)
 
-    def test_gigatoken_runtime_is_isolated_exactly_pinned_and_source_bound(
-        self,
-    ) -> None:
-        runtime, version = STACK.validate_gigatoken_runtime_project(
-            self.config, validation=True
-        )
-        self.assertEqual(version, "0.9.0")
-        self.assertTrue((runtime / "uv.lock").is_file())
-        source = Path("/tmp/reviewed-gigatoken")
-        with (
-            mock.patch.object(STACK, "ensure_assessed_source", return_value=source),
-            mock.patch.object(
-                STACK, "assessed_gigatoken_version", return_value="0.9.0"
-            ),
-            mock.patch.object(
-                STACK.shutil, "which", return_value="/opt/homebrew/bin/uv"
-            ),
-        ):
-            argv = STACK.gigatoken_runtime_argv(self.config, validation=True)
-        self.assertEqual(
-            argv[:6],
-            [
-                "/opt/homebrew/bin/uv",
-                "run",
-                "--quiet",
-                "--frozen",
-                "--project",
-                str(runtime.resolve()),
-            ],
-        )
-        self.assertEqual(argv[-2:], ["--group", "validation"])
-
-    def test_token_commands_require_real_explicit_inputs(self) -> None:
-        count_args = argparse.Namespace(
-            stdin=False,
-            files=[],
-            tokenizer="openai-community/gpt2",
-            doc_separator=None,
-            chunk_size=None,
-            chunk_overlap=0,
-            json=False,
-        )
-        with self.assertRaisesRegex(STACK.StackError, "mindestens"):
-            STACK.cmd_token_count(count_args)
-        with self.assertRaisesRegex(STACK.StackError, "nicht lesbar"):
-            STACK._resolved_input_files(["/definitely/missing"])
-
-    def test_caveman_requires_both_explicit_consents_before_source_access(self) -> None:
-        args = argparse.Namespace(
-            file="/tmp/nope",
-            yes=True,
-            allow_third_party_upload=False,
-            timeout=1.0,
-        )
-        with mock.patch.object(STACK, "ensure_assessed_source") as ensure:
-            with self.assertRaisesRegex(STACK.StackError, "Claude/Anthropic"):
-                STACK.cmd_memory_compress(args)
-            ensure.assert_not_called()
-        args.allow_third_party_upload = True
-        args.yes = False
-        with self.assertRaisesRegex(STACK.StackError, "--yes"):
-            STACK.cmd_memory_compress(args)
-
-    def test_caveman_refuses_symlinks_sensitive_names_paths_and_large_files(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            normal = root / "memory.md"
-            normal.write_text("ok", encoding="utf-8")
-            link = root / "link.md"
-            link.symlink_to(normal)
-            with self.assertRaisesRegex(STACK.StackError, "Symlink"):
-                STACK._validate_caveman_target(str(link))
-            secret = root / "api-key-secret.md"
-            secret.write_text("no", encoding="utf-8")
-            with self.assertRaisesRegex(STACK.StackError, "sensibel"):
-                STACK._validate_caveman_target(str(secret))
-            sensitive_dir = root / ".ssh"
-            sensitive_dir.mkdir()
-            sensitive = sensitive_dir / "notes.md"
-            sensitive.write_text("no", encoding="utf-8")
-            with self.assertRaisesRegex(STACK.StackError, "sensiblen"):
-                STACK._validate_caveman_target(str(sensitive))
-            large = root / "memory-large.md"
-            large.write_bytes(b"x" * 500_001)
-            with self.assertRaisesRegex(STACK.StackError, "500 KB"):
-                STACK._validate_caveman_target(str(large))
-
-    def test_caveman_success_requires_matching_external_backup(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            target = root / "MEMORY.md"
-            target.write_text("original", encoding="utf-8")
-            scripts = root / "caveman" / "skills" / "caveman-compress"
-            scripts.mkdir(parents=True)
-            backup = root / "backup.original.md"
-            process = mock.Mock()
-
-            def wait(timeout: float) -> int:
-                self.assertEqual(timeout, 10.0)
-                backup.write_text("original", encoding="utf-8")
-                return 0
-
-            process.wait.side_effect = wait
-            process.poll.return_value = 0
-            args = argparse.Namespace(
-                file=str(target),
-                yes=True,
-                allow_third_party_upload=True,
-                timeout=10.0,
-            )
-            with (
-                mock.patch.object(STACK, "load_config", return_value=self.config),
-                mock.patch.object(
-                    STACK, "ensure_assessed_source", return_value=root / "caveman"
-                ),
-                mock.patch.object(STACK, "caveman_backup_path", return_value=backup),
-                mock.patch.object(STACK.subprocess, "Popen", return_value=process),
-            ):
-                self.assertEqual(STACK.cmd_memory_compress(args), 0)
-
-    def test_caveman_timeout_terminates_process_group(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            target = root / "MEMORY.md"
-            target.write_text("original", encoding="utf-8")
-            scripts = root / "caveman" / "skills" / "caveman-compress"
-            scripts.mkdir(parents=True)
-            process = mock.Mock()
-            process.wait.side_effect = subprocess.TimeoutExpired(["caveman"], 0.1)
-            args = argparse.Namespace(
-                file=str(target),
-                yes=True,
-                allow_third_party_upload=True,
-                timeout=0.1,
-            )
-            with (
-                mock.patch.object(STACK, "load_config", return_value=self.config),
-                mock.patch.object(
-                    STACK, "ensure_assessed_source", return_value=root / "caveman"
-                ),
-                mock.patch.object(
-                    STACK, "caveman_backup_path", return_value=root / "missing"
-                ),
-                mock.patch.object(STACK.subprocess, "Popen", return_value=process),
-                mock.patch.object(STACK, "terminate_process_group") as terminate,
-            ):
-                with self.assertRaisesRegex(STACK.StackError, "Zeitlimit"):
-                    STACK.cmd_memory_compress(args)
-                terminate.assert_called_once_with(process)
+    def test_retired_optimizer_commands_are_not_exposed(self) -> None:
+        parser = STACK.build_parser()
+        help_text = parser.format_help()
+        self.assertNotIn("token-count", help_text)
+        self.assertNotIn("token-bench", help_text)
+        self.assertNotIn("memory-compress", help_text)
+        sync = next(
+            action for action in parser._actions
+            if isinstance(action, argparse._SubParsersAction)
+        ).choices["sync"]
+        source = next(a for a in sync._actions if a.dest == "source")
+        self.assertEqual(set(source.choices), {"all", "ponytail", "pxpipe"})
 
     def test_pxpipe_export_validates_path_and_flag_combinations(self) -> None:
         args = argparse.Namespace(git=True, stdin=False, path="other")

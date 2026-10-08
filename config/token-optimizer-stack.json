@@ -9,13 +9,6 @@
       "integration": "policy-adapter",
       "assessed_commit": "16f29800fd2681bdf24f3eb4ccffe38be3baec6b"
     },
-    "caveman": {
-      "url": "https://github.com/JuliusBrussee/caveman.git",
-      "license": "MIT",
-      "role": "output-and-memory-compression",
-      "integration": "policy-adapter-and-explicit-cli",
-      "assessed_commit": "0d95a81d35a9f2d123a5e9430d1cfc43d55f1bb0"
-    },
     "pxpipe": {
       "url": "https://github.com/teamchong/pxpipe.git",
       "license": "MIT",
@@ -28,17 +21,6 @@
       "transitive_integrity": {
         "gpt-tokenizer@3.4.0": "sha512-wxFLnhIXTDjYebd9A9pGl3e31ZpSypbpIJSOswbgop5jLte/AsZVDvjlbEuVFlsqZixVKqbcoNmRlFDf6pz/UQ=="
       }
-    },
-    "gigatoken": {
-      "url": "https://github.com/marcelroed/gigatoken.git",
-      "license": "MIT",
-      "role": "high-throughput-exact-tokenization",
-      "integration": "explicit-model-bound-measurement-and-benchmark",
-      "assessed_commit": "0d9765fa7312af7534535e6315a5c49d74807b2a",
-      "python_package": "gigatoken==0.9.0",
-      "validation_package": "tokenizers==0.22.2",
-      "runtime_project": "runtime/gigatoken",
-      "validation_group": "validation"
     }
   },
   "policy": {
@@ -47,9 +29,7 @@
       "terse-decision-relevant-output"
     ],
     "explicit_only": [
-      "memory-file-rewrite",
-      "visual-context-compression",
-      "model-bound-token-measurement"
+      "visual-context-compression"
     ],
     "pxpipe": {
       "default_mode": "off",
@@ -71,17 +51,6 @@
         "patch-anchors",
         "exact-error-strings",
         "byte-exact-protocol-state"
-      ]
-    },
-    "gigatoken": {
-      "default_mode": "off",
-      "require_explicit_tokenizer": true,
-      "never_assume_provider_parity": true,
-      "scope": [
-        "large-corpus-token-counting",
-        "chunk-budget-planning",
-        "tokenizer-parity-validation",
-        "tokenization-throughput-benchmarking"
       ]
     }
   }

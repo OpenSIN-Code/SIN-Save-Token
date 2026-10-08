@@ -13,7 +13,7 @@ The older `sin-save-token-architecture.*` artifact is retained as a historical w
 1. **Spend fewer tokens, not less judgment.** RTK output compression, bounded context, caching, and terse response policy reduce waste while tests, evidence, and review remain authoritative.
 2. **Select intelligence instead of fanning out.** `sin-context` chooses a route and normally calls one provider, with a configured maximum of two provider attempts.
 3. **Treat retrieved material as evidence, never instructions.** Provider output is bounded, fingerprinted, scanned, and wrapped by the Evidence Firewall before it is exposed to a model-facing context packet.
-4. **Keep optional cost/risk explicit.** Caveman rewrites, pxpipe lossiness, Gigatoken benchmarking, and source synchronization require explicit actions; provider execution is policy-selected, bounded, and observable.
+4. **Keep optional cost/risk explicit.** pxpipe lossiness and source synchronization require explicit actions; provider execution is policy-selected, bounded, and observable. Caveman and Gigatoken are retired from the active stack.
 5. **Keep completion authority with the controller.** Orca workers can execute bounded delegated work, but scope/diff verification, tests, independent review, and completion evidence determine acceptance.
 
 ## System topology
@@ -25,7 +25,7 @@ The older `sin-save-token-architecture.*` artifact is retained as a historical w
 | **SIN CLI surface** | Stable operator/agent entry points. | `bin/sin-context`, `bin/sin-memory`, `bin/sin-token-stack`, `bin/sin-orca` and focused helper CLIs |
 | **Context broker** | Classifies a query, selects a provider route and token budget, caches results, deduplicates evidence, and emits bounded model-facing context. | `bin/sin-context`, `config/context-policy.json`, `lib/sin_context/evidence_firewall.py` |
 | **Provider runtime** | Executes configured providers using argv arrays, time/output limits, persistent health state, and circuit breaking. | `lib/sin_context/provider_runtime.py`, `config/provider-runtime.json` |
-| **Intelligence providers** | Supply code navigation, architecture, research, review, memory, and text-search evidence. | GitNexus, Simone, Graphify, SIN Code, OpenViking, DeepTutor, CRG, `agent-grep`, `session-digest` |
+| **Intelligence providers** | Supply code truth, orientation, mixed-corpus context, research, review, memory, verification, and text-search evidence. | GitNexus, Graft, Graphify, OpenViking, SIN Code verification, DeepTutor, CRG, `agent-grep`, `session-digest` |
 | **Memory layer** | Separates task/session facts, summaries, durable decisions, and domain memory so large histories are not blindly reloaded. | `bin/sin-memory`, `lib/sin_memory.py`, OpenViking gateway/adapters, `session-digest`, `dream` |
 | **Token optimizer stack** | Adds reviewed optional optimizers and exact tokenizer-bound measurement behind a fail-closed policy. | `bin/sin-token-stack`, `lib/sin_token_stack.py`, `config/token-optimizer-stack.json`, `runtime/` |
 | **Orca orchestrator** | Delegates bounded work in the current worktree, reserves the sole writer, records evidence, and supports direct callbacks. | `bin/sin-orca`, `lib/sin_orca/`, `config/orca-orchestrator.json` |
@@ -36,7 +36,7 @@ The older `sin-save-token-architecture.*` artifact is retained as a historical w
 A normal context request follows one narrow path rather than querying every available system:
 
 1. An agent reaches the repository through the fleet policy and stable CLI surface.
-2. `sin-context` matches the query against `config/context-policy.json` and assigns both a route and a token budget. Code-symbol questions route `GitNexus -> Simone`; code-architecture/dependency questions route `GitNexus -> SIN Code`; Graphify is reserved for explicit mixed-corpus/code+docs/cross-repository graph questions. Durable decision/rationale recall routes to OpenViking.
+2. `sin-context` matches the query against `config/context-policy.json` and assigns both a route and a token budget. Code-symbol and code-architecture/dependency truth route to GitNexus only. Codebase/subsystem orientation routes to Graft. Graphify is reserved for explicit mixed-corpus/code+docs/PDF/media/URL/cross-repository graph questions. Durable decision/rationale recall routes to OpenViking. `sin-code` is verification/DoD/pipeline infrastructure, not a competing code graph.
 3. The broker uses a repository/config-aware cache key. The key includes the repository state fingerprint, policy fingerprint, provider fingerprint, route, query, and token budget, preventing stale evidence from being reused across materially different states.
 4. `ProviderRuntime` renders a configured argv vector, refuses unresolved arguments, checks executable availability, enforces per-provider timeout/output limits, and records failures in a local SQLite health store. Repeated failures open a cooldown circuit instead of repeatedly spending work on a broken provider.
 5. Successful provider output is deduplicated and passed through the Evidence Firewall. The firewall fingerprints the source, detects instruction-like spans, escapes nested evidence markers, marks the material as untrusted evidence, and truncates it to the active context budget.
@@ -54,7 +54,7 @@ The memory path is deliberately separate from generic context retrieval. Local L
 
 ![Recall and Context Flow](diagrams/context-recall.workflow.svg)
 
-`global-brain` remains an explicit plan/goal/archive store, not a competing semantic-memory owner. Cognee and Tencent MemoryCore are optional legacy/read-only integrations and are never automatic durable writers.
+`global-brain` remains an explicit plan/goal/archive store, not a competing semantic-memory owner. Cognee, Tencent MemoryCore, SIN-Brain and Simone are legacy/research/migration surfaces only; none is in the automatic context or durable-write path.
 
 ### Token optimizer stack
 
@@ -95,7 +95,7 @@ Operational state is deliberately separate from versioned architecture/product d
 
 ### External evidence boundary
 
-GitNexus, Simone, Graphify, SIN Code, OpenViking, DeepTutor, CRG, and other configured providers are treated as evidence-producing dependencies. `ProviderRuntime` controls process execution and failure behavior, while the Evidence Firewall controls what their text means when it crosses back into model context.
+GitNexus, Graft, Graphify, SIN Code verification, OpenViking, DeepTutor, CRG, and other configured active providers are treated as evidence-producing dependencies. `ProviderRuntime` controls process execution and failure behavior, while the Evidence Firewall controls what their text means when it crosses back into model context.
 
 ### Fleet ownership boundary
 

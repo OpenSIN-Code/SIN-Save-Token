@@ -42,7 +42,7 @@ routed = {provider for route in routes for provider in route["providers"]}
 configured = set(runtime["providers"])
 assert int(policy["retrieval"]["maximum_provider_attempts"]) <= 2
 symbol = next(route for route in routes if route["name"] == "code_symbol")
-assert symbol["providers"][:2] == ["gitnexus", "simone"]
+assert symbol["providers"] == ["gitnexus"]
 assert routed <= configured, sorted(routed - configured)
 assert int(policy["budgets"]["maximum_tokens"]) <= 1600
 PY

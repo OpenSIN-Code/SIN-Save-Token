@@ -47,10 +47,19 @@
         "\\b(symbol|function|class|method|definition|reference|references|caller|callers|calls|implementiert|definiert|aufrufer|referenzen)\\b"
       ],
       "providers": [
-        "gitnexus",
-        "simone"
+        "gitnexus"
       ],
       "budget": "code_navigation_tokens"
+    },
+    {
+      "name": "code_orientation",
+      "patterns": [
+        "\\b(orientation|orientierung|explain subsystem|explain module|repo map|repository map|codebase overview|system overview|how does this subsystem|wie funktioniert dieses subsystem|überblick codebase)\\b"
+      ],
+      "providers": [
+        "graft"
+      ],
+      "budget": "architecture_tokens"
     },
     {
       "name": "code_architecture",
@@ -58,15 +67,14 @@
         "\\b(architecture|architektur|dependency|dependencies|blast radius|data flow|datenfluss|module|modules|component|komponente)\\b"
       ],
       "providers": [
-        "gitnexus",
-        "sin-code"
+        "gitnexus"
       ],
       "budget": "architecture_tokens"
     },
     {
       "name": "mixed_corpus_graph",
       "patterns": [
-        "\\\\b(graphify|mixed corpus|cross[- ]repo docs?|documentation graph|dokumentationsgraph)\\\\b"
+        "\\b(graphify|mixed corpus|cross[- ]repo docs?|documentation graph|dokumentationsgraph)\\b"
       ],
       "providers": [
         "graphify"

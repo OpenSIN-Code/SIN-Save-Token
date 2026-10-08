@@ -83,7 +83,7 @@ def validate_config(config: Any) -> dict[str, Any]:
     _require_string(data.get("managed_home"), "managed_home")
 
     upstreams = _require_mapping(data.get("upstreams"), "upstreams")
-    expected_sources = {"ponytail", "caveman", "pxpipe", "gigatoken"}
+    expected_sources = {"ponytail", "pxpipe"}
     if set(upstreams) != expected_sources:
         raise StackError(f"upstreams muss exakt {sorted(expected_sources)} enthalten")
     for name, raw_spec in upstreams.items():
@@ -118,19 +118,6 @@ def validate_config(config: Any) -> dict[str, Any]:
         )
     _require_string(transitive["gpt-tokenizer@3.4.0"], "gpt-tokenizer integrity")
 
-    gigatoken = _require_mapping(upstreams["gigatoken"], "upstreams.gigatoken")
-    _parse_python_pin(
-        gigatoken.get("python_package"), "upstreams.gigatoken.python_package"
-    )
-    _parse_python_pin(
-        gigatoken.get("validation_package"), "upstreams.gigatoken.validation_package"
-    )
-    _safe_project_path(
-        gigatoken.get("runtime_project"), "upstreams.gigatoken.runtime_project"
-    )
-    _require_string(
-        gigatoken.get("validation_group"), "upstreams.gigatoken.validation_group"
-    )
 
     policy = _require_mapping(data.get("policy"), "policy")
     for key in ("always_on", "explicit_only"):
@@ -150,13 +137,7 @@ def validate_config(config: Any) -> dict[str, Any]:
             isinstance(item, str) and item for item in values
         ):
             raise StackError(f"policy.pxpipe.{key} muss eine String-Liste sein")
-    giga_policy = _require_mapping(policy.get("gigatoken"), "policy.gigatoken")
-    if giga_policy.get("default_mode") != "off":
-        raise StackError("policy.gigatoken.default_mode muss off sein")
-    if giga_policy.get("require_explicit_tokenizer") is not True:
-        raise StackError("policy.gigatoken.require_explicit_tokenizer muss true sein")
-    if giga_policy.get("never_assume_provider_parity") is not True:
-        raise StackError("policy.gigatoken.never_assume_provider_parity muss true sein")
+
     return data
 
 
@@ -990,26 +971,6 @@ def cmd_status(args: argparse.Namespace) -> int:
         problems.append("pxpipe source is synced but locked runtime is not ready")
     if px_runtime.get("installed") and not px_source["ready"]:
         problems.append("pxpipe runtime is installed without a ready assessed source")
-    try:
-        giga_runtime, giga_version = validate_gigatoken_runtime_project(
-            config, validation=True
-        )
-        giga_state: dict[str, Any] = {
-            "path": str(giga_runtime),
-            "expected_version": giga_version,
-            "manifest_valid": True,
-            "uv": shutil.which("uv"),
-        }
-    except StackError as exc:
-        giga_state = {
-            "manifest_valid": False,
-            "error": str(exc),
-            "uv": shutil.which("uv"),
-        }
-        problems.append(f"gigatoken runtime manifest invalid: {exc}")
-    giga_source = next(row for row in rows if row["name"] == "gigatoken")
-    if giga_source["installed"] and not giga_state.get("uv"):
-        problems.append("gigatoken source is synced but uv is missing")
 
     try:
         selected_node = compatible_node()
@@ -1028,7 +989,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         "npm": str(selected_npm) if selected_npm else None,
         "uv": shutil.which("uv"),
         "sources": rows,
-        "runtimes": {"pxpipe": px_runtime, "gigatoken": giga_state},
+        "runtimes": {"pxpipe": px_runtime},
         "check_ok": not problems,
         "problems": problems,
     }
@@ -1048,11 +1009,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             f"pxpipe runtime: {'ready' if px_runtime.get('ready') else 'not installed'} "
             f"(expected {px_runtime.get('expected_version', 'unknown')})"
         )
-        print(
-            "gigatoken runtime manifest: "
-            f"{'valid' if giga_state.get('manifest_valid') else 'invalid'}; "
-            f"uv={giga_state.get('uv') or 'missing'}"
-        )
+
         for problem in problems:
             print(f"problem: {problem}", file=sys.stderr)
     return 0 if not args.check or not problems else 2
@@ -1348,69 +1305,10 @@ def build_parser() -> argparse.ArgumentParser:
     sync = sub.add_parser("sync", help="sync reviewed sources and locked runtimes")
     sync.add_argument(
         "--source",
-        choices=["all", "ponytail", "caveman", "pxpipe", "gigatoken"],
+        choices=["all", "ponytail", "pxpipe"],
         default="all",
     )
     sync.set_defaults(func=cmd_sync)
-
-    count = sub.add_parser(
-        "token-count", help="exact model-bound token count via Gigatoken"
-    )
-    count.add_argument(
-        "--tokenizer",
-        required=True,
-        help="HF repo/path, tokenizer.json, .tiktoken, or .model",
-    )
-    count.add_argument(
-        "--stdin", action="store_true", help="read one document from stdin"
-    )
-    count.add_argument(
-        "--doc-separator",
-        help="split each input file into documents on this exact separator",
-    )
-    count.add_argument(
-        "--chunk-size", type=int, help="also calculate fixed-token chunk count"
-    )
-    count.add_argument("--chunk-overlap", type=int, default=0)
-    count.add_argument("--json", action="store_true")
-    count.add_argument("files", nargs="*")
-    count.set_defaults(func=cmd_token_count)
-
-    bench = sub.add_parser(
-        "token-bench",
-        help="benchmark Gigatoken and optionally validate HuggingFace parity",
-    )
-    bench.add_argument(
-        "--tokenizer",
-        required=True,
-        help="HF repo/path, tokenizer.json, .tiktoken, or .model",
-    )
-    bench.add_argument("--validate-hf", action="store_true")
-    bench.add_argument("--stream-from-disk", action="store_true")
-    bench.add_argument("--comparison-limit", default="100MB")
-    bench.add_argument("--doc-separator")
-    bench.add_argument("files", nargs="+")
-    bench.set_defaults(func=cmd_token_bench)
-
-    compress = sub.add_parser(
-        "memory-compress", help="explicit Caveman memory-file rewrite via Claude"
-    )
-    compress.add_argument("file")
-    compress.add_argument(
-        "--yes", action="store_true", help="confirm local file rewrite"
-    )
-    compress.add_argument(
-        "--allow-third-party-upload",
-        action="store_true",
-        help="confirm that file contents may be sent to Claude/Anthropic",
-    )
-    compress.add_argument(
-        "--timeout",
-        type=float,
-        default=300.0,
-        help="maximum Caveman runtime in seconds",
-    )
-    compress.set_defaults(func=cmd_memory_compress)
 
     export = sub.add_parser(
         "pxpipe-export", help="render dense context to PNG without proxying"

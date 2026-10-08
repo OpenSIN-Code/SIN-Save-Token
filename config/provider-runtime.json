@@ -1,16 +1,6 @@
 {
   "version": 2,
   "providers": {
-    "simone": {
-      "argv": [
-        "simone-query",
-        "{query}"
-      ],
-      "timeout_seconds": 30,
-      "maximum_output_chars": 12000,
-      "failure_threshold": 2,
-      "cooldown_seconds": 180
-    },
     "graphify": {
       "argv": [
         "graphify",
@@ -31,31 +21,6 @@
       ],
       "timeout_seconds": 120,
       "maximum_output_chars": 16000,
-      "failure_threshold": 2,
-      "cooldown_seconds": 300
-    },
-    "sin-code": {
-      "argv": [
-        "sin",
-        "code",
-        "map",
-        "--query",
-        "{query}"
-      ],
-      "timeout_seconds": 120,
-      "maximum_output_chars": 16000,
-      "failure_threshold": 3,
-      "cooldown_seconds": 300
-    },
-    "cognee": {
-      "argv": [
-        "cognee-recall",
-        "--top-k",
-        "5",
-        "{query}"
-      ],
-      "timeout_seconds": 45,
-      "maximum_output_chars": 12000,
       "failure_threshold": 2,
       "cooldown_seconds": 300
     },
@@ -81,19 +46,6 @@
       ],
       "timeout_seconds": 210,
       "maximum_output_chars": 24000,
-      "failure_threshold": 2,
-      "cooldown_seconds": 300
-    },
-    "tencent-memory": {
-      "argv": [
-        "sin-tencent-memory",
-        "search",
-        "{query}",
-        "--limit",
-        "5"
-      ],
-      "timeout_seconds": 10,
-      "maximum_output_chars": 12000,
       "failure_threshold": 2,
       "cooldown_seconds": 300
     },
@@ -150,6 +102,18 @@
       "maximum_output_chars": 16000,
       "failure_threshold": 2,
       "cooldown_seconds": 120
+    },
+    "graft": {
+      "argv": [
+        "graft",
+        "ask",
+        "{query}",
+        "--source"
+      ],
+      "timeout_seconds": 120,
+      "maximum_output_chars": 16000,
+      "failure_threshold": 2,
+      "cooldown_seconds": 180
     }
   }
 }

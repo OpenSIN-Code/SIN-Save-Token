@@ -14,7 +14,6 @@ import importlib.util
 import json
 import os
 import re
-import shlex
 import sqlite3
 import subprocess
 import sys
@@ -384,27 +383,18 @@ def provider_graphify(
     )
 
 
-def provider_simone(
+def provider_graft(
     query: str,
     cwd: str,
     runtime: ProviderRuntime,
     specs: dict[str, ProviderSpec],
 ) -> ProviderOutcome:
-    command = os.environ.get("SIN_SIMONE_QUERY_COMMAND", "").strip()
-    argv_override = None
-    if command:
-        argv = shlex.split(command)
-        if not argv:
-            return ProviderOutcome(None, "configuration-error:empty-simone-command")
-        argv_override = [*argv, "{query}"]
-
     return call_runtime_provider(
-        "simone",
+        "graft",
         cwd=cwd,
         variables={"query": query},
         runtime=runtime,
         specs=specs,
-        argv_override=argv_override,
     )
 
 
@@ -427,21 +417,6 @@ def provider_gitnexus(
         runtime=runtime,
         specs=specs,
         argv_override=argv_override,
-    )
-
-
-def provider_sin_code(
-    query: str,
-    cwd: str,
-    runtime: ProviderRuntime,
-    specs: dict[str, ProviderSpec],
-) -> ProviderOutcome:
-    return call_runtime_provider(
-        "sin-code",
-        cwd=cwd,
-        variables={"query": query},
-        runtime=runtime,
-        specs=specs,
     )
 
 
@@ -560,9 +535,8 @@ def provider_agent_grep(
 
 PROVIDERS = {
     "graphify": provider_graphify,
+    "graft": provider_graft,
     "gitnexus": provider_gitnexus,
-    "simone": provider_simone,
-    "sin-code": provider_sin_code,
     "openviking": provider_openviking,
     "deeptutor": provider_deeptutor,
     "crg": provider_crg,
